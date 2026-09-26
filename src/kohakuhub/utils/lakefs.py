@@ -185,7 +185,8 @@ def lakefs_repo_name(repo_type: str, repo_id: str, generation: int | str = 0) ->
             `allocate_lakefs_repo_name` rather than guessing.
 
     Returns:
-        LakeFS-safe repository name (always 63 chars)
+        LakeFS-safe repository name (at most 63 chars; exactly 63 only when
+        the sanitized repo id is truncated)
 
     Examples:
         - "model", "org/simple" → "m" + "-" + "org-simple" (38 chars) + "-" + hash(22 chars)

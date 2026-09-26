@@ -642,6 +642,11 @@ onMounted(() => {
                 <el-descriptions-item label="Name">{{
                   selectedRepo.name
                 }}</el-descriptions-item>
+                <el-descriptions-item label="LakeFS repository" :span="2">
+                  <span class="font-mono" data-testid="repo-lakefs-id">{{
+                    selectedRepo.lakefs_repo
+                  }}</span>
+                </el-descriptions-item>
                 <el-descriptions-item label="Created">{{
                   formatDate(selectedRepo.created_at)
                 }}</el-descriptions-item>

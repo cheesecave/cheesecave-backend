@@ -586,6 +586,21 @@ class BackgroundTaskEvent(BaseModel):
         table_name = "background_task_event"
 
 
+class LfsGcCandidate(BaseModel):
+    """An LFS object whose last known reference may be gone.
+
+    Recorded in the transaction that deletes a repository row, because the
+    cascade also removes the history that says which objects it used; the
+    ``storage.collect_lfs`` task deletes each one no row references any more.
+    """
+
+    sha256 = CharField(max_length=64, primary_key=True)
+    created_at = DateTimeField(default=utcnow)
+
+    class Meta:
+        table_name = "lfs_gc_candidate"
+
+
 class BackgroundWorker(BaseModel):
     """A worker process, registered at startup and kept fresh by heartbeats.
 
@@ -650,6 +665,7 @@ def init_db():
             BackgroundTaskEvent,
             BackgroundTaskLog,
             BackgroundWorker,
+            LfsGcCandidate,
         ],
         safe=True,
     )

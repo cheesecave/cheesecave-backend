@@ -190,6 +190,14 @@ changes between runs from the same state.
 | Retention | The built-in periodic `tasks.cleanup` task deletes finished rows in batches after the configured retention. Cancelled tasks share the failed retention. Events and logs go with their task (`ON DELETE CASCADE`). |
 | Shutdown | SIGTERM stops claiming and drains running tasks for `shutdown_grace_seconds`. It then cancels the rest and hands them back to the queue without spending an attempt. The compose service sets `stop_grace_period: 45s` so Docker does not kill the worker mid-drain. |
 
+## Built-in tasks
+
+| Kind | What it does |
+| --- | --- |
+| `tasks.cleanup` | Hourly: deletes finished task rows past their retention. |
+| `storage.purge_repository` | Deletes one LakeFS repository and its `s3://{bucket}/{lakefs_repo}/` prefix. Scheduled when a user or organization is deleted with its repositories, or from the orphan audit on the admin **Storage** page (`kohakuhub/storage_cleanup.py`). Refuses a LakeFS id a repository still points at. |
+| `storage.collect_lfs` | Deletes LFS objects recorded in `lfs_gc_candidate` that no file or LFS history row references any more. |
+
 ## Admin panel
 
 **Background Tasks** in the admin panel has two tabs. The status cards and the health chip above them stay visible on both.

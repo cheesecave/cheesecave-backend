@@ -20,6 +20,12 @@ from kohakuhub.db_operations import (
     create_confirmation_token,
 )
 from kohakuhub.logger import get_logger
+from kohakuhub.storage_cleanup import (
+    enqueue_purge,
+    find_orphan_lakefs_repositories,
+    lakefs_repo_in_use,
+)
+from kohakuhub.utils.lakefs import get_lakefs_client
 from kohakuhub.utils.s3 import delete_objects_with_prefix, get_s3_client
 from kohakuhub.api.admin.utils import verify_admin_token
 
@@ -556,3 +562,36 @@ async def delete_s3_prefix(
     logger.warning(f"Admin deleted S3 prefix: {prefix} ({deleted_count} objects)")
 
     return {"success": True, "deleted_count": deleted_count, "prefix": prefix}
+
+
+@router.get("/storage/orphans")
+async def list_orphan_lakefs_repositories(_admin: bool = Depends(verify_admin_token)):
+    """LakeFS repositories that no repository row points at.
+
+    Read-only. They are left behind by repositories deleted before storage
+    cleanup was scheduled on deletion (#109), or by creates that failed
+    halfway. Each entry says whether a purge is already queued or running.
+    """
+    orphans = await find_orphan_lakefs_repositories()
+    return {"orphans": orphans, "count": len(orphans)}
+
+
+@router.post("/storage/orphans/{lakefs_repo}/purge")
+async def purge_orphan_lakefs_repository(
+    lakefs_repo: str, _admin: bool = Depends(verify_admin_token)
+):
+    """Schedule the deletion of an orphaned LakeFS repository and its S3 prefix.
+
+    Refused for a LakeFS repository that a repository row points at. The
+    purge runs as a background task; the task checks again before deleting.
+    """
+    if lakefs_repo_in_use(lakefs_repo):
+        raise HTTPException(
+            409,
+            detail={"error": f"LakeFS repository {lakefs_repo} backs a repository; not an orphan"},
+        )
+    if not await get_lakefs_client().repository_exists(lakefs_repo):
+        raise HTTPException(404, detail={"error": f"LakeFS repository not found: {lakefs_repo}"})
+    task_id = enqueue_purge(lakefs_repo, f"orphan:{lakefs_repo}")
+    logger.warning(f"Admin scheduled the purge of orphaned LakeFS repository {lakefs_repo}")
+    return {"lakefs_repo": lakefs_repo, "task_id": task_id, "already_pending": task_id is None}

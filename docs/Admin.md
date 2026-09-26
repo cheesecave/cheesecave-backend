@@ -205,6 +205,9 @@ Click "View" to see:
 **Force Delete:**
 - Deletes everything above
 - **Also deletes** all owned repositories
+- Their LakeFS repositories, S3 data and LFS objects no other repository uses
+  are removed by background tasks scheduled in the same step; follow them
+  under **Background Tasks** (a `khub-worker` must be running)
 - ⚠️ Cannot be undone!
 
 **Workflow:**
@@ -333,6 +336,17 @@ curl "http://localhost:48888/admin/api/commits?username=alice&limit=50" \
 ---
 
 ## S3 Storage Browser
+
+### Orphaned LakeFS repositories
+
+The **Storage** page ends with an audit of LakeFS repositories that no
+repository points at.
+- **Scan** lists each orphan with its creation time and storage namespace.
+- **Purge** schedules a background task that deletes its S3 prefix and then
+  the LakeFS repository.
+- **Purge all** does the same for every listed orphan.
+
+Nothing is deleted until you confirm.
 
 ### Bucket List
 

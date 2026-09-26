@@ -1,5 +1,9 @@
-"""Tests for migrations 017 (background_task), 018 (timeline, progress, logs)
-and 019 (worker roster)."""
+"""Tests for migrations 017 (background_task), 018 (timeline, progress, logs),
+019 (worker roster) and 020 (LFS garbage collection candidates).
+
+They run as one chain: a migration skips itself once any later migration is
+applied, so dropping only some of these tables would make the rest skip.
+"""
 
 import importlib.util
 from pathlib import Path
@@ -13,14 +17,21 @@ from kohakuhub.db import (
     BackgroundTaskEvent,
     BackgroundTaskLog,
     BackgroundWorker,
+    LfsGcCandidate,
     db,
 )
 
 MIGRATIONS = Path(__file__).resolve().parents[2] / "scripts" / "db_migrations"
-TABLES = ("background_task", "background_task_event", "background_task_log", "background_worker")
-MODELS = [BackgroundTask, BackgroundTaskEvent, BackgroundTaskLog, BackgroundWorker]
+TABLES = (
+    "background_task",
+    "background_task_event",
+    "background_task_log",
+    "background_worker",
+    "lfs_gc_candidate",
+)
+MODELS = [BackgroundTask, BackgroundTaskEvent, BackgroundTaskLog, BackgroundWorker, LfsGcCandidate]
 DROP_ALL = (
-    'DROP TABLE IF EXISTS "background_worker", "background_task_log", '
+    'DROP TABLE IF EXISTS "lfs_gc_candidate", "background_worker", "background_task_log", '
     '"background_task_event", "background_task"'
 )
 OLD_ROW = (
@@ -49,8 +60,12 @@ def _load_019():
     return _load("019_background_workers.py")
 
 
+def _load_020():
+    return _load("020_lfs_gc_candidates.py")
+
+
 def _chain():
-    return _load_017(), _load_018(), _load_019()
+    return _load_017(), _load_018(), _load_019(), _load_020()
 
 
 def _schema(database):
@@ -89,7 +104,7 @@ def _sqlite_reference(path):
     return _schema(reference)
 
 
-def test_migrations_017_to_019_match_init_db_on_postgres(prepared_backend_test_state):
+def test_migrations_017_to_020_match_init_db_on_postgres(prepared_backend_test_state):
     expected = _schema(db)  # created by init_db()
     db.execute_sql(DROP_ALL)
     try:
@@ -118,13 +133,13 @@ def test_migration_018_upgrades_existing_rows_on_postgres(prepared_backend_test_
         db.create_tables(MODELS, safe=True)
 
 
-def test_migrations_017_to_019_match_init_db_on_sqlite(tmp_path, monkeypatch):
-    m017, m018, m019 = _chain()
-    migrated = _sqlite(monkeypatch, m017, m018, m019, path=tmp_path / "migrated.db")
+def test_migrations_017_to_020_match_init_db_on_sqlite(tmp_path, monkeypatch):
+    m017, *later = _chain()
+    migrated = _sqlite(monkeypatch, m017, *later, path=tmp_path / "migrated.db")
 
     assert m017.run() is True
     migrated.execute_sql(OLD_ROW.format(now="'2026-01-01'"))
-    for migration in (m018, m019):
+    for migration in later:
         assert migration.run() is True
         assert migration.run() is True
 
@@ -135,17 +150,17 @@ def test_migrations_017_to_019_match_init_db_on_sqlite(tmp_path, monkeypatch):
 
 
 def test_migration_018_resumes_a_partially_added_column_set(tmp_path, monkeypatch):
-    m017, m018, m019 = _chain()
-    migrated = _sqlite(monkeypatch, m017, m018, m019, path=tmp_path / "partial.db")
+    m017, *later = _chain()
+    migrated = _sqlite(monkeypatch, m017, *later, path=tmp_path / "partial.db")
     assert m017.run() is True
     migrated.execute_sql('ALTER TABLE "background_task" ADD COLUMN "stall_seconds" INTEGER')
 
-    assert m018.run() is True
-    assert m019.run() is True
+    for migration in later:
+        assert migration.run() is True
     assert _schema(migrated) == _sqlite_reference(tmp_path / "reference.db")
 
 
-@pytest.mark.parametrize("loader", [_load_017, _load_018, _load_019])
+@pytest.mark.parametrize("loader", [_load_017, _load_018, _load_019, _load_020])
 def test_background_task_migrations_report_failure(tmp_path, monkeypatch, loader):
     migration = loader()
     _sqlite(monkeypatch, migration, path=tmp_path / "broken.db")
@@ -158,7 +173,7 @@ def test_background_task_migrations_report_failure(tmp_path, monkeypatch, loader
     assert migration.run() is False
 
 
-@pytest.mark.parametrize("loader", [_load_018, _load_019])
+@pytest.mark.parametrize("loader", [_load_018, _load_019, _load_020])
 def test_migrations_skip_when_a_later_migration_is_applied(tmp_path, monkeypatch, loader):
     migration = loader()
     _sqlite(monkeypatch, migration, path=tmp_path / "later.db")

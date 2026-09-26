@@ -89,6 +89,9 @@ def _restore_backend_state_per_test(request):
         backend_test_state.restore_active_state()
         _lakefs_rest._singleton_client = None
         _LAST_BACKEND_MODULE = current_module
+        # A marked test leaves its changes behind; the next module must
+        # restore instead of taking the session's initial baseline as clean.
+        _INITIAL_BASELINE_READY = False
         return
 
     if _LAST_BACKEND_MODULE != current_module:

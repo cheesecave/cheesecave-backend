@@ -183,7 +183,6 @@ async def test_create_user_and_delete_user_cover_conflicts_force_and_success(mon
     atomic_state = {}
     created_calls = []
     deleted_users = []
-    deleted_repos = []
     user = SimpleNamespace(
         id=3,
         username="bob",
@@ -215,11 +214,6 @@ async def test_create_user_and_delete_user_cover_conflicts_force_and_success(mon
     )
     monkeypatch.setattr(
         admin_users, "delete_user", lambda target: deleted_users.append(target.username)
-    )
-    monkeypatch.setattr(
-        admin_users,
-        "delete_repository",
-        lambda target: deleted_repos.append(target.full_id),
     )
 
     _FakeUserModel.get_or_none_responses = [SimpleNamespace()]
@@ -274,8 +268,9 @@ async def test_create_user_and_delete_user_cover_conflicts_force_and_success(mon
     _FakeRepositoryModel.select_query = _Query(items=[repo])
     deleted = await admin_users.delete_user_admin("bob", force=True)
     assert deleted["deleted_repositories"] == ["model:bob/demo"]
+    # delete_user deletes the repositories and schedules their storage cleanup.
+    assert deleted["storage_cleanup"] == "scheduled"
     assert deleted_users[-1] == "bob"
-    assert deleted_repos[-1] == "bob/demo"
 
 
 @pytest.mark.asyncio

@@ -1561,6 +1561,31 @@ export async function deleteS3Prefix(token, prefix, confirmToken) {
   return response.data;
 }
 
+/**
+ * List LakeFS repositories that no repository points at (read-only audit)
+ * @param {string} token - Admin token
+ * @returns {Promise<Object>} { orphans: [{ id, created_at, storage_namespace, purge_pending }], count }
+ */
+export async function listOrphanLakefsRepositories(token) {
+  const client = createAdminClient(token);
+  const response = await client.get("/storage/orphans");
+  return response.data;
+}
+
+/**
+ * Schedule the purge of an orphaned LakeFS repository and its S3 prefix
+ * @param {string} token - Admin token
+ * @param {string} lakefsRepo - LakeFS repository id
+ * @returns {Promise<Object>} { lakefs_repo, task_id, already_pending }
+ */
+export async function purgeOrphanLakefsRepository(token, lakefsRepo) {
+  const client = createAdminClient(token);
+  const response = await client.post(
+    `/storage/orphans/${encodeURIComponent(lakefsRepo)}/purge`,
+  );
+  return response.data;
+}
+
 // ===== Background Tasks =====
 
 /**

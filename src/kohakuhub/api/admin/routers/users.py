@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from kohakuhub.db import Repository, User, db
-from kohakuhub.db_operations import create_user, delete_repository, delete_user
+from kohakuhub.db_operations import create_user, delete_user
 from kohakuhub.logger import get_logger
 from kohakuhub.api.admin.utils import verify_admin_token
 
@@ -248,25 +248,20 @@ async def delete_user_admin(
             },
         )
 
-    # Delete user's repositories if force=true
-    deleted_repos = []
-    if owned_repos and force:
-        # Delete repositories sequentially (sync DB operations)
-        for repo in owned_repos:
-            delete_repository(repo)
-            logger.warning(f"Admin deleted repository: {repo.full_id}")
-            deleted_repos.append(f"{repo.repo_type}:{repo.full_id}")
-
-    # Delete user (already has db.atomic() inside)
+    # One transaction deletes the user, cascades their repositories away and
+    # schedules each repository's storage cleanup (LakeFS, S3, LFS objects).
+    deleted_repos = [f"{repo.repo_type}:{repo.full_id}" for repo in owned_repos]
     delete_user(user)
 
     logger.warning(
-        f"Admin deleted user: {username} (deleted {len(deleted_repos)} repositories)"
+        f"Admin deleted user: {username} (deleted {len(deleted_repos)} repositories; "
+        "storage cleanup scheduled)"
     )
 
     return {
         "message": f"User deleted: {username}",
         "deleted_repositories": deleted_repos,
+        "storage_cleanup": "scheduled" if deleted_repos else "none",
     }
 
 

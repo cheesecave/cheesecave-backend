@@ -938,6 +938,24 @@ describe("admin API client", () => {
     });
   });
 
+  it("orphaned LakeFS repository audit helpers", async () => {
+    const api = await loadModule();
+    client.get.mockResolvedValueOnce({ data: { orphans: [], count: 0 } });
+    client.post.mockResolvedValueOnce({ data: { task_id: 3 } });
+
+    expect(await api.listOrphanLakefsRepositories("admin-token")).toEqual({
+      orphans: [],
+      count: 0,
+    });
+    expect(client.get).toHaveBeenLastCalledWith("/storage/orphans");
+    expect(
+      await api.purgeOrphanLakefsRepository("admin-token", "m-a/b"),
+    ).toEqual({ task_id: 3 });
+    expect(client.post).toHaveBeenLastCalledWith(
+      "/storage/orphans/m-a%2Fb/purge",
+    );
+  });
+
   it("task cancel, log paging and log download helpers", async () => {
     const api = await loadModule();
     client.post.mockResolvedValueOnce({ data: { id: 7, status: "cancelled" } });

@@ -259,7 +259,8 @@ Repositories owned by this user will NOT be deleted unless you use force delete.
 ${repos.join("\n")}
 
 Do you want to FORCE DELETE the user and ALL their repositories?
-This action CANNOT be undone!`,
+Their LakeFS repositories, S3 data and unshared LFS objects are removed by
+background tasks. This action CANNOT be undone!`,
           "Force Delete Required",
           {
             confirmButtonText: "Force Delete Everything",
@@ -270,7 +271,9 @@ This action CANNOT be undone!`,
         );
 
         await deleteUser(adminStore.token, row.username, true);
-        ElMessage.success("User and repositories deleted successfully");
+        ElMessage.success(
+          "User and repositories deleted; storage cleanup scheduled (see Background Tasks)",
+        );
         loadUsers();
       } catch (forceError) {
         if (forceError !== "cancel" && forceError !== "close") {

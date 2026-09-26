@@ -155,6 +155,9 @@ async def get_repository_admin(
         "namespace": repo.namespace,
         "name": repo.name,
         "full_id": repo.full_id,
+        # The LakeFS repository behind it; since #108 a renamed repository
+        # keeps its original one, whose readable prefix shows the old name.
+        "lakefs_repo": resolve_lakefs_repo(repo),
         "private": repo.private,
         "owner_id": owner.id if owner else None,
         "owner_username": owner.username if owner else "unknown",

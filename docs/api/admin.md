@@ -130,9 +130,19 @@ curl -H "X-Admin-Token: secret" \
   "deleted_repositories": [
     "model:bob/my-model",
     "dataset:bob/my-dataset"
-  ]
+  ],
+  "storage_cleanup": "scheduled"
 }
 ```
+
+The user, their repositories and all related rows are deleted in one
+transaction. The same transaction schedules the storage cleanup that the
+database cascade cannot do. Each repository's LakeFS repository and
+`s3://{bucket}/{lakefs_repo}/` prefix are deleted by a
+`storage.purge_repository` background task. LFS objects no remaining
+repository references are deleted by `storage.collect_lfs`. Both show up
+under **Background Tasks**, and both need a running `khub-worker`.
+`storage_cleanup` is `"none"` when the user owned no repositories.
 
 **Without Force:**
 ```json
@@ -250,6 +260,7 @@ curl -H "X-Admin-Token: secret" \
   "namespace": "alice",
   "name": "my-model",
   "full_id": "alice/my-model",
+  "lakefs_repo": "m-alice-my-model-3kx9f2c1q8w7e5r4t6y0u2",
   "private": false,
   "owner_id": 1,
   "owner_username": "alice",
@@ -611,6 +622,58 @@ DELETE /admin/api/storage/objects/lfs/ab/cd/abc123def
 **Status Codes:**
 - `200 OK` - Objects deleted
 - `400 Bad Request` - Invalid/expired token or prefix mismatch
+
+---
+
+### List Orphaned LakeFS Repositories
+
+**Pattern:** `GET /admin/api/storage/orphans`
+
+This is a read-only audit of LakeFS repositories that no repository points at.
+They are left behind by repositories deleted before storage cleanup was
+scheduled on deletion, or by creates that failed halfway.
+
+**Response:**
+```json
+{
+  "orphans": [
+    {
+      "id": "m-bob-old-model-0k3j5h7g9f1d3s5a7p9o2i",
+      "created_at": 1758000000,
+      "storage_namespace": "s3://hub-storage/m-bob-old-model-0k3j5h7g9f1d3s5a7p9o2i",
+      "purge_pending": false
+    }
+  ],
+  "count": 1
+}
+```
+
+`created_at` is the LakeFS creation time in Unix seconds. `purge_pending` is
+true while a purge task is queued or running for that repository.
+
+---
+
+### Purge an Orphaned LakeFS Repository
+
+**Pattern:** `POST /admin/api/storage/orphans/{lakefs_repo}/purge`
+
+This schedules a `storage.purge_repository` background task, which deletes the
+repository's S3 prefix and then the LakeFS repository. The task checks again
+before deleting anything.
+
+**Response:**
+```json
+{
+  "lakefs_repo": "m-bob-old-model-0k3j5h7g9f1d3s5a7p9o2i",
+  "task_id": 42,
+  "already_pending": false
+}
+```
+
+**Status Codes:**
+- `200 OK` - Purge scheduled. `task_id` is null and `already_pending` true when one was already queued.
+- `404 Not Found` - No such LakeFS repository
+- `409 Conflict` - A repository points at it, so it is not an orphan
 
 ---
 

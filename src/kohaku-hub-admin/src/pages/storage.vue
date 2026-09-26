@@ -2,6 +2,7 @@
 import { ref, computed, onMounted } from "vue";
 import { useRouter } from "vue-router";
 import AdminLayout from "@/components/AdminLayout.vue";
+import OrphanLakefsRepos from "@/components/storage/OrphanLakefsRepos.vue";
 import { useAdminStore } from "@/stores/admin";
 import {
   listS3Buckets,
@@ -379,6 +380,16 @@ onMounted(() => {
           </div>
         </div>
       </el-card>
+
+      <OrphanLakefsRepos
+        class="mt-6"
+        :token="adminStore.token"
+        @error="
+          ElMessage.error(
+            $event.response?.data?.detail?.error || 'LakeFS audit failed',
+          )
+        "
+      />
     </div>
   </AdminLayout>
 </template>

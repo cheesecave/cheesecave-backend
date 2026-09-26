@@ -34,6 +34,7 @@ from kohakuhub.db import (
     UserOrganization,
     db,
 )
+from kohakuhub.storage_cleanup import schedule_repository_purge
 from kohakuhub.utils.names import normalize_name
 
 
@@ -114,9 +115,20 @@ def delete_user(user: User) -> None:
     - All owned repositories (Repository.owner)
     - All authored commits (Commit.author)
 
-    NOTE: CASCADE deletes handled by database constraints.
+    NOTE: CASCADE deletes handled by database constraints. The owned
+    repositories' LakeFS repositories, S3 prefixes and LFS objects are not in
+    the database; their cleanup is scheduled in the same transaction.
     """
-    user.delete_instance()
+    with db.atomic():
+        _schedule_owned_repository_purges(user)
+        user.delete_instance()
+
+
+def _schedule_owned_repository_purges(owner: User) -> list[str]:
+    return [
+        schedule_repository_purge(repo)
+        for repo in Repository.select().where(Repository.owner == owner)
+    ]
 
 
 # ===== Organization operations (now uses User with is_org=True) =====
@@ -164,10 +176,12 @@ def delete_organization(org: User) -> None:
     """Delete an organization (User with is_org=TRUE).
 
     CASCADE will delete:
-    - All owned repositories
+    - All owned repositories (their storage cleanup is scheduled first)
     - All organization memberships
     """
-    org.delete_instance()
+    with db.atomic():
+        _schedule_owned_repository_purges(org)
+        org.delete_instance()
 
 
 # ===== Repository operations =====
@@ -226,8 +240,13 @@ def delete_repository(repo: Repository) -> None:
     - All commits (Commit.repository)
     - All staging uploads (StagingUpload.repository)
     - All LFS history (LFSObjectHistory.repository)
+
+    The LakeFS repository, S3 prefix and LFS objects are cleaned by background
+    tasks scheduled in the same transaction (see kohakuhub.storage_cleanup).
     """
-    repo.delete_instance()
+    with db.atomic():
+        schedule_repository_purge(repo)
+        repo.delete_instance()
 
 
 def update_repository(repo: Repository, **fields) -> None:
