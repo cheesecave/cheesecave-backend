@@ -170,7 +170,7 @@ def _reset_fake_models():
     _FakeHistoryModel.reset()
 
 
-def test_track_lfs_object_and_get_old_versions_cover_repo_lookup_and_dedup(monkeypatch):
+def test_track_lfs_object_covers_repo_lookup(monkeypatch):
     repo = SimpleNamespace(full_id="owner/repo")
     file_fk = SimpleNamespace(id=1)
     created = []
@@ -205,74 +205,6 @@ def test_track_lfs_object_and_get_old_versions_cover_repo_lookup_and_dedup(monke
     gc_utils.track_lfs_object("model", "owner", "repo", "x", "b" * 64, 1, "commit-2")
     assert len(created) == 1
 
-    repo = SimpleNamespace(full_id="owner/repo")
-    _FakeHistoryModel.select_query = _Query(
-        items=[
-            SimpleNamespace(sha256="n1", created_at=3),
-            SimpleNamespace(sha256="n1", created_at=2),
-            SimpleNamespace(sha256="n2", created_at=1),
-            SimpleNamespace(sha256="n3", created_at=0),
-        ]
-    )
-    monkeypatch.setattr(gc_utils, "LFSObjectHistory", _FakeHistoryModel)
-
-    assert gc_utils.get_old_lfs_versions(repo, "weights/model.bin", keep_count=2) == ["n3"]
-
-    _FakeHistoryModel.select_query = _Query(items=[])
-    assert gc_utils.get_old_lfs_versions(repo, "weights/model.bin", keep_count=2) == []
-
-
-def test_cleanup_lfs_object_respects_current_use_history_and_deletion(monkeypatch):
-    repo = SimpleNamespace(full_id="owner/repo")
-    deleted = []
-    monkeypatch.setattr(gc_utils, "File", _FakeFileModel)
-    monkeypatch.setattr(gc_utils, "LFSObjectHistory", _FakeHistoryModel)
-    monkeypatch.setattr(gc_utils.cfg.s3, "bucket", "hub-storage")
-    monkeypatch.setattr(
-        gc_utils,
-        "get_s3_client",
-        lambda: SimpleNamespace(delete_object=lambda **kwargs: deleted.append(kwargs)),
-    )
-
-    _FakeFileModel.select_query = _Query(count_result=1)
-    assert gc_utils.cleanup_lfs_object("a" * 64) is False
-
-    _FakeFileModel.select_query = _Query(count_result=0)
-    _FakeHistoryModel.select_query = _Query(count_result=2)
-    assert gc_utils.cleanup_lfs_object("b" * 64) is False
-
-    _FakeHistoryModel.select_query = _Query(count_result=0)
-    _FakeHistoryModel.delete_query = _Query(execute_result=3)
-    assert gc_utils.cleanup_lfs_object("c" * 64) is True
-    assert deleted[-1]["Bucket"] == "hub-storage"
-
-    _FakeHistoryModel.delete_query = _Query(execute_result=1)
-    assert gc_utils.cleanup_lfs_object("d" * 64, repo=repo) is True
-
-    monkeypatch.setattr(
-        gc_utils,
-        "get_s3_client",
-        lambda: SimpleNamespace(delete_object=lambda **kwargs: (_ for _ in ()).throw(RuntimeError("boom"))),
-    )
-    assert gc_utils.cleanup_lfs_object("e" * 64) is False
-
-
-def test_run_gc_for_file_handles_disabled_missing_repo_and_deleted_counts(monkeypatch):
-    repo = SimpleNamespace(full_id="owner/repo")
-    monkeypatch.setattr(gc_utils.cfg.app, "lfs_auto_gc", False)
-    assert gc_utils.run_gc_for_file("model", "owner", "repo", "weights.bin", "commit-1") == 0
-
-    monkeypatch.setattr(gc_utils.cfg.app, "lfs_auto_gc", True)
-    monkeypatch.setattr(gc_utils, "get_repository", lambda *_args: None)
-    assert gc_utils.run_gc_for_file("model", "owner", "repo", "weights.bin", "commit-1") == 0
-
-    monkeypatch.setattr(gc_utils, "get_repository", lambda *_args: repo)
-    monkeypatch.setattr(gc_utils, "get_effective_lfs_keep_versions", lambda repo_arg: 2)
-    monkeypatch.setattr(gc_utils, "get_old_lfs_versions", lambda repo_arg, path, keep: ["a", "b"])
-    monkeypatch.setattr(gc_utils, "cleanup_lfs_object", lambda sha256, repo_arg: sha256 == "a")
-
-    assert gc_utils.run_gc_for_file("model", "owner", "repo", "weights.bin", "commit-1") == 1
-
 
 @pytest.mark.asyncio
 async def test_check_lfs_recoverability_covers_empty_and_missing_objects(monkeypatch):
@@ -292,11 +224,22 @@ async def test_check_lfs_recoverability_covers_empty_and_missing_objects(monkeyp
         lambda bucket, key: _async_return(not key.endswith("b" * 64))(),
     )
     monkeypatch.setattr(gc_utils.cfg.s3, "bucket", "hub-storage")
+    monkeypatch.setattr(gc_utils, "deleted_shas", lambda shas: set())
 
     recoverable, missing_files = await gc_utils.check_lfs_recoverability(repo, "commit-2")
 
     assert recoverable is False
     assert missing_files == ["config.json"]
+
+    # History rows outlive a collected object; its tombstone decides, even
+    # if storage still answers (a collection in progress).
+    monkeypatch.setattr(gc_utils, "object_exists", lambda bucket, key: _async_return(True)())
+    monkeypatch.setattr(gc_utils, "deleted_shas", lambda shas: {"a" * 64} & set(shas))
+
+    recoverable, missing_files = await gc_utils.check_lfs_recoverability(repo, "commit-2")
+
+    assert recoverable is False
+    assert missing_files == ["weights.bin"]
 
 
 @pytest.mark.asyncio
@@ -405,42 +348,20 @@ async def test_sync_file_table_with_commit_syncs_objects_and_removes_stale_entri
 
 
 @pytest.mark.asyncio
-async def test_cleanup_repository_storage_cleans_repo_prefix_and_unreferenced_lfs(monkeypatch):
-    repo = SimpleNamespace(
-        full_id="owner/repo",
-        lfs_history=SimpleNamespace(
-            select=lambda *args: _Query(
-                items=[
-                    SimpleNamespace(sha256="a" * 64),
-                    SimpleNamespace(sha256="b" * 64),
-                ]
-            )
-        ),
-    )
-    monkeypatch.setattr(gc_utils, "get_repository", lambda *_args: repo)
-    monkeypatch.setattr(gc_utils, "LFSObjectHistory", _FakeHistoryModel)
-    monkeypatch.setattr(gc_utils, "delete_objects_with_prefix", _async_return(3))
-    monkeypatch.setattr(gc_utils, "cleanup_lfs_object", lambda sha256, repo=None: sha256.startswith("a"))
-    _FakeHistoryModel.delete_query = _Query(execute_result=4)
+async def test_cleanup_repository_storage_deletes_only_the_repository_prefix(monkeypatch):
+    prefixes = []
 
-    result = await gc_utils.cleanup_repository_storage(
-        "model", "owner", "repo", "lakefs-repo"
-    )
+    async def fake_delete(bucket, prefix):
+        prefixes.append(prefix)
+        return 3
 
-    assert result == {
-        "repo_objects_deleted": 3,
-        "lfs_objects_deleted": 1,
-        "lfs_history_deleted": 4,
-    }
+    monkeypatch.setattr(gc_utils, "delete_objects_with_prefix", fake_delete)
 
-    monkeypatch.setattr(gc_utils, "get_repository", lambda *_args: None)
-    assert await gc_utils.cleanup_repository_storage(
-        "model", "owner", "repo", "lakefs-repo"
-    ) == {
-        "repo_objects_deleted": 0,
-        "lfs_objects_deleted": 0,
-        "lfs_history_deleted": 0,
-    }
+    result = await gc_utils.cleanup_repository_storage("model", "owner", "repo", "lakefs-repo")
+
+    # Shared LFS objects are left to the background collection.
+    assert result == {"repo_objects_deleted": 3}
+    assert prefixes == ["lakefs-repo/"]
 
 
 @pytest.mark.asyncio

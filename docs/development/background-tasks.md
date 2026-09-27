@@ -196,7 +196,9 @@ changes between runs from the same state.
 | --- | --- |
 | `tasks.cleanup` | Hourly: deletes finished task rows past their retention. |
 | `storage.purge_repository` | Deletes one LakeFS repository and its `s3://{bucket}/{lakefs_repo}/` prefix. Scheduled when a user or organization is deleted with its repositories, or from the orphan audit on the admin **Storage** page (`kohakuhub/storage_cleanup.py`). Refuses a LakeFS id a repository still points at. |
-| `storage.collect_lfs` | Deletes LFS objects recorded in `lfs_gc_candidate` that no file or LFS history row references any more. |
+| `storage.collect_lfs` | Decides each LFS object recorded in `lfs_gc_candidate` under a per-object lock and deletes the ones nothing relies on, leaving an `lfs_object_tombstone` (`kohakuhub/lfs_gc.py`, see [LFS garbage collection](../features/core/lfs.md#garbage-collection)). |
+| `storage.expire_recent_lfs` | Hourly: turns LFS objects whose 24-hour upload/commit grace period ended into candidates, so uploads that were never committed are collected. |
+| `storage.review_lfs_window` | Records the versions pushed out of a repository's keep windows after its `lfs_keep_versions` was lowered. |
 
 ## Admin panel
 

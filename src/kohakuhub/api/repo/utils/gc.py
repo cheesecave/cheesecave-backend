@@ -2,19 +2,18 @@
 
 import asyncio
 from datetime import datetime, timezone
-from typing import List, Optional
 
 from kohakuhub.config import cfg
 from kohakuhub.db import File, LFSObjectHistory, Repository
 from kohakuhub.db_operations import (
     create_lfs_history,
-    get_effective_lfs_keep_versions,
     get_repository,
     should_use_lfs,
 )
+from kohakuhub.lfs_gc import deleted_shas
 from kohakuhub.logger import get_logger
 from kohakuhub.utils.lakefs import get_lakefs_client
-from kohakuhub.utils.s3 import delete_objects_with_prefix, get_s3_client, object_exists
+from kohakuhub.utils.s3 import delete_objects_with_prefix, object_exists
 
 logger = get_logger("GC")
 
@@ -73,197 +72,6 @@ def track_lfs_object(
     )
 
 
-def get_old_lfs_versions(
-    repo: Repository,
-    path_in_repo: str,
-    keep_count: int,
-) -> List[str]:
-    """Get old LFS object hashes that should be garbage collected.
-
-    Counts UNIQUE oids (sha256), not individual history entries.
-    If the same oid appears in multiple commits, it's counted once.
-    Keeps the newest K unique oids, deletes all others.
-
-    Args:
-        repo: Repository FK object
-        path_in_repo: File path
-        keep_count: Number of unique versions to keep
-
-    Returns:
-        List of SHA256 hashes to delete
-    """
-    # Get all historical versions for this file using repository FK, sorted by creation date (newest first)
-    history = (
-        LFSObjectHistory.select()
-        .where(
-            (LFSObjectHistory.repository == repo)
-            & (LFSObjectHistory.path_in_repo == path_in_repo)
-        )
-        .order_by(LFSObjectHistory.created_at.desc())
-    )
-
-    all_versions = list(history)
-
-    if not all_versions:
-        logger.debug(f"No LFS history for {path_in_repo}")
-        return []
-
-    # Extract unique sha256 values in order (newest first)
-    unique_oids = []
-    seen_oids = set()
-
-    for version in all_versions:
-        if version.sha256 not in seen_oids:
-            unique_oids.append(version.sha256)
-            seen_oids.add(version.sha256)
-
-    # Check if we have enough unique versions to trigger GC
-    if len(unique_oids) <= keep_count:
-        logger.debug(
-            f"Only {len(unique_oids)} unique version(s) of {path_in_repo} "
-            f"({len(all_versions)} total entries), keeping all"
-        )
-        return []
-
-    # Keep the newest K unique oids, delete the rest
-    keep_oids = set(unique_oids[:keep_count])
-    delete_oids = unique_oids[keep_count:]
-
-    logger.info(
-        f"GC for {path_in_repo}: {len(unique_oids)} unique version(s), "
-        f"keeping {len(keep_oids)}, marking {len(delete_oids)} for deletion"
-    )
-
-    return delete_oids
-
-
-def cleanup_lfs_object(sha256: str, repo: Optional[Repository] = None) -> bool:
-    """Delete an LFS object from S3 if it's not used anywhere.
-
-    Args:
-        sha256: LFS object hash
-        repo: Optional Repository FK - restrict check to specific repo
-
-    Returns:
-        True if deleted, False if still in use or deletion failed
-    """
-    # Check if this object is still referenced in current files (active files only)
-    query = File.select().where(
-        (File.sha256 == sha256) & (File.lfs == True) & (File.is_deleted == False)
-    )
-    if repo:
-        query = query.where(File.repository == repo)
-
-    current_uses = query.count()
-
-    if current_uses > 0:
-        logger.debug(
-            f"LFS object {sha256[:8]} still used by {current_uses} active file(s), keeping"
-        )
-        return False
-
-    # Check if this object is referenced in any commit history (other repos might use it)
-    if not repo:
-        # Global check across all repos
-        history_uses = (
-            LFSObjectHistory.select().where(LFSObjectHistory.sha256 == sha256).count()
-        )
-
-        if history_uses > 0:
-            logger.debug(
-                f"LFS object {sha256[:8]} in history ({history_uses} references), keeping"
-            )
-            return False
-
-    # Safe to delete from S3
-    try:
-        lfs_key = f"lfs/{sha256[:2]}/{sha256[2:4]}/{sha256}"
-        s3_client = get_s3_client()
-        s3_client.delete_object(Bucket=cfg.s3.bucket, Key=lfs_key)
-
-        logger.success(f"Deleted LFS object from S3: {lfs_key}")
-
-        # Remove from history table using repository FK
-        if repo:
-            deleted_count = (
-                LFSObjectHistory.delete()
-                .where(
-                    (LFSObjectHistory.repository == repo)
-                    & (LFSObjectHistory.sha256 == sha256)
-                )
-                .execute()
-            )
-            logger.warning(
-                f"[LFS_HISTORY_DELETE] Removed {deleted_count} history record(s) "
-                f"for sha256={sha256[:8]} in repo={repo.full_id}"
-            )
-        else:
-            deleted_count = (
-                LFSObjectHistory.delete()
-                .where(LFSObjectHistory.sha256 == sha256)
-                .execute()
-            )
-            logger.warning(
-                f"[LFS_HISTORY_DELETE] Removed {deleted_count} history record(s) "
-                f"for sha256={sha256[:8]} (global cleanup)"
-            )
-
-        return True
-
-    except Exception as e:
-        logger.exception(f"Failed to delete LFS object {sha256[:8]}", e)
-        return False
-
-
-def run_gc_for_file(
-    repo_type: str,
-    namespace: str,
-    name: str,
-    path_in_repo: str,
-    current_commit_id: str,
-) -> int:
-    """Run garbage collection for a specific file.
-
-    Args:
-        repo_type: Repository type (model/dataset/space)
-        namespace: Repository namespace
-        name: Repository name
-        path_in_repo: File path
-        current_commit_id: Current commit ID
-
-    Returns:
-        Number of objects deleted
-    """
-    if not cfg.app.lfs_auto_gc:
-        logger.debug("Auto GC disabled, skipping")
-        return 0
-
-    # Get repository FK object
-    repo = get_repository(repo_type, namespace, name)
-    if not repo:
-        logger.error(f"Repository not found: {repo_type}/{namespace}/{name}")
-        return 0
-
-    # Use repo-specific keep_versions setting
-    keep_count = get_effective_lfs_keep_versions(repo)
-    old_hashes = get_old_lfs_versions(repo, path_in_repo, keep_count)
-
-    if not old_hashes:
-        return 0
-
-    deleted_count = 0
-    for sha256 in old_hashes:
-        if cleanup_lfs_object(sha256, repo):
-            deleted_count += 1
-
-    if deleted_count > 0:
-        logger.success(
-            f"GC completed for {path_in_repo}: deleted {deleted_count} old version(s)"
-        )
-
-    return deleted_count
-
-
 async def check_lfs_recoverability(
     repo: Repository, commit_id: str
 ) -> tuple[bool, list[str]]:
@@ -286,11 +94,13 @@ async def check_lfs_recoverability(
         return True, []
 
     missing_files = []
+    # History rows outlive a collected object; its tombstone says it is gone.
+    collected = deleted_shas(lfs_obj.sha256 for lfs_obj in lfs_objects)
 
     # Check S3 existence concurrently
     async def check_lfs_object(lfs_obj):
         lfs_key = f"lfs/{lfs_obj.sha256[:2]}/{lfs_obj.sha256[2:4]}/{lfs_obj.sha256}"
-        exists = await object_exists(cfg.s3.bucket, lfs_key)
+        exists = lfs_obj.sha256 not in collected and await object_exists(cfg.s3.bucket, lfs_key)
 
         if not exists:
             logger.warning(
@@ -599,13 +409,12 @@ async def cleanup_repository_storage(
     name: str,
     lakefs_repo: str,
 ) -> dict[str, int]:
-    """Clean up S3 storage for a deleted or moved repository.
+    """Delete a deleted or moved repository's folder in S3 (its LakeFS data).
 
-    This function:
-    1. Deletes the repository folder in S3 (LakeFS data)
-    2. Cleans up LFS objects that are only used by this repository
-
-    LFS objects are only deleted if they are not referenced by any other repository.
+    LFS objects are shared, so they are not deleted here: the caller records
+    the repository's LFS objects as collection candidates in the transaction
+    that deletes the row (``storage_cleanup.record_repository_lfs``), and the
+    background collection deletes the ones nothing else relies on.
 
     Args:
         repo_type: Repository type (model/dataset/space)
@@ -614,61 +423,15 @@ async def cleanup_repository_storage(
         lakefs_repo: LakeFS repository name (for S3 prefix)
 
     Returns:
-        Dict with 'repo_objects_deleted' and 'lfs_objects_deleted' counts
+        Dict with the 'repo_objects_deleted' count
     """
-    # Get repository FK object
-    repo = get_repository(repo_type, namespace, name)
-    if not repo:
-        logger.error(f"Repository not found: {repo_type}/{namespace}/{name}")
-        return {
-            "repo_objects_deleted": 0,
-            "lfs_objects_deleted": 0,
-            "lfs_history_deleted": 0,
-        }
-
-    # 1. Delete repository folder in S3 (LakeFS data)
     repo_prefix = f"{lakefs_repo}/"
     repo_objects_deleted = await delete_objects_with_prefix(cfg.s3.bucket, repo_prefix)
-
     logger.info(
-        f"Deleted {repo_objects_deleted} repository object(s) from S3 prefix: {repo_prefix}"
+        f"Deleted {repo_objects_deleted} repository object(s) from S3 prefix: {repo_prefix} "
+        f"({repo_type}/{namespace}/{name})"
     )
-
-    # 2. Clean up LFS objects that were only used by this repository
-    # Get all LFS objects ever used by this repository using backref
-    lfs_objects = list(repo.lfs_history.select(LFSObjectHistory.sha256).distinct())
-
-    lfs_objects_deleted = 0
-    for lfs_obj in lfs_objects:
-        sha256 = lfs_obj.sha256
-
-        # Check if this LFS object is used by any other repository or file
-        # cleanup_lfs_object will check:
-        # - Current File table (any repo)
-        # - LFSObjectHistory (any other repo)
-        # Only deletes if not referenced anywhere
-        if cleanup_lfs_object(sha256, repo=None):
-            lfs_objects_deleted += 1
-
-    if lfs_objects_deleted > 0:
-        logger.success(
-            f"Cleaned up {lfs_objects_deleted} unreferenced LFS object(s) for {repo_type}/{namespace}/{name}"
-        )
-
-    # 3. Clean up LFSObjectHistory for this repository using repository FK
-    history_deleted = (
-        LFSObjectHistory.delete().where(LFSObjectHistory.repository == repo).execute()
-    )
-
-    logger.info(
-        f"Removed {history_deleted} LFS history record(s) for repository: {repo_type}/{namespace}/{name}"
-    )
-
-    return {
-        "repo_objects_deleted": repo_objects_deleted,
-        "lfs_objects_deleted": lfs_objects_deleted,
-        "lfs_history_deleted": history_deleted,
-    }
+    return {"repo_objects_deleted": repo_objects_deleted}
 
 
 async def track_commit_lfs_objects(

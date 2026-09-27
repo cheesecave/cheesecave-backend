@@ -601,6 +601,36 @@ class LfsGcCandidate(BaseModel):
         table_name = "lfs_gc_candidate"
 
 
+class LfsObjectTombstone(BaseModel):
+    """An LFS object garbage collection deleted, or is deleting.
+
+    History rows stay, so the tombstone is what says the content is gone;
+    re-uploading the same content removes it (see ``kohakuhub.lfs_gc``).
+    """
+
+    sha256 = CharField(max_length=64, primary_key=True)
+    state = CharField(max_length=16)  # deleting, then deleted
+    created_at = DateTimeField(default=utcnow)
+    updated_at = DateTimeField(default=utcnow)
+
+    class Meta:
+        table_name = "lfs_object_tombstone"
+
+
+class LfsRecentObject(BaseModel):
+    """An LFS object uploaded or claimed by a commit recently.
+
+    Garbage collection keeps it through a grace period, so a collection can
+    never delete content an upload or a commit in flight relies on.
+    """
+
+    sha256 = CharField(max_length=64, primary_key=True)
+    touched_at = DateTimeField(default=utcnow, index=True)
+
+    class Meta:
+        table_name = "lfs_recent_object"
+
+
 class BackgroundWorker(BaseModel):
     """A worker process, registered at startup and kept fresh by heartbeats.
 
@@ -666,6 +696,8 @@ def init_db():
             BackgroundTaskLog,
             BackgroundWorker,
             LfsGcCandidate,
+            LfsObjectTombstone,
+            LfsRecentObject,
         ],
         safe=True,
     )

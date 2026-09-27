@@ -159,7 +159,7 @@ class AppConfig(BaseModel):
     )  # 50 MB - size of each part (S3 minimum is 5MB except last part)
     # LFS Garbage Collection settings
     lfs_keep_versions: int = 5  # Keep last K versions of each file
-    lfs_auto_gc: bool = False  # Auto-delete old LFS objects on commit
+    lfs_auto_gc: bool = False  # Collect LFS versions beyond lfs_keep_versions (background)
     # Download tracking settings
     download_time_bucket_seconds: int = 900  # 15 minutes - session deduplication window
     download_session_cleanup_threshold: int = (

@@ -27,7 +27,9 @@ from kohakuhub.auth.permissions import check_repo_write_permission
 from kohakuhub.utils.lakefs import get_lakefs_client, resolve_lakefs_repo
 from kohakuhub.utils.s3 import get_object_metadata, object_exists
 from kohakuhub.api.quota.util import update_namespace_storage, update_repository_storage
-from kohakuhub.api.repo.utils.gc import run_gc_for_file, track_lfs_object
+from kohakuhub.api.repo.utils.gc import track_lfs_object
+from kohakuhub.lfs_gc import LfsObjectUnavailable, claim_for_commit, record_evicted_versions
+from kohakuhub.storage_cleanup import enqueue_lfs_collection
 from kohakuhub.api.repo.utils.hf import HFErrorCode
 
 logger = get_logger("FILE")
@@ -177,6 +179,28 @@ async def process_regular_file(
     return True
 
 
+async def _claim_lfs_object(oid: str, lfs_key: str, exists: bool | None = None) -> None:
+    """Protect an LFS object from garbage collection while this commit links it.
+
+    Answers 409 when the object is being collected or is gone, so the client
+    uploads it again instead of committing a pointer to missing content (#114).
+    """
+    if exists is None:
+        exists = await object_exists(cfg.s3.bucket, lfs_key)
+    try:
+        revived = claim_for_commit(oid, exists)
+        if revived and not await object_exists(cfg.s3.bucket, lfs_key):
+            raise LfsObjectUnavailable(oid)
+    except LfsObjectUnavailable:
+        raise HTTPException(
+            409,
+            detail={
+                "error": f"LFS object {oid} is not available (garbage collected or missing). "
+                "Upload it again and retry the commit."
+            },
+        )
+
+
 async def process_lfs_file(
     path: str,
     oid: str,
@@ -232,6 +256,7 @@ async def process_lfs_file(
             # Construct S3 physical address
             lfs_key = f"lfs/{oid[:2]}/{oid[2:4]}/{oid}"
             physical_address = f"s3://{cfg.s3.bucket}/{lfs_key}"
+            await _claim_lfs_object(oid, lfs_key)
 
             # Link the physical S3 object to LakeFS to restore
             try:
@@ -318,6 +343,7 @@ async def process_lfs_file(
                     f"Upload to S3 may have failed. Path: {lfs_key}"
                 },
             )
+        await _claim_lfs_object(oid, lfs_key, exists=True)
     except HTTPException:
         raise  # Re-raise HTTPException as-is
     except Exception as e:
@@ -926,7 +952,7 @@ async def commit(
     )
     logger.success(f"Commit URL: {commit_url}")
 
-    # Track LFS objects and run GC
+    # Track LFS objects; schedule the collection of evicted versions
     if pending_lfs_tracking:
         logger.info(
             f"[COMMIT_LFS_TRACKING] Processing {len(pending_lfs_tracking)} LFS file(s) "
@@ -947,18 +973,11 @@ async def commit(
                 commit_id=commit_result["id"],
             )
 
-            if cfg.app.lfs_auto_gc and lfs_info.get("old_sha256"):
-                deleted_count = run_gc_for_file(
-                    repo_type=repo_type.value,
-                    namespace=namespace,
-                    name=name,
-                    path_in_repo=lfs_info["path"],
-                    current_commit_id=commit_result["id"],
-                )
-                if deleted_count > 0:
-                    logger.info(
-                        f"GC: Cleaned up {deleted_count} old version(s) of {lfs_info['path']}"
-                    )
+        # Versions this commit pushed out of a path's keep window become
+        # collection candidates; the background collection decides (#114).
+        replaced = [info["path"] for info in pending_lfs_tracking if info.get("old_sha256")]
+        if record_evicted_versions(repo_row, replaced):
+            enqueue_lfs_collection()
     else:
         logger.warning(
             f"[COMMIT_LFS_TRACKING] No LFS files to track for commit {commit_result['id'][:8]}"

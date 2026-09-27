@@ -222,7 +222,9 @@ async def test_delete_repo_covers_admin_validation_not_found_and_failures(monkey
     monkeypatch.setattr(repo_crud, "get_lakefs_client", lambda: client)
     monkeypatch.setattr(repo_crud, "resolve_lakefs_repo", lambda repo: f"{repo.repo_type}:{repo.full_id}")
     monkeypatch.setattr(repo_crud, "check_repo_delete_permission", lambda repo, user, is_admin=False: None)
-    monkeypatch.setattr(repo_crud, "cleanup_repository_storage", lambda **kwargs: _async_return({"repo_objects_deleted": 1, "lfs_objects_deleted": 0, "lfs_history_deleted": 0}))
+    monkeypatch.setattr(repo_crud, "cleanup_repository_storage", lambda **kwargs: _async_return({"repo_objects_deleted": 1}))
+    recorded = []
+    monkeypatch.setattr(repo_crud, "record_repository_lfs", recorded.append)
     monkeypatch.setattr(repo_crud, "is_lakefs_not_found_error", lambda error: "404" in str(error))
     monkeypatch.setattr(repo_crud, "db", SimpleNamespace(atomic=lambda: _AtomicContext(atomic_state)))
 
@@ -247,6 +249,8 @@ async def test_delete_repo_covers_admin_validation_not_found_and_failures(monkey
     )
     assert "deleted" in success["message"].lower()
     assert atomic_state == {"entered": 1, "exited": 1}
+    # The repository's LFS objects become collection candidates with the row
+    assert recorded == [repo_row]
 
     client.raise_on["delete_repository"] = RuntimeError("boom")
     failure = await repo_crud.delete_repo(
@@ -949,6 +953,7 @@ async def test_delete_repo_runs_lakefs_metadata_delete_before_s3_cleanup(monkeyp
         lambda repo, user, is_admin=False: None,
     )
     monkeypatch.setattr(repo_crud, "cleanup_repository_storage", fake_cleanup)
+    monkeypatch.setattr(repo_crud, "record_repository_lfs", lambda repo: 0)
     monkeypatch.setattr(
         repo_crud, "is_lakefs_not_found_error", lambda error: "404" in str(error)
     )
@@ -1008,6 +1013,7 @@ async def test_delete_repo_skips_s3_cleanup_when_lakefs_delete_fails(monkeypatch
         lambda repo, user, is_admin=False: None,
     )
     monkeypatch.setattr(repo_crud, "cleanup_repository_storage", fake_cleanup)
+    monkeypatch.setattr(repo_crud, "record_repository_lfs", lambda repo: 0)
     monkeypatch.setattr(
         repo_crud, "is_lakefs_not_found_error", lambda error: "404" in str(error)
     )
@@ -1069,6 +1075,7 @@ async def test_delete_repo_treats_lakefs_404_as_success_and_continues_to_s3(
         lambda repo, user, is_admin=False: None,
     )
     monkeypatch.setattr(repo_crud, "cleanup_repository_storage", fake_cleanup)
+    monkeypatch.setattr(repo_crud, "record_repository_lfs", lambda repo: 0)
     monkeypatch.setattr(
         repo_crud, "is_lakefs_not_found_error", lambda error: "404" in str(error)
     )

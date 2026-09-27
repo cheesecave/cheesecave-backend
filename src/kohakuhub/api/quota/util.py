@@ -9,7 +9,7 @@ import asyncio
 from peewee import fn
 
 from kohakuhub.config import cfg
-from kohakuhub.db import File, LFSObjectHistory, Repository, User
+from kohakuhub.db import File, LFSObjectHistory, LfsObjectTombstone, Repository, User
 from kohakuhub.db_operations import get_organization
 from kohakuhub.logger import get_logger
 from kohakuhub.utils.lakefs import get_lakefs_client, resolve_lakefs_repo
@@ -98,11 +98,16 @@ async def calculate_repository_storage(repo: Repository) -> dict[str, int]:
     # Calculate non-LFS storage in current branch
     current_branch_non_lfs_bytes = current_branch_bytes - current_branch_lfs_bytes
 
-    # Calculate LFS storage from history (all versions, including deleted).
+    # Calculate LFS storage from history (all versions, including deleted),
+    # except objects garbage collection removed: history rows outlive them
+    # and their tombstones say they are gone (#114).
     # SQL aggregation avoids pulling every history row into Python.
+    stored = (LFSObjectHistory.repository == repo) & LFSObjectHistory.sha256.not_in(
+        LfsObjectTombstone.select(LfsObjectTombstone.sha256)
+    )
     lfs_total_bytes = (
         LFSObjectHistory.select(fn.COALESCE(fn.SUM(LFSObjectHistory.size), 0))
-        .where(LFSObjectHistory.repository == repo)
+        .where(stored)
         .scalar()
         or 0
     )
@@ -112,7 +117,7 @@ async def calculate_repository_storage(repo: Repository) -> dict[str, int]:
     # every distinct row into Python.
     unique_subquery = (
         LFSObjectHistory.select(LFSObjectHistory.sha256, LFSObjectHistory.size)
-        .where(LFSObjectHistory.repository == repo)
+        .where(stored)
         .distinct()
         .alias("u")
     )

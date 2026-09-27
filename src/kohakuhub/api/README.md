@@ -384,8 +384,9 @@ POST /api/validate/check-name  - Check name availability
 
 3. **LFS Garbage Collection**:
    ```
-   repo/routers/crud.py → repo/utils/gc.cleanup_repository_storage()
-   commit/operations.py → repo/utils/gc.run_gc_for_file()
+   repo/routers/crud.py → storage_cleanup.record_repository_lfs()
+   commit/operations.py → lfs_gc.record_evicted_versions()
+   (deletion runs in the storage.collect_lfs background task, see lfs_gc.py)
    ```
 
 4. **HuggingFace Error Responses**:

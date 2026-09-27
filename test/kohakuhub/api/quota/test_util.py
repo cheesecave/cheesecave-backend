@@ -18,6 +18,9 @@ class _Field:
     def __eq__(self, other):
         return _Expr()
 
+    def not_in(self, other):
+        return _Expr()
+
 
 class _FileQuery:
     """Mock peewee SelectQuery for the File table.
@@ -180,6 +183,10 @@ def _patch_models(monkeypatch):
     monkeypatch.setattr(quota_util, "File", _FakeFileModel)
     monkeypatch.setattr(quota_util, "LFSObjectHistory", _FakeLFSObjectHistoryModel)
     monkeypatch.setattr(quota_util, "User", _FakeUserModel)
+    # Tombstone exclusion runs against the real database in test_lfs_gc.py
+    monkeypatch.setattr(
+        quota_util, "LfsObjectTombstone", SimpleNamespace(sha256=_Field(), select=lambda *_: None)
+    )
     monkeypatch.setattr(quota_util, "resolve_lakefs_repo", lambda repo: f"{repo.repo_type}-{repo.full_id}")
 
 

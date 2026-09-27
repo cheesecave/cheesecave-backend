@@ -34,6 +34,7 @@ from kohakuhub.db import (
     UserOrganization,
     db,
 )
+from kohakuhub import lfs_gc
 from kohakuhub.storage_cleanup import schedule_repository_purge
 from kohakuhub.utils.names import normalize_name
 
@@ -775,9 +776,7 @@ def get_effective_lfs_keep_versions(repo: Repository) -> int:
     Returns:
         Number of LFS versions to keep
     """
-    if repo.lfs_keep_versions is not None:
-        return repo.lfs_keep_versions
-    return cfg.app.lfs_keep_versions
+    return lfs_gc.keep_versions(repo)
 
 
 def get_effective_lfs_suffix_rules(repo: Repository) -> list[str]:

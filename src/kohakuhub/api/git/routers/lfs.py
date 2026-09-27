@@ -15,6 +15,7 @@ from pydantic import BaseModel
 from kohakuhub.config import cfg
 from kohakuhub.db import Repository, User
 from kohakuhub.db_operations import get_file_by_sha256, get_organization, get_repository
+from kohakuhub.lfs_gc import tombstone_state, touch
 from kohakuhub.logger import get_logger
 from kohakuhub.auth.dependencies import get_optional_user
 from kohakuhub.auth.permissions import (
@@ -117,16 +118,16 @@ async def process_upload_object(
         )
         s3_exists = False
 
-    # Check File table (per-repository check)
-    existing_file = get_file_by_sha256(oid)
+    # Only storage says whether the content exists: a File row can outlive a
+    # collected object, and an object being collected must be uploaded again.
+    # Either way the upload-then-commit round trip is protected from a
+    # collection by the recent-object grace period (#114).
+    touch(oid)  # first, so a collection deciding after this keeps it
+    collected = tombstone_state(oid) is not None
 
-    if s3_exists or (existing_file and existing_file.size == size):
-        # Object exists (either in S3 globally or in File table)
+    if s3_exists and not collected:
         # Tell client to skip upload
-        logger.info(
-            f"LFS object {oid[:8]} already exists "
-            f"(s3={s3_exists}, db={existing_file is not None}), skipping upload"
-        )
+        logger.info(f"LFS object {oid[:8]} already exists, skipping upload")
         return LFSObjectResponse(
             oid=oid,
             size=size,
@@ -282,10 +283,10 @@ async def process_download_object(oid: str, size: int) -> LFSObjectResponse:
     """
     lfs_key = get_lfs_key(oid)
 
-    # Check if object exists
+    # Check if object exists; a collected object's File rows can outlive it
     existing = get_file_by_sha256(oid)
 
-    if not existing:
+    if not existing or tombstone_state(oid) is not None:
         return LFSObjectResponse(
             oid=oid,
             size=size,
