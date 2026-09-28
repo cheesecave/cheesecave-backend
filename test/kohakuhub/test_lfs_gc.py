@@ -538,6 +538,11 @@ def test_commits_and_branch_operations_keep_head_links_current(m, monkeypatch):
     assert _refs(m, repo, "main") == {("main", "x/1.bin", c)}
     assert _refs(m, repo, "dev") == {("dev", "x/1.bin", a)}  # other branches untouched
     assert m.gc.update_head_refs(repo, "main", {}) == set()  # a commit without files
+    # Deleting a folder is case-sensitive, unlike SQL's ILIKE
+    m.gc.update_head_refs(repo, "main", {"X/keep.bin": b})
+    assert m.gc.update_head_refs(repo, "main", {}, ["x/"]) == {c}
+    assert _refs(m, repo, "main") == {("main", "X/keep.bin", b)}
+    m.gc.update_head_refs(repo, "main", {"x/1.bin": c})
 
     # A rewritten head (revert, merge, reset) and a deleted branch
     assert m.gc.replace_head_refs(repo, "dev", {("dev", "y.bin", b)}) == {a}

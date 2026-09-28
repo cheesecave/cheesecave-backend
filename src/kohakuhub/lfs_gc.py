@@ -211,22 +211,34 @@ def update_head_refs(
     Returns the objects the branch no longer links; they may be garbage now.
     """
     R = LfsHeadRef
-    folders = list(folders)
     listed = sorted(paths)
     new = {(path, sha) for path, sha in paths.items() if sha}
-    removed: set[str] = set()
+    fields = (R.id, R.path_in_repo, R.sha256)
     with _database().atomic():
-        for start in range(0, max(len(listed), 1), CANDIDATE_BATCH):
-            touched = R.path_in_repo.in_(listed[start : start + CANDIDATE_BATCH])
-            for folder in folders if start == 0 else ():
-                touched |= R.path_in_repo.startswith(folder)
-            where = _head_refs(repo, branch) & touched
-            removed.update(
-                (p, sha) for p, sha in R.select(R.path_in_repo, R.sha256).where(where).tuples()
+        rows = [
+            row
+            for start in range(0, len(listed), CANDIDATE_BATCH)
+            for row in R.select(*fields)
+            .where(
+                _head_refs(repo, branch)
+                & R.path_in_repo.in_(listed[start : start + CANDIDATE_BATCH])
             )
-            R.delete().where(where).execute()
+            .tuples()
+        ]
+        for folder in folders:
+            # startswith is ILIKE: narrow in SQL, match case-sensitively here
+            rows += [
+                row
+                for row in R.select(*fields)
+                .where(_head_refs(repo, branch) & R.path_in_repo.startswith(folder))
+                .tuples()
+                if row[1].startswith(folder)
+            ]
+        ids = sorted({row[0] for row in rows})
+        for start in range(0, len(ids), CANDIDATE_BATCH):
+            R.delete().where(R.id.in_(ids[start : start + CANDIDATE_BATCH])).execute()
         add_head_refs(repo, ((branch, path, sha) for path, sha in new))
-    return {sha for _, sha in removed} - {sha for _, sha in new}
+    return {sha for _, _, sha in rows} - {sha for _, sha in new}
 
 
 def replace_head_refs(
