@@ -6,6 +6,7 @@ through a whole history never pay for these checks.
 """
 
 import asyncio
+from typing import Annotated
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
@@ -24,7 +25,8 @@ LOOKUP_CONCURRENCY = 16
 
 
 class CommitIds(BaseModel):
-    commit_ids: list[str] = Field(max_length=100)  # one commit list page
+    # One commit list page of LakeFS commit ids
+    commit_ids: list[Annotated[str, Field(max_length=64)]] = Field(max_length=100)
 
 
 def _can_write(repo, user) -> bool:

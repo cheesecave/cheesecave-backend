@@ -245,6 +245,7 @@ async def test_permissions_capabilities_and_missing_refs(m, owner_client, visito
     assert response.status_code == 404
     response = await repo.quick(["x"] * 101)
     assert response.status_code == 422  # at most one page
+    assert (await repo.quick(["x" * 65])).status_code == 422  # and commit ids only
 
     # A private repository stays invisible to outsiders
     private = await Repo(m, owner_client, "avail-private").create()
@@ -293,6 +294,13 @@ async def test_the_list_marks_only_what_is_proven(m, owner_client, monkeypatch):
     monkeypatch.setattr(m.avail, "QUICK_BUDGET", 1)
     body = (await repo.quick(commits)).json()
     assert body["commits"][c1]["reset"] == {"available": None}
+    # ...also when the budget runs out in the middle of listing a ref
+    # (two objects, one per page: the second page is past the budget)
+    monkeypatch.setattr(m.avail, "QUICK_BUDGET", 1)
+    monkeypatch.setattr(m.avail, "LISTING_THRESHOLD", 0)
+    monkeypatch.setattr(m.avail, "PAGE", 1)
+    body = (await repo.quick([c1])).json()
+    assert body["commits"][c1]["reset"] == {"available": None}
 
 
 # ----- the predictions match what LakeFS does -----
@@ -331,7 +339,9 @@ async def test_revert_predictions_match_lakefs_on_a_tangled_history(m, owner_cli
         ops = []
         for _ in range(rng.randint(1, 4)):
             version += 1
-            path = rng.choice(["m/a.bin", "m/b.bin", "m/c.txt", "n/d.bin", "n/e.txt", "f.bin"])
+            path = rng.choice(
+                ["m/a.bin", "m/b b.bin", "m/c.txt", "n/dé.bin", "n/e.txt", "f.bin", "n/ü ü.txt"]
+            )
             if path in live and rng.random() < 0.3:
                 ops = [op for op in ops if op["value"]["path"] != path] + [_delete(path)]
                 live.pop(path)
@@ -477,3 +487,13 @@ def test_only_not_found_counts_as_missing_from_the_bucket(m):
     # A transient failure must not grey out an action
     with pytest.raises(ClientError):
         m.avail._stored(Bucket("SlowDown"), "a" * 64)
+
+
+async def test_too_many_changed_paths_are_left_to_the_operation(m, owner_client, monkeypatch):
+    repo, (initial, c1, *_rest) = await _linear(m, owner_client, "avail-large")
+    monkeypatch.setattr(m.avail, "EXACT_PATHS", 1)
+    body = (await repo.preflight(c1)).json()
+    for op in ("revert", "reset"):
+        assert body[op]["available"] is None and body[op]["reason"] == "too_large"
+        assert "checked when it runs" in body[op]["message"]
+    assert body["reset"]["requires_force"] is True

@@ -186,6 +186,30 @@ describe("commit page operation checks", () => {
     });
   });
 
+  it("explains, without blocking, what is too large to check in advance", async () => {
+    const tooLarge = {
+      available: null,
+      reason: "too_large",
+      message:
+        "Revert touches more files than can be checked in advance; it is checked when it runs.",
+    };
+    mocks.repoAPI.getCommitOperations.mockResolvedValue(
+      checks(tooLarge, { available: true, files: 1 }),
+    );
+    const wrapper = mountPage();
+    await flushPromises();
+
+    expect(action(wrapper, "revert")).toEqual({
+      disabled: false,
+      tooltip: tooLarge.message,
+      tooltipOff: "false",
+    });
+    expect(action(wrapper, "reset")).toMatchObject({
+      disabled: false,
+      tooltip: "",
+    });
+  });
+
   it("shows the revert scope and asks nothing while both actions are off", async () => {
     mocks.repoAPI.getCommitOperations.mockResolvedValue(
       checks({ available: true, files: 2 }, { available: true, files: 1 }),

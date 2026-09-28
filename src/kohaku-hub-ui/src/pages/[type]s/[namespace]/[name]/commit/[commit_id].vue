@@ -652,10 +652,12 @@ function operationCheck(op) {
   if (checkingOperations.value) {
     return { blocked: true, reason: "Checking whether this is possible…" };
   }
-  // Unknown (the check failed): leave the action to the server's own checks
+  // Unknown (the check failed, or too much to check in advance): leave
+  // the action to the server's own checks, explaining why when known
   const check = operationChecks.value?.[op];
-  if (!check || check.available !== false)
-    return { blocked: false, reason: "" };
+  if (!check || check.available !== false) {
+    return { blocked: false, reason: check?.message || "" };
+  }
   return { blocked: true, reason: check.message };
 }
 

@@ -1,7 +1,6 @@
 """Whether a commit can be reverted, or a branch reset to it, known up front.
 
-Decided from what LakeFS and the bucket really hold, with the rules the
-revert and reset endpoints follow:
+Decided from what LakeFS and the bucket really hold:
 
 - **Revert** of commit ``C`` onto branch ``B`` (first parent ``P``) is
   LakeFS's three-way revert: for every path ``C`` changed, ``B`` still at
@@ -10,7 +9,9 @@ revert and reset endpoints follow:
   paths it undoes; an initial commit has nothing to revert, and a revert
   that would change no file's content is pointless ("no_changes").
 - **Reset** of ``B`` to ``C`` restores every path whose content differs
-  (a two-dot diff), so it needs ``C``'s LFS objects of those paths.
+  (a two-dot diff), so it needs ``C``'s LFS objects of those paths. This is
+  what a reset must do; the reset endpoint still reads only its diff's
+  first page (see #99).
 
 An LFS object is missing when garbage collection tombstoned it or the
 bucket no longer holds it (the quick check only knows the tombstones).
@@ -18,7 +19,8 @@ bucket no longer holds it (the quick check only knows the tombstones).
 The full check (``preflight``) is exact and serves the commit page. The
 quick one (``quick_verdicts``) serves a commit list page: it only reports
 what it can prove unavailable at bounded cost, and leaves everything else
-unknown (``available: None``), never "available".
+unknown (``available: None``), never "available". Neither loads more
+than ``EXACT_PATHS`` changed paths: past that, the verdict is unknown too.
 """
 
 import asyncio
@@ -37,6 +39,7 @@ from kohakuhub.utils.s3 import get_s3_client
 PAGE = 1000  # LakeFS listing maximum
 STAT_CONCURRENCY = 16
 LISTING_THRESHOLD = 200  # more paths than this: list the ref instead of one stat each
+EXACT_PATHS = 20_000  # changed paths an exact check reads before giving up
 QUICK_BUDGET = 400  # LakeFS calls one list page may spend proving LFS objects missing
 # (charged as made: a stat per path, or a page when a whole ref is listed)
 SHOWN_PATHS = 20
@@ -49,6 +52,7 @@ MESSAGES = {
     "conflict": "Later commits changed the same files: {paths}.",
     "lfs_missing": "Files it needs are no longer stored (garbage collected): {paths}.",
     "already_current": "The branch is already at this commit.",
+    "too_large": "{op} touches more files than can be checked in advance; it is checked when it runs.",
 }
 
 
@@ -56,6 +60,12 @@ def verdict(reason: str | None = None, op: str = "", **details) -> dict[str, Any
     """``available`` with a reason code and a message people can read."""
     if reason is None:
         return {"available": True, **details}
+    if reason == "too_large":
+        return {
+            "available": None,
+            "reason": reason,
+            "message": MESSAGES[reason].format(op=op.capitalize()),
+        }
     paths = details.get("missing_lfs" if reason == "lfs_missing" else "conflicts") or []
     shown = ", ".join(paths[:SHOWN_PATHS]) + (" …" if len(paths) > SHOWN_PATHS else "")
     message = MESSAGES[reason].format(op=op.capitalize(), paths=shown)
@@ -65,27 +75,32 @@ def verdict(reason: str | None = None, op: str = "", **details) -> dict[str, Any
 UNKNOWN = {"available": None}
 
 
+class OutOfBudget(Exception):
+    """A quick check ran out of LakeFS calls, or an exact one out of paths."""
+
+
 class Budget:
-    """LakeFS calls a quick check may still make; charged as they happen."""
+    """LakeFS calls a quick check may still make; charged before each one."""
 
     def __init__(self, calls: int):
         self.calls = calls
 
-    @property
-    def left(self) -> bool:
-        return self.calls > 0
-
     def charge(self, calls: int = 1) -> None:
+        if calls > self.calls:
+            raise OutOfBudget
         self.calls -= calls
 
 
-async def _pages(fetch, budget: Budget | None = None) -> list[dict]:
+async def _pages(fetch, budget: Budget | None = None, limit: int | None = None) -> list[dict]:
+    """Every result of a paginated listing; stops at the budget or past ``limit``."""
     results, after = [], ""
     while True:
         if budget is not None:
             budget.charge()
         page = await fetch(after)
         results += page.get("results", [])
+        if limit is not None and len(results) > limit:
+            raise OutOfBudget
         pagination = page.get("pagination") or {}
         if not pagination.get("has_more"):
             return results
@@ -93,7 +108,12 @@ async def _pages(fetch, budget: Budget | None = None) -> list[dict]:
 
 
 async def changed_paths(
-    client, lakefs_repo: str, left: str, right: str, budget: Budget | None = None
+    client,
+    lakefs_repo: str,
+    left: str,
+    right: str,
+    budget: Budget | None = None,
+    limit: int | None = None,
 ) -> list[str]:
     """Every path whose content differs between two refs (a two-dot diff)."""
     return [
@@ -108,6 +128,7 @@ async def changed_paths(
                 diff_type="two_dot",
             ),
             budget,
+            limit,
         )
         if entry.get("path_type", "object") == "object"
     ]
@@ -190,7 +211,10 @@ async def revert_verdict(client, lakefs_repo: str, commit: dict, head: str) -> d
     if not commit.get("parents"):
         return verdict("initial_commit", "revert")
     parent = commit["parents"][0]
-    paths = await changed_paths(client, lakefs_repo, parent, commit["id"])
+    try:
+        paths = await changed_paths(client, lakefs_repo, parent, commit["id"], limit=EXACT_PATHS)
+    except OutOfBudget:
+        return verdict("too_large", "revert")
     base, source, dest = await asyncio.gather(
         entries(client, lakefs_repo, commit["id"], paths),
         entries(client, lakefs_repo, parent, paths),
@@ -218,7 +242,10 @@ async def reset_verdict(client, lakefs_repo: str, commit: dict, head: str, branc
     details = {"requires_force": branch == "main"}  # the reset endpoint's own rule
     if commit["id"] == head:
         return verdict("already_current", "reset", **details)
-    paths = await changed_paths(client, lakefs_repo, head, commit["id"])
+    try:
+        paths = await changed_paths(client, lakefs_repo, head, commit["id"], limit=EXACT_PATHS)
+    except OutOfBudget:
+        return {**verdict("too_large", "reset"), **details}
     if not paths:
         return verdict("no_changes", "reset", **details)
     target = await entries(client, lakefs_repo, commit["id"], paths)
@@ -243,10 +270,8 @@ def _collected_versions(repo: Repository) -> dict[str, set[str]]:
     return versions
 
 
-async def _links_collected(client, lakefs_repo, ref, versions, budget: Budget) -> list[str] | None:
-    """The paths where ``ref`` links a tombstoned version; ``None`` past the budget."""
-    if not budget.left:
-        return None
+async def _links_collected(client, lakefs_repo, ref, versions, budget: Budget) -> list[str]:
+    """The paths where ``ref`` links a tombstoned version (raises past the budget)."""
     paths = sorted(versions)
     linked = await entries(client, lakefs_repo, ref, paths, budget)
     return [
@@ -284,14 +309,14 @@ async def quick_verdicts(
             revert = verdict("initial_commit", "revert")
         if commit["id"] == head:
             reset = verdict("already_current", "reset")
-        if versions:
-            if reset is UNKNOWN:
+        try:
+            if versions and reset is UNKNOWN:
                 missing = await _links_collected(
                     client, lakefs_repo, commit["id"], versions, budget
                 )
                 if missing:
                     reset = verdict("lfs_missing", "reset", missing_lfs=missing)
-            if revert is UNKNOWN and budget.left:
+            if versions and revert is UNKNOWN:
                 # Only the paths this commit changed count
                 parent = commit["parents"][0]
                 changed = set(
@@ -301,6 +326,8 @@ async def quick_verdicts(
                 missing = own and await _links_collected(client, lakefs_repo, parent, own, budget)
                 if missing:
                     revert = verdict("lfs_missing", "revert", missing_lfs=missing)
+        except OutOfBudget:
+            pass  # what it has not proven stays unknown
         results[commit["id"]] = {"revert": revert, "reset": reset}
     return results
 
