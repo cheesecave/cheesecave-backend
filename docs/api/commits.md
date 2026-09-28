@@ -191,8 +191,8 @@ Every verdict is `{"available": true | false | null, "reason", "message"}`.
 | `forbidden` | The user has no write access to the repository |
 | `initial_commit` | Revert: the repository's first commit has nothing to revert |
 | `conflict` | Revert: later commits changed the same files (`conflicts` lists them) |
-| `no_changes` | It would change nothing (already undone, or the branch already has this content) |
-| `lfs_missing` | LFS objects it would restore are garbage collected or gone from storage (`missing_lfs`) |
+| `no_changes` | No file's content would change (already undone, or the branch already has this content). LakeFS then refuses a revert, or records an empty commit |
+| `lfs_missing` | LFS objects it would restore are garbage collected or gone from storage (`missing_lfs`; a revert also lists any `conflicts`). Reported before a conflict |
 | `already_current` | Reset: the branch is at this commit |
 
 ### One commit (exact)

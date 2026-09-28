@@ -115,7 +115,10 @@
             :disabled="!revertCheck.reason"
             placement="top"
           >
-            <span class="inline-block" data-testid="revert-action">
+            <span
+              class="inline-block operation-action"
+              data-testid="revert-action"
+            >
               <el-button
                 size="small"
                 :disabled="revertCheck.blocked"
@@ -133,7 +136,10 @@
             :disabled="!resetCheck.reason"
             placement="top"
           >
-            <span class="inline-block" data-testid="reset-action">
+            <span
+              class="inline-block operation-action"
+              data-testid="reset-action"
+            >
               <el-button
                 type="primary"
                 size="small"
@@ -1046,6 +1052,20 @@ onMounted(async () => {
 :deep(.dark) .btn-revert:hover {
   background-color: #c2410c !important;
   border-color: #c2410c !important;
+}
+
+/* An action the commit cannot take: plainly grey, whatever its colour */
+.operation-action :deep(.el-button.is-disabled),
+.operation-action :deep(.el-button.is-disabled:hover) {
+  background-color: #e5e7eb !important;
+  border-color: #d1d5db !important;
+  color: #9ca3af !important;
+}
+
+:deep(.dark) .operation-action .el-button.is-disabled {
+  background-color: #374151 !important;
+  border-color: #4b5563 !important;
+  color: #6b7280 !important;
 }
 
 /* Diff viewer styling */

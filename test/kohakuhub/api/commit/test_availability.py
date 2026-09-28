@@ -284,7 +284,9 @@ async def test_the_list_marks_only_what_is_proven(m, owner_client, monkeypatch):
     m.db.LfsObjectTombstone.create(sha256=old, state=m.gc.DELETED)
     body = (await repo.quick(commits)).json()
     assert body["commits"][c1]["reset"]["reason"] == "lfs_missing"
-    assert body["commits"][c2]["revert"]["reason"] == "lfs_missing"
+    assert body["commits"][c1]["reset"]["missing_lfs"] == ["a.bin"]
+    assert "a.bin" in body["commits"][c1]["reset"]["message"]
+    assert body["commits"][c2]["revert"]["missing_lfs"] == ["a.bin"]
     assert body["commits"][c3]["reset"] == {"available": None}  # a.bin is v2 there
 
     # Past the budget the rest stays unknown
@@ -305,7 +307,13 @@ async def _lakefs_revert_outcome(m, repo, commit, head):
         await client.revert_branch(
             repository=repo.lakefs_repo, branch=branch, ref=commit, parent_number=1
         )
-        return "applied"
+        reverted = (await client.get_branch(repository=repo.lakefs_repo, branch=branch))[
+            "commit_id"
+        ]
+        diff = await client.diff_refs(
+            repository=repo.lakefs_repo, left_ref=head, right_ref=reverted, diff_type="two_dot"
+        )
+        return "applied" if diff["results"] else "empty"
     except httpx.HTTPStatusError as e:
         return {409: "conflict", 400: "rejected"}.get(
             e.response.status_code, e.response.status_code
@@ -358,12 +366,13 @@ async def test_revert_predictions_match_lakefs_on_a_tangled_history(m, owner_cli
         predicted = body["revert"]
         actual = await _lakefs_revert_outcome(m, repo, entry["id"], head)
         expected = {
-            None: "applied",
-            "conflict": "conflict",
-            "no_changes": "rejected",
-            "initial_commit": "rejected",
+            None: {"applied"},
+            "conflict": {"conflict"},
+            # No content changes: refused, or an empty commit
+            "no_changes": {"rejected", "empty"},
+            "initial_commit": {"rejected"},
         }[predicted.get("reason")]
-        assert expected == actual, (entry["id"], entry.get("message"), predicted, actual)
+        assert actual in expected, (entry["id"], entry.get("message"), predicted, actual)
         outcomes[predicted.get("reason")] = outcomes.get(predicted.get("reason"), 0) + 1
     # The history exercised every outcome
     assert {None, "conflict", "initial_commit"} <= set(outcomes), outcomes
@@ -414,3 +423,57 @@ async def test_the_list_reports_an_operation_disabled_on_its_own(m, owner_client
     assert body["commits"][commits[0]]["revert"]["reason"] == "initial_commit"
     m.cfg.app.repository_revert_enabled = False
     assert (await repo.quick(commits)).json()["commits"] == {}  # nothing to act on
+
+
+async def test_reverting_additions_already_deleted_changes_nothing(m, owner_client):
+    """No file's content would change. LakeFS refuses such a revert, or
+    records an empty commit where its internal layout differs; the verdict
+    does not depend on which."""
+    repo = await Repo(m, owner_client, "avail-gone").create()
+    added = await repo.commit(lfs("tmp/a.bin", b"tmp a"), lfs("tmp/b.bin", b"tmp b"))
+    response = await repo.client.post(
+        f"/api/models/{repo.id}/commit/main",
+        content=encode_ndjson(
+            [
+                {"key": "header", "value": {"summary": "rm"}},
+                {"key": "deletedFolder", "value": {"path": "tmp"}},
+            ]
+        ),
+        headers={"Content-Type": "application/x-ndjson"},
+    )
+    assert response.status_code == 200
+    body = (await repo.preflight(added)).json()
+    assert _verdict(body, "revert") == (False, "no_changes")
+
+
+async def test_a_collected_version_outranks_a_conflict(m, owner_client):
+    repo = await Repo(m, owner_client, "avail-both").create()
+    await repo.commit(lfs("w.bin", b"w v1"))
+    changed = await repo.commit(lfs("w.bin", b"w v2"))
+    await repo.commit(lfs("w.bin", b"w v3"))  # a conflict for reverting ``changed``
+    m.db.LfsObjectTombstone.create(sha256=hashlib.sha256(b"w v1").hexdigest(), state=m.gc.DELETED)
+
+    body = (await repo.preflight(changed)).json()
+    assert body["revert"]["reason"] == "lfs_missing"
+    assert body["revert"]["missing_lfs"] == ["w.bin"] and body["revert"]["conflicts"] == ["w.bin"]
+    assert "w.bin" in body["revert"]["message"] and "garbage collected" in body["revert"]["message"]
+    # The list proves the same, with the same reason
+    quick = (await repo.quick([changed])).json()["commits"][changed]
+    assert quick["revert"]["reason"] == "lfs_missing"
+
+
+def test_only_not_found_counts_as_missing_from_the_bucket(m):
+    from botocore.exceptions import ClientError
+
+    class Bucket:
+        def __init__(self, code):
+            self.code = code
+
+        def head_object(self, **kwargs):
+            raise ClientError({"Error": {"Code": self.code}}, "HeadObject")
+
+    assert m.avail._stored(Bucket("404"), "a" * 64) is False
+    assert m.avail._stored(Bucket("NoSuchKey"), "a" * 64) is False
+    # A transient failure must not grey out an action
+    with pytest.raises(ClientError):
+        m.avail._stored(Bucket("SlowDown"), "a" * 64)

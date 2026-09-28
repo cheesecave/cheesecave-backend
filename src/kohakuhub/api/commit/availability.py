@@ -7,7 +7,8 @@ revert and reset endpoints follow:
   LakeFS's three-way revert: for every path ``C`` changed, ``B`` still at
   ``C``'s version is undone (to ``P``'s), ``B`` already at ``P``'s is left
   alone, anything else is a conflict. It needs ``P``'s versions of the
-  paths it undoes; an initial commit has nothing to revert.
+  paths it undoes; an initial commit has nothing to revert, and a revert
+  that would change no file's content is pointless ("no_changes").
 - **Reset** of ``B`` to ``C`` restores every path whose content differs
   (a two-dot diff), so it needs ``C``'s LFS objects of those paths.
 
@@ -24,17 +25,20 @@ import asyncio
 from typing import Any
 
 import httpx
+from botocore.exceptions import ClientError
 
 from kohakuhub.api.operation_capabilities import get_repository_operation_capabilities
+from kohakuhub.async_utils import run_in_s3_executor
 from kohakuhub.config import cfg
 from kohakuhub.db import LFSObjectHistory, LfsObjectTombstone, Repository
 from kohakuhub.lfs_gc import deleted_shas, lfs_key, lfs_oid
-from kohakuhub.utils.s3 import object_exists
+from kohakuhub.utils.s3 import get_s3_client
 
 PAGE = 1000  # LakeFS listing maximum
 STAT_CONCURRENCY = 16
 LISTING_THRESHOLD = 200  # more paths than this: list the ref instead of one stat each
 QUICK_BUDGET = 400  # LakeFS calls one list page may spend proving LFS objects missing
+# (charged as made: a stat per path, or a page when a whole ref is listed)
 SHOWN_PATHS = 20
 
 MESSAGES = {
@@ -52,7 +56,7 @@ def verdict(reason: str | None = None, op: str = "", **details) -> dict[str, Any
     """``available`` with a reason code and a message people can read."""
     if reason is None:
         return {"available": True, **details}
-    paths = details.get("conflicts") or details.get("missing_lfs") or []
+    paths = details.get("missing_lfs" if reason == "lfs_missing" else "conflicts") or []
     shown = ", ".join(paths[:SHOWN_PATHS]) + (" …" if len(paths) > SHOWN_PATHS else "")
     message = MESSAGES[reason].format(op=op.capitalize(), paths=shown)
     return {"available": False, "reason": reason, "message": message, **details}
@@ -62,21 +66,24 @@ UNKNOWN = {"available": None}
 
 
 class Budget:
-    """LakeFS calls a quick check may still make."""
+    """LakeFS calls a quick check may still make; charged as they happen."""
 
     def __init__(self, calls: int):
         self.calls = calls
 
-    def spend(self, calls: int) -> bool:
-        if calls > self.calls:
-            return False
+    @property
+    def left(self) -> bool:
+        return self.calls > 0
+
+    def charge(self, calls: int = 1) -> None:
         self.calls -= calls
-        return True
 
 
-async def _pages(fetch) -> list[dict]:
+async def _pages(fetch, budget: Budget | None = None) -> list[dict]:
     results, after = [], ""
     while True:
+        if budget is not None:
+            budget.charge()
         page = await fetch(after)
         results += page.get("results", [])
         pagination = page.get("pagination") or {}
@@ -85,7 +92,9 @@ async def _pages(fetch) -> list[dict]:
         after = pagination["next_offset"]
 
 
-async def changed_paths(client, lakefs_repo: str, left: str, right: str) -> list[str]:
+async def changed_paths(
+    client, lakefs_repo: str, left: str, right: str, budget: Budget | None = None
+) -> list[str]:
     """Every path whose content differs between two refs (a two-dot diff)."""
     return [
         entry["path"]
@@ -97,13 +106,16 @@ async def changed_paths(client, lakefs_repo: str, left: str, right: str) -> list
                 after=after,
                 amount=PAGE,
                 diff_type="two_dot",
-            )
+            ),
+            budget,
         )
         if entry.get("path_type", "object") == "object"
     ]
 
 
-async def entries(client, lakefs_repo: str, ref: str, paths: list[str]) -> dict[str, dict | None]:
+async def entries(
+    client, lakefs_repo: str, ref: str, paths: list[str], budget: Budget | None = None
+) -> dict[str, dict | None]:
     """``ref``'s entry at each path, ``None`` where it has none."""
     if len(paths) > LISTING_THRESHOLD:
         wanted = set(paths)
@@ -112,11 +124,14 @@ async def entries(client, lakefs_repo: str, ref: str, paths: list[str]) -> dict[
             for obj in await _pages(
                 lambda after: client.list_objects(
                     repository=lakefs_repo, ref=ref, after=after, amount=PAGE
-                )
+                ),
+                budget,
             )
             if obj["path"] in wanted
         }
         return {path: listed.get(path) for path in paths}
+    if budget is not None:
+        budget.charge(len(paths))
     limit = asyncio.Semaphore(STAT_CONCURRENCY)
 
     async def stat(path):
@@ -138,21 +153,35 @@ def same(a: dict | None, b: dict | None) -> bool:
     return a["checksum"] == b["checksum"]
 
 
+def _stored(s3, oid: str) -> bool:
+    """Whether the bucket holds ``oid``; only "not found" counts as missing."""
+    try:
+        s3.head_object(Bucket=cfg.s3.bucket, Key=lfs_key(oid))
+        return True
+    except ClientError as e:
+        if e.response.get("Error", {}).get("Code") not in ("404", "NoSuchKey", "NotFound"):
+            raise
+        return False
+
+
 async def missing_lfs(needed: dict[str, dict]) -> list[str]:
     """Paths whose LFS object is gone: tombstoned, or not in the bucket."""
     oids = {path: lfs_oid(entry.get("physical_address")) for path, entry in needed.items()}
     oids = {path: oid for path, oid in oids.items() if oid}
     collected = deleted_shas(oids.values())
     missing = {path for path, oid in oids.items() if oid in collected}
-    limit = asyncio.Semaphore(STAT_CONCURRENCY)
-
-    async def stored(oid):
-        async with limit:
-            return await object_exists(cfg.s3.bucket, lfs_key(oid))
-
     rest = sorted({oid for path, oid in oids.items() if path not in missing})
-    present = dict(zip(rest, await asyncio.gather(*(stored(oid) for oid in rest))))
-    missing |= {path for path, oid in oids.items() if not present.get(oid, True)}
+    if rest:
+        # One client for the batch: creating one per request costs more than the request
+        s3 = await run_in_s3_executor(get_s3_client)
+        limit = asyncio.Semaphore(STAT_CONCURRENCY)
+
+        async def stored(oid):
+            async with limit:
+                return await run_in_s3_executor(_stored, s3, oid)
+
+        present = dict(zip(rest, await asyncio.gather(*(stored(oid) for oid in rest))))
+        missing |= {path for path, oid in oids.items() if not present.get(oid, True)}
     return sorted(missing)
 
 
@@ -169,14 +198,18 @@ async def revert_verdict(client, lakefs_repo: str, commit: dict, head: str) -> d
     )
     undone = [p for p in paths if same(dest[p], base[p])]
     conflicts = [p for p in paths if not same(dest[p], base[p]) and not same(dest[p], source[p])]
+    # Collected versions first: the quick check can prove only that much,
+    # and it holds for conflicting paths too (they differ from the branch)
+    needed = {p: source[p] for p in undone + conflicts if source[p] is not None}
+    missing = await missing_lfs(needed)
+    if missing:
+        return verdict("lfs_missing", "revert", missing_lfs=missing, conflicts=conflicts)
     if conflicts:
         return verdict("conflict", "revert", conflicts=conflicts)
     if not undone:
+        # No file's content would change. LakeFS then refuses, or records an
+        # empty commit where its internal layout differs: pointless either way.
         return verdict("no_changes", "revert")
-    needed = {p: source[p] for p in undone if source[p] is not None}
-    missing = await missing_lfs(needed)
-    if missing:
-        return verdict("lfs_missing", "revert", missing_lfs=missing)
     return verdict(None, files=len(undone))
 
 
@@ -210,16 +243,17 @@ def _collected_versions(repo: Repository) -> dict[str, set[str]]:
     return versions
 
 
-async def _links_collected(client, lakefs_repo, ref, versions, budget: Budget) -> bool | None:
-    """Whether ``ref`` links one of the tombstoned ``versions``; ``None`` past the budget."""
-    paths = sorted(versions)
-    if not budget.spend(len(paths)):
+async def _links_collected(client, lakefs_repo, ref, versions, budget: Budget) -> list[str] | None:
+    """The paths where ``ref`` links a tombstoned version; ``None`` past the budget."""
+    if not budget.left:
         return None
-    linked = await entries(client, lakefs_repo, ref, paths)
-    return any(
-        entry is not None and lfs_oid(entry.get("physical_address")) in versions[path]
+    paths = sorted(versions)
+    linked = await entries(client, lakefs_repo, ref, paths, budget)
+    return [
+        path
         for path, entry in linked.items()
-    )
+        if entry is not None and lfs_oid(entry.get("physical_address")) in versions[path]
+    ]
 
 
 async def quick_verdicts(
@@ -251,17 +285,22 @@ async def quick_verdicts(
         if commit["id"] == head:
             reset = verdict("already_current", "reset")
         if versions:
-            if reset is UNKNOWN and await _links_collected(
-                client, lakefs_repo, commit["id"], versions, budget
-            ):
-                reset = verdict("lfs_missing", "reset")
-            if revert is UNKNOWN and budget.spend(1):
+            if reset is UNKNOWN:
+                missing = await _links_collected(
+                    client, lakefs_repo, commit["id"], versions, budget
+                )
+                if missing:
+                    reset = verdict("lfs_missing", "reset", missing_lfs=missing)
+            if revert is UNKNOWN and budget.left:
                 # Only the paths this commit changed count
                 parent = commit["parents"][0]
-                changed = set(await changed_paths(client, lakefs_repo, parent, commit["id"]))
+                changed = set(
+                    await changed_paths(client, lakefs_repo, parent, commit["id"], budget)
+                )
                 own = {p: v for p, v in versions.items() if p in changed}
-                if own and await _links_collected(client, lakefs_repo, parent, own, budget):
-                    revert = verdict("lfs_missing", "revert")
+                missing = own and await _links_collected(client, lakefs_repo, parent, own, budget)
+                if missing:
+                    revert = verdict("lfs_missing", "revert", missing_lfs=missing)
         results[commit["id"]] = {"revert": revert, "reset": reset}
     return results
 
