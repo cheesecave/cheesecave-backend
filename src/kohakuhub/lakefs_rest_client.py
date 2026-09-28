@@ -431,6 +431,7 @@ class LakeFSRestClient:
         right_ref: str,
         after: str | None = None,
         amount: int | None = None,
+        diff_type: str | None = None,
     ) -> dict[str, Any]:
         """Get diff between two refs.
 
@@ -440,6 +441,8 @@ class LakeFSRestClient:
             right_ref: Right reference (compare)
             after: Pagination cursor
             amount: Number of diff entries to return
+            diff_type: "two_dot" compares the two refs' contents; LakeFS
+                defaults to "three_dot", changes since their merge base
 
         Returns:
             Dict with results (list of Diff) and pagination
@@ -450,6 +453,8 @@ class LakeFSRestClient:
             params["after"] = after
         if amount:
             params["amount"] = amount
+        if diff_type:
+            params["type"] = diff_type
 
         client = self._httpx()
         response = await client.get(

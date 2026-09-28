@@ -634,6 +634,34 @@ export const repoAPI = {
     api
       .get(`/api/${type}s/${namespace}/${name}/commits/${branch}`, { params })
       .then(normalizeCommitListResponse),
+
+  /**
+   * What a commit list page can mark: revert / reset proven unavailable
+   * @param {string} type - Repository type
+   * @param {string} namespace - Repository namespace
+   * @param {string} name - Repository name
+   * @param {string} branch - Branch the commits are listed on
+   * @param {string[]} commitIds - The page's commit ids (at most 100)
+   * @returns {Promise} - { can_write, operations, commits: { [id]: { revert, reset } } }
+   */
+  getCommitsOperations: (type, namespace, name, branch, commitIds) =>
+    api.post(`/api/${type}s/${namespace}/${name}/commits/${branch}/operations`, {
+      commit_ids: commitIds,
+    }),
+
+  /**
+   * Whether a commit can be reverted on a branch, or the branch reset to it
+   * @param {string} type - Repository type
+   * @param {string} namespace - Repository namespace
+   * @param {string} name - Repository name
+   * @param {string} commitId - Commit id
+   * @param {string} branch - Branch to act on
+   * @returns {Promise} - { can_write, operations, revert, reset }
+   */
+  getCommitOperations: (type, namespace, name, commitId, branch) =>
+    api.get(`/api/${type}s/${namespace}/${name}/commit/${commitId}/operations`, {
+      params: { branch },
+    }),
 };
 
 /**

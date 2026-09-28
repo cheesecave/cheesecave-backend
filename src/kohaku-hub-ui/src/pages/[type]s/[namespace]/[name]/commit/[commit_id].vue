@@ -107,26 +107,44 @@
           </div>
         </div>
 
-        <!-- Action Buttons -->
+        <!-- Action Buttons: greyed out, with the reason, when unavailable -->
         <div v-if="revertEnabled || resetEnabled" class="flex gap-3 mb-4">
-          <el-button
+          <el-tooltip
             v-if="revertEnabled"
-            size="small"
-            @click="showRevertDialog"
-            class="btn-revert"
+            :content="revertCheck.reason"
+            :disabled="!revertCheck.reason"
+            placement="top"
           >
-            <div class="i-carbon-undo inline-block mr-1" />
-            Revert Commit
-          </el-button>
-          <el-button
+            <span class="inline-block" data-testid="revert-action">
+              <el-button
+                size="small"
+                :disabled="revertCheck.blocked"
+                @click="showRevertDialog"
+                class="btn-revert"
+              >
+                <div class="i-carbon-undo inline-block mr-1" />
+                Revert Commit
+              </el-button>
+            </span>
+          </el-tooltip>
+          <el-tooltip
             v-if="resetEnabled"
-            type="primary"
-            size="small"
-            @click="showResetDialog"
+            :content="resetCheck.reason"
+            :disabled="!resetCheck.reason"
+            placement="top"
           >
-            <div class="i-carbon-reset inline-block mr-1" />
-            Reset to This State
-          </el-button>
+            <span class="inline-block" data-testid="reset-action">
+              <el-button
+                type="primary"
+                size="small"
+                :disabled="resetCheck.blocked"
+                @click="showResetDialog"
+              >
+                <div class="i-carbon-reset inline-block mr-1" />
+                Reset to This State
+              </el-button>
+            </span>
+          </el-tooltip>
         </div>
 
         <!-- Parent commit link -->
@@ -153,6 +171,13 @@
         width="500px"
       >
         <div class="space-y-4">
+          <p
+            v-if="operationChecks?.revert?.files"
+            class="text-sm text-gray-600 dark:text-gray-400"
+            data-testid="revert-scope"
+          >
+            Undoes the changes to {{ operationChecks.revert.files }} file(s).
+          </p>
           <p class="text-gray-700 dark:text-gray-300">
             This will create a new commit that undoes the changes from commit
             <code
@@ -205,6 +230,14 @@
         width="500px"
       >
         <div class="space-y-4">
+          <p
+            v-if="operationChecks?.reset?.files"
+            class="text-sm text-gray-600 dark:text-gray-400"
+            data-testid="reset-scope"
+          >
+            Restores {{ operationChecks.reset.files }} file(s) to this commit's
+            version.
+          </p>
           <p class="text-gray-700 dark:text-gray-300">
             This will create a new commit that restores the branch to the state
             of commit
@@ -571,7 +604,7 @@ import axios from "axios";
 import dayjs from "dayjs";
 import relativeTime from "dayjs/plugin/relativeTime";
 import { ElMessage } from "element-plus";
-import { settingsAPI } from "@/utils/api";
+import { repoAPI, settingsAPI } from "@/utils/api";
 import { getRepositoryOperationCapabilities } from "@/utils/repositoryOperationCapabilities";
 
 dayjs.extend(relativeTime);
@@ -604,6 +637,24 @@ const resetMessage = ref("");
 
 // Selected branch for operations
 const selectedBranch = ref("main");
+
+// Whether this commit can be reverted / the branch reset to it
+const operationChecks = ref(null);
+const checkingOperations = ref(false);
+
+function operationCheck(op) {
+  if (checkingOperations.value) {
+    return { blocked: true, reason: "Checking whether this is possible…" };
+  }
+  // Unknown (the check failed): leave the action to the server's own checks
+  const check = operationChecks.value?.[op];
+  if (!check || check.available !== false)
+    return { blocked: false, reason: "" };
+  return { blocked: true, reason: check.message };
+}
+
+const revertCheck = computed(() => operationCheck("revert"));
+const resetCheck = computed(() => operationCheck("reset"));
 
 async function loadCommitDetails() {
   loading.value = true;
@@ -643,6 +694,25 @@ async function loadOperationCapabilities() {
     // Keep both actions hidden when capabilities cannot be established.
     console.warn("Failed to load repository operation capabilities:", err);
   }
+}
+
+async function loadOperationChecks() {
+  if (!revertEnabled.value && !resetEnabled.value) return;
+  checkingOperations.value = true;
+  try {
+    const { data } = await repoAPI.getCommitOperations(
+      type.value,
+      namespace.value,
+      name.value,
+      commitId.value,
+      selectedBranch.value,
+    );
+    operationChecks.value = data;
+  } catch (err) {
+    console.warn("Failed to check repository operations:", err);
+    operationChecks.value = null;
+  }
+  checkingOperations.value = false;
 }
 
 function showRevertDialog() {
@@ -929,9 +999,10 @@ function renderDiff(diff) {
   return colored.join("\n");
 }
 
-onMounted(() => {
+onMounted(async () => {
   loadCommitDetails();
-  loadOperationCapabilities();
+  await loadOperationCapabilities();
+  await loadOperationChecks();
 });
 </script>
 

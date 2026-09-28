@@ -27,6 +27,7 @@ from kohakuhub.db import Repository, User
 from kohakuhub.db_operations import get_repository
 from kohakuhub.logger import get_logger
 from kohakuhub.api.commit import history as commit_history
+from kohakuhub.api.commit.routers import availability as commit_availability
 from kohakuhub.api.commit import router as commits
 from kohakuhub.api.fallback import with_repo_fallback
 from kohakuhub.api.files import resolve_file_get, resolve_file_head
@@ -185,6 +186,7 @@ app.include_router(repo_tree.router, prefix=cfg.app.api_base, tags=["repositorie
 app.include_router(files.router, prefix=cfg.app.api_base, tags=["files"])
 app.include_router(commits, prefix=cfg.app.api_base, tags=["commits"])
 app.include_router(commit_history.router, prefix=cfg.app.api_base, tags=["commits"])
+app.include_router(commit_availability.router, prefix=cfg.app.api_base, tags=["commits"])
 app.include_router(lfs.router, tags=["lfs"])
 app.include_router(branches.router, prefix=cfg.app.api_base, tags=["branches"])
 app.include_router(settings.router, prefix=cfg.app.api_base, tags=["settings"])
