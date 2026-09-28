@@ -13,7 +13,10 @@ background tasks do it (issue #109):
   any more, using the retention decision and tombstones in ``kohakuhub.lfs_gc``;
 - ``storage.expire_recent_lfs`` (hourly) turns uploads whose grace period
   ended into candidates, and ``storage.review_lfs_window`` records the
-  versions a lowered keep count pushed out of a repository's windows.
+  versions a lowered keep count pushed out of a repository's windows;
+- ``storage.reconcile_lfs_references`` makes the database account for every
+  LFS object a branch head links (started from the admin Storage page, or by
+  the first collection with ``lfs_auto_gc`` on, which waits for it).
 
 ``find_orphan_lakefs_repositories`` lists LakeFS repositories no row points at
 (left by deletions before this module existed, or by crashed creates), so an
@@ -24,6 +27,7 @@ register the handlers (see docs/development/background-tasks.md).
 """
 
 import json
+from collections import Counter
 from datetime import timedelta
 from typing import Any
 
@@ -44,6 +48,7 @@ PURGE_KIND = "storage.purge_repository"
 COLLECT_LFS_KIND = "storage.collect_lfs"
 EXPIRE_RECENT_LFS_KIND = "storage.expire_recent_lfs"
 REVIEW_LFS_WINDOW_KIND = "storage.review_lfs_window"
+RECONCILE_LFS_KIND = "storage.reconcile_lfs_references"
 S3_DELETE_BATCH = 1000  # the S3 DeleteObjects maximum
 LFS_BATCH = 500
 LAKEFS_LIST_PAGE = 1000
@@ -75,6 +80,11 @@ def lakefs_repo_in_use(lakefs_repo: str) -> bool:
 
 def enqueue_lfs_collection() -> int | None:
     return tasks.enqueue(COLLECT_LFS_KIND, dedupe_key=COLLECT_LFS_KIND)
+
+
+def enqueue_lfs_reconciliation() -> int | None:
+    """Schedule the reconciliation of LFS references; ``None`` if already pending."""
+    return tasks.enqueue(RECONCILE_LFS_KIND, dedupe_key=RECONCILE_LFS_KIND)
 
 
 def enqueue_lfs_window_review(repo: Repository) -> int | None:
@@ -205,6 +215,12 @@ async def collect_lfs(payload: dict[str, Any], ctx: tasks.TaskContext) -> None:
     storage and their tombstones completed. Candidates are consumed only
     after that, so an interrupted run simply continues with what is left.
     """
+    if cfg.app.lfs_auto_gc and not lfs_gc.references_reconciled():
+        # Keep windows decide deletions only once they account for what every
+        # branch head links; the reconciliation enqueues this task when done.
+        enqueue_lfs_reconciliation()
+        logger.warning("Waiting for the LFS reference reconciliation before collecting")
+        return
     C = LfsGcCandidate
     total = C.select().count()
     checked = deleted = 0
@@ -249,6 +265,122 @@ async def review_lfs_window(payload: dict[str, Any], ctx: tasks.TaskContext) -> 
     if recorded:
         enqueue_lfs_collection()
     logger.info(f"Reviewed {len(paths)} LFS path(s) of {repo.full_id}; {recorded} candidate(s)")
+
+
+async def _pages(fetch):
+    """Every result of a paginated LakeFS listing; ``fetch(after)`` gets a page."""
+    after = ""
+    while True:
+        page = await fetch(after)
+        for item in page.get("results", []):
+            yield item
+        pagination = page.get("pagination") or {}
+        if not pagination.get("has_more"):
+            return
+        after = pagination["next_offset"]
+
+
+async def branch_head_references(lakefs_repo: str):
+    """The LFS objects the heads of a LakeFS repository's branches link.
+
+    Returns ``(heads, default_head, counts)`` in the shape
+    ``lfs_gc.reconcile_references`` takes, or ``None`` when the LakeFS
+    repository does not exist.
+    """
+    client = get_lakefs_client()
+    try:
+        default_branch = (await client.get_repository(lakefs_repo))["default_branch"]
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code != 404:
+            raise
+        return None
+    heads: dict[str, dict[str, tuple[int, str]]] = {}
+    default_head: dict[str, tuple[str, int]] = {}
+    counts = Counter()
+    listed: set[str] = set()
+    async for branch in _pages(
+        lambda after: client.list_branches(lakefs_repo, after=after, amount=LAKEFS_LIST_PAGE)
+    ):
+        counts["branches"] += 1
+        commit_id = branch["commit_id"]
+        is_default = branch["id"] == default_branch
+        if commit_id in listed and not is_default:
+            continue  # another branch at the same commit links the same objects
+        listed.add(commit_id)
+        files = default_head if is_default else {}  # file rows follow the default branch
+        # Without a delimiter the listing holds objects only, recursively.
+        async for obj in _pages(
+            lambda after: client.list_objects(
+                repository=lakefs_repo, ref=commit_id, after=after, amount=LAKEFS_LIST_PAGE
+            )
+        ):
+            counts["objects"] += 1
+            oid = lfs_gc.lfs_oid(obj.get("physical_address"))
+            if oid is None:
+                continue
+            counts["lfs_references"] += 1
+            size = obj.get("size_bytes", 0)
+            heads.setdefault(obj["path"], {})[oid] = (size, commit_id)
+            files[obj["path"]] = (oid, size)
+    return heads, default_head, counts
+
+
+@tasks.task(RECONCILE_LFS_KIND, timeout=24 * 3600, max_attempts=5)
+async def reconcile_lfs_references(payload: dict[str, Any], ctx: tasks.TaskContext) -> None:
+    """Make the database account for the LFS objects every branch head links.
+
+    Repository by repository, in id order, with the position and running
+    counts checkpointed after each one, so a retry or another worker resumes
+    where it stopped. Only adds or corrects rows (``reconcile_references``),
+    so running it again, or over data that already accounts, changes nothing.
+    """
+    state = ctx.checkpoint_state or {"after": 0, "stats": {}}
+    stats = Counter(state["stats"])
+    total = Repository.select().count()
+    done = Repository.select().where(Repository.id <= state["after"]).count()
+    remaining = Repository.select().where(Repository.id > state["after"]).order_by(Repository.id)
+    for repo in remaining:
+        if ctx.cancel_requested:
+            raise tasks.TaskCancelled()
+        ctx.stage(f"reconciling {repo.repo_type}:{repo.full_id}")
+        found = await branch_head_references(resolve_lakefs_repo(repo))
+        if found is None:
+            stats["repositories_without_lakefs"] += 1
+        else:
+            heads, default_head, counts = found
+            stats.update(counts)
+            stats.update(lfs_gc.reconcile_references(repo, heads, default_head))
+        stats["repositories"] += 1
+        done += 1
+        ctx.checkpoint({"after": repo.id, "stats": dict(stats)})
+        ctx.progress(done, max(total, done))
+    lfs_gc.mark_references_reconciled()
+    logger.info(
+        "LFS references reconciled: "
+        + ", ".join(f"{key} {value}" for key, value in sorted(stats.items()))
+    )
+    enqueue_lfs_collection()
+
+
+def lfs_reconciliation_status() -> dict[str, Any]:
+    """The reconciliation marker and the latest reconciliation task, for the admin panel."""
+    T = BackgroundTask
+    task = T.select().where(T.kind == RECONCILE_LFS_KIND).order_by(T.id.desc()).first()
+    return {
+        "reconciled_at": lfs_gc.reconciled_at(),
+        "auto_gc": cfg.app.lfs_auto_gc,
+        "task": task
+        and {
+            "id": task.id,
+            "status": task.status,
+            "progress_done": task.progress_done,
+            "progress_total": task.progress_total,
+            "stage": task.progress_stage,
+            "stats": (json.loads(task.checkpoint) if task.checkpoint else {}).get("stats", {}),
+            "created_at": task.created_at.isoformat(),
+            "finished_at": task.finished_at and task.finished_at.isoformat(),
+        },
+    }
 
 
 async def find_orphan_lakefs_repositories() -> list[dict[str, Any]]:

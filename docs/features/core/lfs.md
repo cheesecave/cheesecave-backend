@@ -158,6 +158,16 @@ KOHAKU_HUB_LFS_AUTO_GC: true  # Collect versions beyond keep_versions
 Versions referenced only by tags or other branches are not pinned: with auto
 GC on, keep enough versions for them.
 
+**Upgrading an existing site.** Earlier versions could record LFS references
+that no keep window accounts for (`copyFile` from an older revision stored
+the source's current sha256; revert and reset derived the LFS flag from size
+rules). So with auto GC on, nothing is collected until the
+`storage.reconcile_lfs_references` task has completed once: it records every
+LFS object the head of any branch links and corrects the default branch's
+file rows. The first collection starts it automatically; admins can also
+start it, and follow it, under **Storage → LFS reference reconciliation**.
+It only adds or corrects rows, so running it again is harmless.
+
 ---
 
 ## Best Practices

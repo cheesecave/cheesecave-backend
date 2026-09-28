@@ -956,6 +956,21 @@ describe("admin API client", () => {
     );
   });
 
+  it("LFS reference reconciliation helpers", async () => {
+    const api = await loadModule();
+    client.get.mockResolvedValueOnce({ data: { reconciled_at: null } });
+    client.post.mockResolvedValueOnce({ data: { task_id: 4 } });
+
+    expect(await api.getLfsReconciliation("admin-token")).toEqual({
+      reconciled_at: null,
+    });
+    expect(client.get).toHaveBeenLastCalledWith("/storage/lfs-reconciliation");
+    expect(await api.startLfsReconciliation("admin-token")).toEqual({
+      task_id: 4,
+    });
+    expect(client.post).toHaveBeenLastCalledWith("/storage/lfs-reconciliation");
+  });
+
   it("task cancel, log paging and log download helpers", async () => {
     const api = await loadModule();
     client.post.mockResolvedValueOnce({ data: { id: 7, status: "cancelled" } });

@@ -28,7 +28,12 @@ from kohakuhub.utils.lakefs import get_lakefs_client, resolve_lakefs_repo
 from kohakuhub.utils.s3 import get_object_metadata, object_exists
 from kohakuhub.api.quota.util import update_namespace_storage, update_repository_storage
 from kohakuhub.api.repo.utils.gc import track_lfs_object
-from kohakuhub.lfs_gc import LfsObjectUnavailable, claim_for_commit, record_evicted_versions
+from kohakuhub.lfs_gc import (
+    LfsObjectUnavailable,
+    claim_for_commit,
+    lfs_oid,
+    record_evicted_versions,
+)
 from kohakuhub.storage_cleanup import enqueue_lfs_collection
 from kohakuhub.api.repo.utils.hf import HFErrorCode
 
@@ -584,7 +589,7 @@ async def process_copy_file(
     repo: Repository,
     lakefs_repo: str,
     revision: str,
-) -> bool:
+) -> tuple[bool, dict | None]:
     """Process file copy operation.
 
     Args:
@@ -596,7 +601,8 @@ async def process_copy_file(
         revision: Branch name
 
     Returns:
-        True (always changes repository)
+        Tuple of (True, lfs_tracking_info or None): copying always changes the
+        repository; a global LFS object is tracked like a linked upload
 
     Raises:
         HTTPException: If copy fails
@@ -615,6 +621,14 @@ async def process_copy_file(
         client = get_lakefs_client()
         src_obj = await client.stat_object(
             repository=lakefs_repo, ref=src_revision, path=src_path
+        )
+        # The address says which content is linked; the source path's file
+        # row describes its current version, not necessarily src_revision's.
+        oid = lfs_oid(src_obj["physical_address"])
+        if oid:
+            await _claim_lfs_object(oid, f"lfs/{oid[:2]}/{oid[2:4]}/{oid}")
+        previous = File.get_or_none(
+            (File.repository == repo) & (File.path_in_repo == dest_path)
         )
 
         # Use LakeFS staging API to link the physical address
@@ -640,7 +654,26 @@ async def process_copy_file(
         # Update database - copy file metadata
         src_file = get_file(repo, src_path)
 
-        if src_file:
+        if oid:
+            File.insert(
+                repository=repo,
+                path_in_repo=dest_path,
+                size=src_obj["size_bytes"],
+                sha256=oid,
+                lfs=True,
+                is_deleted=False,
+                owner=repo.owner,
+            ).on_conflict(
+                conflict_target=(File.repository, File.path_in_repo),
+                update={
+                    File.sha256: oid,
+                    File.size: src_obj["size_bytes"],
+                    File.lfs: True,
+                    File.is_deleted: False,
+                    File.updated_at: datetime.now(timezone.utc),
+                },
+            ).execute()
+        elif src_file:
             File.insert(
                 repository=repo,
                 path_in_repo=dest_path,
@@ -684,6 +717,8 @@ async def process_copy_file(
 
         logger.success(f"Successfully copied {src_path} to {dest_path}")
 
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(
             500,
@@ -692,7 +727,15 @@ async def process_copy_file(
             },
         )
 
-    return True
+    if not oid:
+        return True, None
+    replaced = previous and previous.lfs and previous.sha256 != oid
+    return True, {
+        "path": dest_path,
+        "sha256": oid,
+        "size": src_obj["size_bytes"],
+        "old_sha256": previous.sha256 if replaced else None,
+    }
 
 
 @router.post("/{repo_type}s/{namespace}/{name}/commit/{revision}")
@@ -865,7 +908,7 @@ async def commit(
 
             case "copyFile":
                 # Copy file
-                changed = await process_copy_file(
+                changed, lfs_info = await process_copy_file(
                     dest_path=path,
                     src_path=value.get("srcPath"),
                     src_revision=value.get("srcRevision", revision),
@@ -874,6 +917,8 @@ async def commit(
                     revision=revision,
                 )
                 files_changed = files_changed or changed
+                if lfs_info:
+                    pending_lfs_tracking.append(lfs_info)
 
     # If no files changed, return early
     if not files_changed:

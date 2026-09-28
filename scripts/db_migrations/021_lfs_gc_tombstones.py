@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Migration 021: Add the lfs_object_tombstone and lfs_recent_object tables.
+Migration 021: Add the lfs_object_tombstone, lfs_recent_object and lfs_gc_state tables.
 
 Changes:
 - Add lfs_object_tombstone: LFS objects garbage collection deleted or is
@@ -9,9 +9,13 @@ Changes:
 - Add lfs_recent_object (+ touched_at index): LFS objects recently uploaded or
   claimed by a commit, kept through a grace period so a collection cannot
   race an upload or a commit in flight
+- Add lfs_gc_state: durable garbage collection state. With lfs_auto_gc on,
+  nothing is collected until the storage.reconcile_lfs_references task has
+  reconciled the LFS references of every branch head once, so data written
+  by earlier versions cannot lose content a branch still links
 
 The DDL mirrors what Peewee generates for ``LfsObjectTombstone`` and
-``LfsRecentObject`` so databases created by init_db() and databases upgraded
+``LfsRecentObject`` and ``LfsGcState`` so databases created by init_db() and databases upgraded
 here end up identical.
 """
 
@@ -33,9 +37,9 @@ MIGRATION_NUMBER = 21
 def is_applied(db, cfg):
     """Check if THIS migration has been applied.
 
-    Returns True once the last table it creates, lfs_recent_object, exists.
+    Returns True once the last table it creates, lfs_gc_state, exists.
     """
-    return check_table_exists(db, "lfs_recent_object")
+    return check_table_exists(db, "lfs_gc_state")
 
 
 def _create(timestamp_type):
@@ -56,6 +60,12 @@ def _create(timestamp_type):
     cursor.execute(
         'CREATE INDEX IF NOT EXISTS "lfsrecentobject_touched_at" '
         'ON "lfs_recent_object" ("touched_at")'
+    )
+    cursor.execute(
+        'CREATE TABLE IF NOT EXISTS "lfs_gc_state" ('
+        '"key" VARCHAR(64) NOT NULL PRIMARY KEY, '
+        '"value" TEXT NOT NULL, '
+        f'"updated_at" {timestamp_type} NOT NULL)'
     )
     print("  ✓ Created tables")
 
@@ -104,7 +114,7 @@ def run():
         print(f"Migration {MIGRATION_NUMBER}: ✓ Completed Successfully")
         print("=" * 70)
         print("\nSummary:")
-        print("  • Added lfs_object_tombstone and lfs_recent_object (LFS garbage collection)")
+        print("  • Added lfs_object_tombstone, lfs_recent_object and lfs_gc_state (LFS garbage collection)")
         return True
 
     except Exception as e:

@@ -16,13 +16,19 @@ rows that reference the object (never a scan of a repository or the bucket).
   same per-object lock the collector re-decides under, so a collection never
   deletes content an upload or a commit in flight relies on; a commit that
   meets a tombstone is told to upload again (``claim_for_commit``).
+- Data written by earlier versions can link content no history row keeps in
+  a keep window (``copyFile`` recorded the wrong sha256, revert and reset
+  recomputed the LFS flag from size rules). With ``lfs_auto_gc`` on nothing
+  is collected until ``storage.reconcile_lfs_references`` has recorded what
+  every branch head links, once (``references_reconciled``).
 
 Keep this module free of ``kohakuhub.api`` imports: the worker imports it.
 See issue #114.
 """
 
+import re
 from collections.abc import Iterable
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from peewee import PostgresqlDatabase
 
@@ -31,6 +37,7 @@ from kohakuhub.db import (
     File,
     LFSObjectHistory,
     LfsGcCandidate,
+    LfsGcState,
     LfsObjectTombstone,
     LfsRecentObject,
     Repository,
@@ -43,6 +50,8 @@ DELETED = "deleted"
 # upload-then-commit round trip, short enough to collect abandoned uploads.
 RECENT_GRACE = timedelta(hours=24)
 CANDIDATE_BATCH = 500
+RECONCILED_KEY = "references_reconciled_at"
+_LFS_ADDRESS = re.compile(r"^s3://[^/]+/lfs/[0-9a-f]{2}/[0-9a-f]{2}/([0-9a-f]{64})$")
 
 
 class LfsObjectUnavailable(Exception):
@@ -51,6 +60,16 @@ class LfsObjectUnavailable(Exception):
 
 def lfs_key(sha256: str) -> str:
     return f"lfs/{sha256[:2]}/{sha256[2:4]}/{sha256}"
+
+
+def lfs_oid(physical_address: str | None) -> str | None:
+    """The sha256 of a global LFS object address, or ``None`` for any other.
+
+    The address is what a LakeFS entry really links, so it is the identity
+    to trust over a checksum or a size-based LFS rule.
+    """
+    match = _LFS_ADDRESS.match(physical_address or "")
+    return match.group(1) if match else None
 
 
 def keep_versions(repo: Repository) -> int:
@@ -95,7 +114,7 @@ def retention_reason(sha256: str, now: datetime | None = None) -> str | None:
     """Why ``sha256`` must be kept, or ``None`` when nothing relies on it.
 
     - ``recent``: uploaded or claimed by a commit within ``RECENT_GRACE``;
-    - ``file``: an active LFS file in any repository uses it;
+    - ``file``: an active file in any repository has this content;
     - ``history``: a history row references it. With ``lfs_auto_gc`` on,
       only while it is among the newest ``keep_versions`` unique versions
       of that repository path; with it off every version is kept.
@@ -105,11 +124,9 @@ def retention_reason(sha256: str, now: datetime | None = None) -> str | None:
         (LfsRecentObject.sha256 == sha256) & (LfsRecentObject.touched_at >= now - RECENT_GRACE)
     ):
         return "recent"
-    if (
-        File.select()
-        .where((File.sha256 == sha256) & (File.lfs == True) & (File.is_deleted == False))
-        .exists()
-    ):
+    # Any active file with this content, whatever its LFS flag says: revert
+    # and reset recompute the flag from size rules that may have changed.
+    if File.select().where((File.sha256 == sha256) & (File.is_deleted == False)).exists():
         return "file"
     H = LFSObjectHistory
     references = list(
@@ -127,6 +144,107 @@ def retention_reason(sha256: str, now: datetime | None = None) -> str | None:
         if sha256 in _unique_versions(repository_id, path)[: keep_versions(repos[repository_id])]:
             return "history"
     return None
+
+
+def references_reconciled() -> bool:
+    """Whether every branch head's LFS references were reconciled once."""
+    return LfsGcState.get_or_none(LfsGcState.key == RECONCILED_KEY) is not None
+
+
+def mark_references_reconciled() -> None:
+    now = utcnow()
+    LfsGcState.insert(key=RECONCILED_KEY, value=now.isoformat(), updated_at=now).on_conflict(
+        conflict_target=[LfsGcState.key],
+        update={LfsGcState.value: now.isoformat(), LfsGcState.updated_at: now},
+    ).execute()
+
+
+def reconciled_at() -> str | None:
+    row = LfsGcState.get_or_none(LfsGcState.key == RECONCILED_KEY)
+    return row.value if row else None
+
+
+def reconcile_references(
+    repo: Repository,
+    heads: dict[str, dict[str, tuple[int, str]]],
+    default_head: dict[str, tuple[str, int]],
+) -> dict[str, int]:
+    """Make the database account for the LFS objects ``repo``'s branches link.
+
+    ``heads`` maps each path to the LFS objects branch heads link there, as
+    ``{sha256: (size, head_commit_id)}``; ``default_head`` maps each path of
+    the default branch's head to its ``(sha256, size)``. It only adds or
+    corrects rows, never deletes, and changes nothing when everything already
+    accounts (running it again is a no-op):
+
+    - a linked object not among its path's newest ``keep_versions`` unique
+      versions gets a history row at the head commit, which makes it the
+      newest, so no keep window can evict what a branch head links;
+    - the default branch's file rows get the linked sha256, size and LFS
+      flag (``copyFile`` recorded the source's current sha256, revert and
+      reset derived the flag from size rules).
+
+    Returns counts of what it added or corrected.
+    """
+    H = LFSObjectHistory
+    versions: dict[str, list[str]] = {}
+    # ponytail: loads the repository's whole history; paginate by path if a
+    # repository ever holds millions of history rows.
+    for path, sha in (
+        H.select(H.path_in_repo, H.sha256)
+        .where(H.repository == repo)
+        .order_by(H.created_at.desc(), H.id.desc())
+        .tuples()
+    ):
+        seen = versions.setdefault(path, [])
+        if sha not in seen:
+            seen.append(sha)
+    keep = keep_versions(repo)
+    now = datetime.now(timezone.utc)  # like the history and file rows' defaults
+    history = [
+        {
+            "repository": repo.id,
+            "path_in_repo": path,
+            "sha256": sha,
+            "size": size,
+            "commit_id": commit_id,
+            "created_at": now,
+        }
+        for path, linked in sorted(heads.items())
+        for sha, (size, commit_id) in sorted(linked.items())
+        if sha not in versions.get(path, [])[:keep]
+    ]
+    files = {
+        row.path_in_repo: row
+        for start in range(0, len(default_head), CANDIDATE_BATCH)
+        for row in File.select().where(
+            (File.repository == repo)
+            & File.path_in_repo.in_(sorted(default_head)[start : start + CANDIDATE_BATCH])
+        )
+    }
+    fixed = 0
+    with _database().atomic():
+        for start in range(0, len(history), CANDIDATE_BATCH):
+            H.insert_many(history[start : start + CANDIDATE_BATCH]).execute()
+        for path, (sha, size) in sorted(default_head.items()):
+            row = files.get(path)
+            if row is None:
+                File.create(
+                    repository=repo,
+                    path_in_repo=path,
+                    sha256=sha,
+                    size=size,
+                    lfs=True,
+                    owner=repo.owner_id,
+                )
+            elif (row.sha256, row.size, row.lfs, row.is_deleted) != (sha, size, True, False):
+                File.update(sha256=sha, size=size, lfs=True, is_deleted=False, updated_at=now).where(
+                    File.id == row.id
+                ).execute()
+            else:
+                continue
+            fixed += 1
+    return {"history_added": len(history), "files_fixed": fixed}
 
 
 def record_candidates(shas: Iterable[str]) -> int:

@@ -10,7 +10,7 @@ from kohakuhub.db_operations import (
     get_repository,
     should_use_lfs,
 )
-from kohakuhub.lfs_gc import deleted_shas
+from kohakuhub.lfs_gc import deleted_shas, lfs_oid
 from kohakuhub.logger import get_logger
 from kohakuhub.utils.lakefs import get_lakefs_client
 from kohakuhub.utils.s3 import delete_objects_with_prefix, object_exists
@@ -327,8 +327,11 @@ async def sync_file_table_with_commit(
             else:
                 sha256 = checksum
 
-            # Use repo-specific LFS rules (size + suffix)
-            is_lfs = should_use_lfs(repo, path, size_bytes)
+            # A global LFS address is the identity; otherwise repo-specific
+            # LFS rules (size + suffix)
+            oid = lfs_oid(obj.get("physical_address"))
+            sha256 = oid or sha256
+            is_lfs = oid is not None or should_use_lfs(repo, path, size_bytes)
 
             logger.debug(
                 f"Syncing file: {path} (size={size_bytes}, lfs={is_lfs}, sha256={sha256[:8]})"
@@ -513,8 +516,6 @@ async def track_commit_lfs_objects(
                 )
 
                 size_bytes = obj_stat.get("size_bytes", 0)
-                # Use repo-specific LFS rules (size + suffix)
-                is_lfs = should_use_lfs(repo, path, size_bytes)
 
                 # Extract SHA256 from checksum (format: "sha256:hash")
                 checksum = obj_stat.get("checksum", "")
@@ -522,6 +523,12 @@ async def track_commit_lfs_objects(
                     sha256 = checksum.split(":", 1)[1]
                 else:
                     sha256 = checksum
+
+                # A global LFS address is the identity; otherwise
+                # repo-specific LFS rules (size + suffix)
+                oid = lfs_oid(obj_stat.get("physical_address"))
+                sha256 = oid or sha256
+                is_lfs = oid is not None or should_use_lfs(repo, path, size_bytes)
 
                 # Get File FK if exists for LFS history tracking
                 file_fk = File.get_or_none(

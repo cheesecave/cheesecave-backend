@@ -69,7 +69,12 @@ async def _drain_storage_tasks(timeout=60.0):
     The seeded uploads are past their grace period by then (see lfs_gc).
     """
     LfsRecentObject.update(touched_at=utcnow() - timedelta(days=2)).execute()
-    kinds = (storage_cleanup.PURGE_KIND, storage_cleanup.COLLECT_LFS_KIND)
+    # With auto GC on, the first collection waits for a reconciliation
+    kinds = (
+        storage_cleanup.PURGE_KIND,
+        storage_cleanup.COLLECT_LFS_KIND,
+        storage_cleanup.RECONCILE_LFS_KIND,
+    )
 
     def pending():
         return (

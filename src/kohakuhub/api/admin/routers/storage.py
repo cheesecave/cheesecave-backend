@@ -21,9 +21,11 @@ from kohakuhub.db_operations import (
 )
 from kohakuhub.logger import get_logger
 from kohakuhub.storage_cleanup import (
+    enqueue_lfs_reconciliation,
     enqueue_purge,
     find_orphan_lakefs_repositories,
     lakefs_repo_in_use,
+    lfs_reconciliation_status,
 )
 from kohakuhub.utils.lakefs import get_lakefs_client
 from kohakuhub.utils.s3 import delete_objects_with_prefix, get_s3_client
@@ -595,3 +597,21 @@ async def purge_orphan_lakefs_repository(
     task_id = enqueue_purge(lakefs_repo, f"orphan:{lakefs_repo}")
     logger.warning(f"Admin scheduled the purge of orphaned LakeFS repository {lakefs_repo}")
     return {"lakefs_repo": lakefs_repo, "task_id": task_id, "already_pending": task_id is None}
+
+
+@router.get("/storage/lfs-reconciliation")
+async def get_lfs_reconciliation(_admin: bool = Depends(verify_admin_token)):
+    """When LFS references were last reconciled, and the latest reconciliation task."""
+    return lfs_reconciliation_status()
+
+
+@router.post("/storage/lfs-reconciliation")
+async def start_lfs_reconciliation(_admin: bool = Depends(verify_admin_token)):
+    """Start reconciling the database with the LFS objects every branch head links.
+
+    Idempotent and non-destructive: it only adds history rows and corrects
+    file rows, so running it again changes nothing. One runs at a time.
+    """
+    task_id = enqueue_lfs_reconciliation()
+    logger.info("Admin started the LFS reference reconciliation")
+    return {"task_id": task_id, "already_pending": task_id is None}

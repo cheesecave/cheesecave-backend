@@ -1,6 +1,6 @@
 """Tests for migrations 017 (background_task), 018 (timeline, progress, logs),
 019 (worker roster), 020 (LFS garbage collection candidates) and 021 (LFS
-tombstones and recent objects).
+tombstones, recent objects and GC state).
 
 They run as one chain: a migration skips itself once any later migration is
 applied, so dropping only some of these tables would make the rest skip.
@@ -19,6 +19,7 @@ from kohakuhub.db import (
     BackgroundTaskLog,
     BackgroundWorker,
     LfsGcCandidate,
+    LfsGcState,
     LfsObjectTombstone,
     LfsRecentObject,
     db,
@@ -33,6 +34,7 @@ TABLES = (
     "lfs_gc_candidate",
     "lfs_object_tombstone",
     "lfs_recent_object",
+    "lfs_gc_state",
 )
 MODELS = [
     BackgroundTask,
@@ -42,9 +44,10 @@ MODELS = [
     LfsGcCandidate,
     LfsObjectTombstone,
     LfsRecentObject,
+    LfsGcState,
 ]
 DROP_ALL = (
-    'DROP TABLE IF EXISTS "lfs_recent_object", "lfs_object_tombstone", "lfs_gc_candidate", '
+    'DROP TABLE IF EXISTS "lfs_gc_state", "lfs_recent_object", "lfs_object_tombstone", "lfs_gc_candidate", '
     '"background_worker", "background_task_log", '
     '"background_task_event", "background_task"'
 )

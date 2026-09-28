@@ -631,6 +631,18 @@ class LfsRecentObject(BaseModel):
         table_name = "lfs_recent_object"
 
 
+class LfsGcState(BaseModel):
+    """Durable garbage collection state, such as when the LFS references of
+    every branch head were last reconciled (see ``kohakuhub.lfs_gc``)."""
+
+    key = CharField(max_length=64, primary_key=True)
+    value = TextField()
+    updated_at = DateTimeField(default=utcnow)
+
+    class Meta:
+        table_name = "lfs_gc_state"
+
+
 class BackgroundWorker(BaseModel):
     """A worker process, registered at startup and kept fresh by heartbeats.
 
@@ -698,6 +710,7 @@ def init_db():
             LfsGcCandidate,
             LfsObjectTombstone,
             LfsRecentObject,
+            LfsGcState,
         ],
         safe=True,
     )

@@ -34,6 +34,7 @@ def m(prepared_backend_test_state):
     state = (
         ns.db.BackgroundTask,
         ns.db.LfsGcCandidate,
+        ns.db.LfsGcState,
         ns.db.LfsObjectTombstone,
         ns.db.LfsRecentObject,
     )
@@ -338,6 +339,7 @@ async def test_commits_collect_evicted_versions_and_keep_shared_content(
     assert _candidates(m) == {oids[0], oids[1]}
 
     _age_recent(m)  # the uploads' grace period is over
+    m.gc.mark_references_reconciled()
     await m.cleanup.collect_lfs({}, RecordingContext())
 
     assert [_stored(m, oid) for oid in oids] == [True, False, True, True]
@@ -425,3 +427,268 @@ async def test_restoring_a_deleted_file_claims_its_object(m, owner_client):
         json={"operation": "download", "objects": [{"oid": oid, "size": len(content)}]},
     )
     assert response.json()["objects"][0]["error"]["code"] == 404
+
+
+# ----- reconciling what branch heads link -----
+
+
+def test_lfs_oid_accepts_only_global_lfs_addresses(m):
+    sha = _sha("oid")
+    assert m.gc.lfs_oid(f"s3://hub-storage/{m.gc.lfs_key(sha)}") == sha
+    assert m.gc.lfs_oid(f"s3://hub-storage/m-repo-0001/data/{sha}") is None
+    assert m.gc.lfs_oid(f"s3://hub-storage/lfs/ab/cd/{sha[:32]}") is None  # an MD5 is no oid
+    assert m.gc.lfs_oid("") is None
+    assert m.gc.lfs_oid(None) is None
+
+
+def test_active_files_keep_content_whatever_their_lfs_flag(m):
+    F = m.db.File
+    row = F.get((F.repository == _repo(m)) & (F.lfs == True))
+    F.update(lfs=False).where(F.id == row.id).execute()  # revert under a raised threshold
+    try:
+        assert m.gc.retention_reason(row.sha256) == "file"
+    finally:
+        F.update(lfs=True).where(F.id == row.id).execute()
+
+
+def test_reconcile_references_adds_and_corrects_only_what_is_missing(m):
+    repo = _repo(m)
+    repo.lfs_keep_versions = 2
+    F = m.db.File
+    v = [_sha(f"h{i}") for i in range(4)]
+    _history(m, repo, v)  # v3 and v2 are in the window, v1 and v0 are not
+    wrong = F.create(
+        repository=repo,
+        path_in_repo="gc-test/copied.bin",
+        sha256=v[3],
+        size=1,
+        lfs=True,
+        owner=repo.owner_id,
+    )
+    unflagged = F.create(
+        repository=repo,
+        path_in_repo="gc-test/unflagged.bin",
+        sha256=v[2],
+        size=10,
+        lfs=False,
+        owner=repo.owner_id,
+    )
+    heads = {
+        PATH: {v[3]: (10, "main-head"), v[0]: (10, "dev-head")},  # dev still links v0
+        "gc-test/copied.bin": {v[1]: (10, "main-head")},  # copyFile of an older version
+        "gc-test/unflagged.bin": {v[2]: (10, "main-head")},
+        "gc-test/new.bin": {v[2]: (10, "main-head")},
+    }
+    default_head = {
+        "gc-test/copied.bin": (v[1], 10),
+        "gc-test/unflagged.bin": (v[2], 10),
+        "gc-test/new.bin": (v[2], 10),
+    }
+    try:
+        assert m.gc.reconcile_references(repo, heads, default_head) == {
+            "history_added": 4,  # v0 on PATH, and the three paths without history
+            "files_fixed": 3,
+        }
+        assert m.gc.evicted_versions(repo, PATH) == [v[3], v[2], v[1]][1:]  # v0 is newest now
+        assert m.gc._unique_versions(repo.id, PATH)[:2] == [v[0], v[3]]
+        rows = {
+            row.path_in_repo: (row.sha256, row.size, row.lfs, row.is_deleted)
+            for row in F.select().where(F.path_in_repo.in_(list(default_head)))
+        }
+        assert rows == {
+            "gc-test/copied.bin": (v[1], 10, True, False),
+            "gc-test/unflagged.bin": (v[2], 10, True, False),
+            "gc-test/new.bin": (v[2], 10, True, False),
+        }
+        # Everything accounts now: running it again changes nothing
+        assert m.gc.reconcile_references(repo, heads, default_head) == {
+            "history_added": 0,
+            "files_fixed": 0,
+        }
+    finally:
+        F.delete().where(
+            F.id.in_([wrong.id, unflagged.id]) | (F.path_in_repo == "gc-test/new.bin")
+        ).execute()
+
+
+async def test_collection_waits_for_the_reconciliation_with_auto_gc(m, monkeypatch):
+    orphan = _sha("waiting")
+    m.gc.record_candidates([orphan])
+
+    monkeypatch.setattr(m.cfg.app, "lfs_auto_gc", True)
+    await m.cleanup.collect_lfs({}, RecordingContext())
+    assert _candidates(m) == {orphan}  # nothing decided yet
+    assert len(_queued(m, m.cleanup.RECONCILE_LFS_KIND)) == 1
+    await m.cleanup.collect_lfs({}, RecordingContext())
+    assert len(_queued(m, m.cleanup.RECONCILE_LFS_KIND)) == 1  # deduplicated
+
+    # Without auto GC keep windows decide nothing, so there is nothing to wait for
+    monkeypatch.setattr(m.cfg.app, "lfs_auto_gc", False)
+    await m.cleanup.collect_lfs({}, RecordingContext())
+    assert _candidates(m) == set()
+    assert m.gc.tombstone_state(orphan) == m.gc.DELETED
+
+
+def test_the_reconciled_marker_records_the_latest_run(m):
+    assert (m.gc.references_reconciled(), m.gc.reconciled_at()) == (False, None)
+    m.gc.mark_references_reconciled()
+    first = m.gc.reconciled_at()
+    m.gc.mark_references_reconciled()
+    assert m.gc.references_reconciled() and m.gc.reconciled_at() >= first
+
+
+async def _branch(client, name, revision="main"):
+    response = await client.post(
+        "/api/models/owner/demo-model/branch", json={"branch": name, "revision": revision}
+    )
+    assert response.status_code == 200, response.text
+
+
+async def test_branch_heads_are_listed_page_by_page(m, owner_client, monkeypatch):
+    content = b"gc dev branch payload"
+    _put(m, content)
+    # File rows have no branch: the dev commit below writes one too
+    live = m.db.File.get((m.db.File.repository == _repo(m)) & (m.db.File.lfs == True))
+    await _branch(owner_client, "gc-dev")
+    await _branch(owner_client, "zz-gc-same")  # same commit as main: listed once
+    op = _lfs_op(content, path="gc-test/dev.bin")
+    response = await owner_client.post(
+        "/api/models/owner/demo-model/commit/gc-dev",
+        content=encode_ndjson([{"key": "header", "value": {"summary": "dev"}}, op]),
+        headers={"Content-Type": "application/x-ndjson"},
+    )
+    assert response.status_code == 200
+    monkeypatch.setattr(m.cleanup, "LAKEFS_LIST_PAGE", 1)
+    lakefs_repo = _live("kohakuhub.utils.lakefs").resolve_lakefs_repo(_repo(m))
+
+    heads, default_head, counts = await m.cleanup.branch_head_references(lakefs_repo)
+
+    oid = hashlib.sha256(content).hexdigest()
+    assert list(heads["gc-test/dev.bin"]) == [oid]  # only on the dev branch
+    assert "gc-test/dev.bin" not in default_head
+    assert default_head[live.path_in_repo] == (live.sha256, live.size)
+    # main, gc-dev (main's objects plus dev.bin); zz-gc-same shares main's commit
+    assert counts["branches"] == 3
+    assert counts["lfs_references"] == 2 * len(default_head) + 1
+    assert await m.cleanup.branch_head_references("m-gc-missing-0000") is None
+
+
+async def test_branch_head_listing_surfaces_lakefs_errors(m, monkeypatch):
+    class Unavailable:
+        async def get_repository(self, repository):
+            import httpx
+
+            request = httpx.Request("GET", f"http://lakefs/{repository}")
+            raise httpx.HTTPStatusError(
+                "unavailable", request=request, response=httpx.Response(503, request=request)
+            )
+
+    monkeypatch.setattr(m.cleanup, "get_lakefs_client", lambda: Unavailable())
+    with pytest.raises(Exception, match="unavailable"):
+        await m.cleanup.branch_head_references("m-any")
+
+
+async def test_the_reconciliation_converges_however_it_is_interrupted(m, owner_client):
+    repo = _repo(m)
+    F, H = m.db.File, m.db.LFSObjectHistory
+    live = F.get((F.repository == repo) & (F.lfs == True))
+    baseline = {row.id for row in H.select(H.id)}
+    ghost = m.db.Repository.create(
+        repo_type="model",
+        namespace="owner",
+        name="gc-ghost",
+        full_id="owner/gc-ghost",
+        lakefs_repo="m-gc-ghost-0000",
+        owner=repo.owner_id,
+    )
+
+    def reset():
+        # Data written by an earlier version: a wrong file row, no history
+        H.delete().where(H.id.not_in(baseline) | (H.sha256 == live.sha256)).execute()
+        F.update(sha256="0" * 64, lfs=False).where(F.id == live.id).execute()
+        m.db.LfsGcState.delete().execute()
+        m.db.BackgroundTask.delete().execute()
+
+    def snapshot():
+        return (
+            sorted((row.repository_id, row.path_in_repo, row.sha256) for row in H.select()),
+            F.get_by_id(live.id).sha256,
+            F.get_by_id(live.id).lfs,
+            m.gc.references_reconciled(),
+            len(_queued(m, m.cleanup.COLLECT_LFS_KIND)),
+        )
+
+    try:
+        points = await _live("kohakuhub.task_testing").run_with_interruptions(
+            m.cleanup.reconcile_lfs_references, {}, reset=reset, snapshot=snapshot
+        )
+        history, sha, lfs, reconciled, collections = snapshot()
+        assert (sha, lfs, reconciled, collections) == (live.sha256, True, True, 1)
+        assert (repo.id, live.path_in_repo, live.sha256) in history
+        assert points == 6 * m.db.Repository.select().count()  # stage, checkpoint, progress
+
+        # Over data that already accounts, a run changes nothing
+        ctx = RecordingContext()
+        await m.cleanup.reconcile_lfs_references({}, ctx)
+        stats = ctx.checkpoint_state["stats"]
+        assert (stats["history_added"], stats["files_fixed"]) == (0, 0)
+        assert stats["repositories_without_lakefs"] == 1
+        assert snapshot()[0] == history
+
+        cancelled = RecordingContext()
+        cancelled.cancel_requested = True
+        with pytest.raises(_live("kohakuhub.tasks").TaskCancelled):
+            await m.cleanup.reconcile_lfs_references({}, cancelled)
+    finally:
+        ghost.delete_instance()
+        H.delete().where(H.id.not_in(baseline)).execute()
+        F.update(sha256=live.sha256, lfs=True).where(F.id == live.id).execute()
+
+
+async def test_admins_start_and_follow_the_reconciliation(m, admin_client):
+    url = "/admin/api/storage/lfs-reconciliation"
+    status = (await admin_client.get(url)).json()
+    assert status == {"reconciled_at": None, "auto_gc": m.cfg.app.lfs_auto_gc, "task": None}
+
+    started = (await admin_client.post(url)).json()
+    assert started["already_pending"] is False
+    assert (await admin_client.post(url)).json() == {"task_id": None, "already_pending": True}
+    task = (await admin_client.get(url)).json()["task"]
+    assert (task["id"], task["status"], task["stats"], task["finished_at"]) == (
+        started["task_id"],
+        "queued",
+        {},
+        None,
+    )
+
+    B = m.db.BackgroundTask
+    B.update(
+        status="succeeded",
+        finished_at=m.db.utcnow(),
+        checkpoint=json.dumps({"after": 1, "stats": {"history_added": 2}}),
+    ).where(B.id == started["task_id"]).execute()
+    m.gc.mark_references_reconciled()
+    status = (await admin_client.get(url)).json()
+    assert status["reconciled_at"] and status["task"]["stats"] == {"history_added": 2}
+    assert status["task"]["finished_at"]
+
+
+async def test_copying_an_older_version_records_what_is_linked(m, owner_client):
+    old, new = b"gc copy v0", b"gc copy v1"
+    _put(m, old), _put(m, new)
+    assert (await _commit(owner_client, "demo-model", _lfs_op(old))).status_code == 200
+    first = (await owner_client.get("/api/models/owner/demo-model/revision/main")).json()["sha"]
+    assert (await _commit(owner_client, "demo-model", _lfs_op(new))).status_code == 200
+
+    copy = {
+        "key": "copyFile",
+        "value": {"path": "gc-test/copy.bin", "srcPath": PATH, "srcRevision": first},
+    }
+    assert (await _commit(owner_client, "demo-model", copy)).status_code == 200
+
+    oid = hashlib.sha256(old).hexdigest()
+    F, H = m.db.File, m.db.LFSObjectHistory
+    row = F.get((F.repository == _repo(m)) & (F.path_in_repo == "gc-test/copy.bin"))
+    assert (row.sha256, row.lfs) == (oid, True)  # not the source's current version
+    assert H.select().where((H.path_in_repo == "gc-test/copy.bin") & (H.sha256 == oid)).exists()
+    assert m.gc.retention_reason(oid) == "recent"  # claimed like a linked upload

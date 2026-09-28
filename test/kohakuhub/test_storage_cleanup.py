@@ -15,6 +15,7 @@ from kohakuhub.db import (
     File,
     LFSObjectHistory,
     LfsGcCandidate,
+    LfsGcState,
     LfsObjectTombstone,
     LfsRecentObject,
     Repository,
@@ -35,7 +36,7 @@ def _live(module):
     return importlib.import_module(module)
 
 
-GC_STATE = (BackgroundTask, LfsGcCandidate, LfsObjectTombstone, LfsRecentObject)
+GC_STATE = (BackgroundTask, LfsGcCandidate, LfsGcState, LfsObjectTombstone, LfsRecentObject)
 
 
 @pytest.fixture(autouse=True)
@@ -258,6 +259,7 @@ async def test_collect_deletes_only_lfs_objects_nothing_references(storage, monk
         storage.keys = {lfs_gc.lfs_key(sha) for sha in candidates}
         LfsObjectTombstone.delete().execute()
         lfs_gc.record_candidates(candidates)
+        lfs_gc.mark_references_reconciled()
 
     def snapshot():
         tombstones = {row.sha256: row.state for row in LfsObjectTombstone.select()}
