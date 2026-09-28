@@ -706,8 +706,14 @@ async def test_admins_start_and_follow_the_reconciliation(m, admin_client):
     ).where(B.id == started["task_id"]).execute()
     m.gc.mark_references_reconciled()
     status = (await admin_client.get(url)).json()
-    assert status["reconciled_at"] and status["task"]["stats"] == {"history_added": 2}
-    assert status["task"]["finished_at"]
+    assert status["task"]["stats"] == {"history_added": 2}
+    # UTC with its offset, like the task API, so the panel shows local time
+    for stamp in (
+        status["reconciled_at"],
+        status["task"]["created_at"],
+        status["task"]["finished_at"],
+    ):
+        assert stamp.endswith("+00:00")
 
 
 async def test_copying_an_older_version_records_what_is_linked(m, owner_client):

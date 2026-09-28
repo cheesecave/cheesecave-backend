@@ -28,7 +28,7 @@ register the handlers (see docs/development/background-tasks.md).
 
 import json
 from collections import Counter
-from datetime import timedelta
+from datetime import timedelta, timezone
 from typing import Any
 
 import httpx
@@ -461,6 +461,10 @@ async def reconcile_lfs_references(payload: dict[str, Any], ctx: tasks.TaskConte
     enqueue_lfs_collection()
 
 
+def _iso(value) -> str:
+    return value.replace(tzinfo=timezone.utc).isoformat()  # stored as naive UTC
+
+
 def lfs_reconciliation_status() -> dict[str, Any]:
     """The reconciliation marker and the latest reconciliation task, for the admin panel."""
     T = BackgroundTask
@@ -476,8 +480,8 @@ def lfs_reconciliation_status() -> dict[str, Any]:
             "progress_total": task.progress_total,
             "stage": task.progress_stage,
             "stats": (json.loads(task.checkpoint) if task.checkpoint else {}).get("stats", {}),
-            "created_at": task.created_at.isoformat(),
-            "finished_at": task.finished_at and task.finished_at.isoformat(),
+            "created_at": _iso(task.created_at),
+            "finished_at": task.finished_at and _iso(task.finished_at),
         },
     }
 

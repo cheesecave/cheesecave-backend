@@ -158,9 +158,10 @@ def references_reconciled() -> bool:
 
 def mark_references_reconciled() -> None:
     now = utcnow()
-    LfsGcState.insert(key=RECONCILED_KEY, value=now.isoformat(), updated_at=now).on_conflict(
+    stamp = now.replace(tzinfo=timezone.utc).isoformat()
+    LfsGcState.insert(key=RECONCILED_KEY, value=stamp, updated_at=now).on_conflict(
         conflict_target=[LfsGcState.key],
-        update={LfsGcState.value: now.isoformat(), LfsGcState.updated_at: now},
+        update={LfsGcState.value: stamp, LfsGcState.updated_at: now},
     ).execute()
 
 
