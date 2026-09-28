@@ -8,13 +8,16 @@ import uuid
 import httpx
 import pytest
 
-from kohakuhub import lakefs_rest_client, storage_cleanup, tasks
+from kohakuhub import lakefs_rest_client, lfs_gc, storage_cleanup, tasks
 from kohakuhub.config import cfg
 from kohakuhub.db import (
     BackgroundTask,
     File,
     LFSObjectHistory,
     LfsGcCandidate,
+    LfsGcState,
+    LfsObjectTombstone,
+    LfsRecentObject,
     Repository,
     db,
 )
@@ -33,17 +36,20 @@ def _live(module):
     return importlib.import_module(module)
 
 
+GC_STATE = (BackgroundTask, LfsGcCandidate, LfsGcState, LfsObjectTombstone, LfsRecentObject)
+
+
 @pytest.fixture(autouse=True)
 def clean_queue(prepared_backend_test_state):
     # This module holds the LakeFS client module imported at collection time;
     # the backend fixtures reload a fresh copy and reset only that one's pooled
     # client, which is bound to the previous test's event loop.
     lakefs_rest_client._singleton_client = None
-    BackgroundTask.delete().execute()
-    LfsGcCandidate.delete().execute()
+    for model in GC_STATE:
+        model.delete().execute()
     yield
-    BackgroundTask.delete().execute()
-    LfsGcCandidate.delete().execute()
+    for model in GC_STATE:
+        model.delete().execute()
     # Do not leave a pooled client bound to this test's loop for later modules.
     lakefs_rest_client._singleton_client = None
 
@@ -250,11 +256,14 @@ async def test_collect_deletes_only_lfs_objects_nothing_references(storage, monk
     candidates = [live, historic, *orphans]
 
     def reset():
-        storage.keys = {storage_cleanup.lfs_key(sha) for sha in candidates}
-        storage_cleanup.record_lfs_candidates(candidates)
+        storage.keys = {lfs_gc.lfs_key(sha) for sha in candidates}
+        LfsObjectTombstone.delete().execute()
+        lfs_gc.record_candidates(candidates)
+        lfs_gc.mark_references_reconciled()
 
     def snapshot():
-        return sorted(storage.keys), LfsGcCandidate.select().count()
+        tombstones = {row.sha256: row.state for row in LfsObjectTombstone.select()}
+        return sorted(storage.keys), LfsGcCandidate.select().count(), tombstones
 
     try:
         points = await run_with_interruptions(
@@ -263,8 +272,8 @@ async def test_collect_deletes_only_lfs_objects_nothing_references(storage, monk
     finally:
         LFSObjectHistory.delete().where(LFSObjectHistory.sha256 == historic).execute()
 
-    kept = sorted(storage_cleanup.lfs_key(sha) for sha in (live, historic))
-    assert snapshot() == (kept, 0)
+    kept = sorted(lfs_gc.lfs_key(sha) for sha in (live, historic))
+    assert snapshot() == (kept, 0, {sha: lfs_gc.DELETED for sha in orphans})
     assert points == 2 + 2 * 2  # a stage and two batch reports
 
 

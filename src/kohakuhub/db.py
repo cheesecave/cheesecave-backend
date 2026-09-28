@@ -601,6 +601,68 @@ class LfsGcCandidate(BaseModel):
         table_name = "lfs_gc_candidate"
 
 
+class LfsObjectTombstone(BaseModel):
+    """An LFS object garbage collection deleted, or is deleting.
+
+    History rows stay, so the tombstone is what says the content is gone;
+    re-uploading the same content removes it (see ``kohakuhub.lfs_gc``).
+    """
+
+    sha256 = CharField(max_length=64, primary_key=True)
+    state = CharField(max_length=16)  # deleting, then deleted
+    created_at = DateTimeField(default=utcnow)
+    updated_at = DateTimeField(default=utcnow)
+
+    class Meta:
+        table_name = "lfs_object_tombstone"
+
+
+class LfsRecentObject(BaseModel):
+    """An LFS object uploaded or claimed by a commit recently.
+
+    Garbage collection keeps it through a grace period, so a collection can
+    never delete content an upload or a commit in flight relies on.
+    """
+
+    sha256 = CharField(max_length=64, primary_key=True)
+    touched_at = DateTimeField(default=utcnow, index=True)
+
+    class Meta:
+        table_name = "lfs_recent_object"
+
+
+class LfsHeadRef(BaseModel):
+    """An LFS object the head of a branch links at a path.
+
+    Garbage collection never deletes an object a branch head links; keep
+    windows only decide how many older versions stay. Commits and branch
+    operations keep these rows current, and the LFS reference reconciliation
+    adds what earlier versions never recorded (see ``kohakuhub.lfs_gc``).
+    """
+
+    repository = ForeignKeyField(Repository, on_delete="CASCADE", index=True)
+    branch = CharField()
+    path_in_repo = CharField()
+    sha256 = CharField(max_length=64, index=True)
+    created_at = DateTimeField(default=utcnow)
+
+    class Meta:
+        table_name = "lfs_head_ref"
+        indexes = ((("repository", "branch", "path_in_repo", "sha256"), True),)
+
+
+class LfsGcState(BaseModel):
+    """Durable garbage collection state, such as when the LFS references of
+    every branch head were last reconciled (see ``kohakuhub.lfs_gc``)."""
+
+    key = CharField(max_length=64, primary_key=True)
+    value = TextField()
+    updated_at = DateTimeField(default=utcnow)
+
+    class Meta:
+        table_name = "lfs_gc_state"
+
+
 class BackgroundWorker(BaseModel):
     """A worker process, registered at startup and kept fresh by heartbeats.
 
@@ -666,6 +728,10 @@ def init_db():
             BackgroundTaskLog,
             BackgroundWorker,
             LfsGcCandidate,
+            LfsObjectTombstone,
+            LfsRecentObject,
+            LfsHeadRef,
+            LfsGcState,
         ],
         safe=True,
     )

@@ -1586,6 +1586,28 @@ export async function purgeOrphanLakefsRepository(token, lakefsRepo) {
   return response.data;
 }
 
+/**
+ * When LFS references were last reconciled, and the latest reconciliation task
+ * @param {string} token - Admin token
+ * @returns {Promise<Object>} { reconciled_at, auto_gc, task: { id, status, progress_done, progress_total, stage, stats, created_at, finished_at } | null }
+ */
+export async function getLfsReconciliation(token) {
+  const client = createAdminClient(token);
+  const response = await client.get("/storage/lfs-reconciliation");
+  return response.data;
+}
+
+/**
+ * Start the LFS reference reconciliation (idempotent background task)
+ * @param {string} token - Admin token
+ * @returns {Promise<Object>} { task_id, already_pending }
+ */
+export async function startLfsReconciliation(token) {
+  const client = createAdminClient(token);
+  const response = await client.post("/storage/lfs-reconciliation");
+  return response.data;
+}
+
 // ===== Background Tasks =====
 
 /**

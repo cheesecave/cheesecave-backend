@@ -283,6 +283,11 @@ async def test_process_lfs_file_covers_same_content_new_content_and_failures(mon
     monkeypatch.setattr(commit_ops, "File", _FakeFileModel)
     monkeypatch.setattr(commit_ops, "get_lakefs_client", lambda: client)
     monkeypatch.setattr(commit_ops.cfg.s3, "bucket", "hub-storage")
+    monkeypatch.setattr(commit_ops, "object_exists", lambda bucket, key: _async_return(True))
+    claims = []
+    monkeypatch.setattr(
+        commit_ops, "claim_for_commit", lambda oid, exists: claims.append((oid, exists))
+    )
 
     with pytest.raises(HTTPException) as missing_oid:
         await commit_ops.process_lfs_file("weights.bin", None, 10, "sha256", repo, "lakefs", "main")
@@ -303,6 +308,7 @@ async def test_process_lfs_file_covers_same_content_new_content_and_failures(mon
     assert restored[0] is True
     assert restored[1]["sha256"] == "sameoid"
     assert _FakeFileModel.update_query.where_calls
+    assert claims == [("sameoid", True)]  # protected from collection while linked
 
     _FakeFileModel.get_or_none_result = SimpleNamespace(
         id=4,
@@ -342,6 +348,27 @@ async def test_process_lfs_file_covers_same_content_new_content_and_failures(mon
     assert changed is True
     assert tracking["old_sha256"] == "oldoid"
     assert _FakeFileModel.insert_calls
+    assert claims[-1] == ("newoid", True)
+
+    # Content a collection is deleting (or deleted) must be uploaded again
+    def unavailable(oid, exists):
+        raise commit_ops.LfsObjectUnavailable(oid)
+
+    monkeypatch.setattr(commit_ops, "claim_for_commit", unavailable)
+    with pytest.raises(HTTPException) as collected:
+        await commit_ops.process_lfs_file("weights.bin", "newoid", 11, "sha256", repo, "lakefs", "main")
+    assert collected.value.status_code == 409
+
+    # Revived content is checked again: a collection may have deleted it
+    # after the first check
+    answers = iter([True, False])
+    monkeypatch.setattr(commit_ops, "object_exists", lambda bucket, key: _async_return(next(answers)))
+    monkeypatch.setattr(commit_ops, "claim_for_commit", lambda oid, exists: True)
+    with pytest.raises(HTTPException) as deleted_meanwhile:
+        await commit_ops.process_lfs_file("weights.bin", "newoid", 11, "sha256", repo, "lakefs", "main")
+    assert deleted_meanwhile.value.status_code == 409
+    monkeypatch.setattr(commit_ops, "object_exists", lambda bucket, key: _async_return(True))
+    monkeypatch.setattr(commit_ops, "claim_for_commit", lambda oid, exists: False)
 
     monkeypatch.setattr(commit_ops, "get_object_metadata", lambda bucket, key: (_ for _ in ()).throw(RuntimeError("meta fail")))
     client.raise_on["link_physical_address"] = RuntimeError("link failed")
@@ -395,14 +422,43 @@ async def test_process_copy_file_covers_validation_success_and_error(monkeypatch
     assert missing_src.value.status_code == 400
 
     copied = await commit_ops.process_copy_file("dest.txt", "src.txt", "main", repo, "lakefs", "main")
-    assert copied is True
+    assert copied == (True, None)  # not a global LFS object: nothing to track
     assert _FakeFileModel.insert_calls[-1]["lfs"] is True
 
     monkeypatch.setattr(commit_ops, "get_file", lambda repo_arg, path: None)
     _FakeFileModel.insert_calls.clear()
     copied = await commit_ops.process_copy_file("dest.txt", "src.txt", "main", repo, "lakefs", "main")
-    assert copied is True
+    assert copied == (True, None)
     assert _FakeFileModel.insert_calls[-1]["sha256"] == "sha256:abc"
+
+    # A global LFS object: the linked version's sha256, not the source's
+    # current one, claimed and tracked like a linked upload
+    old, new = "a" * 64, "b" * 64
+    stat = client.stat_object
+    client.stat_object = lambda **kwargs: _async_return(
+        {"physical_address": f"s3://bucket/lfs/bb/bb/{new}", "checksum": "etag", "size_bytes": 12}
+    )
+    claims = []
+    monkeypatch.setattr(commit_ops, "_claim_lfs_object", lambda oid, key: claims.append(key) or _async_return(None))
+    monkeypatch.setattr(commit_ops, "get_file", lambda repo_arg, path: SimpleNamespace(size=5, sha256=old, lfs=True))
+    _FakeFileModel.get_or_none_result = SimpleNamespace(sha256=old, lfs=True)
+    copied = await commit_ops.process_copy_file("dest.txt", "src.txt", "c0ffee", repo, "lakefs", "main")
+    assert copied == (True, {"path": "dest.txt", "sha256": new, "size": 12, "old_sha256": old})
+    assert _FakeFileModel.insert_calls[-1]["sha256"] == new
+    assert claims == [f"lfs/bb/bb/{new}"]
+
+    _FakeFileModel.get_or_none_result = None  # a new destination
+    copied = await commit_ops.process_copy_file("dest.txt", "src.txt", "c0ffee", repo, "lakefs", "main")
+    assert copied[1]["old_sha256"] is None
+
+    def unavailable(oid, key):
+        raise HTTPException(409, detail={"error": "upload it again"})
+
+    monkeypatch.setattr(commit_ops, "_claim_lfs_object", unavailable)
+    with pytest.raises(HTTPException) as collected:
+        await commit_ops.process_copy_file("dest.txt", "src.txt", "c0ffee", repo, "lakefs", "main")
+    assert collected.value.status_code == 409
+    client.stat_object = stat
 
     client.raise_on["stat_object"] = RuntimeError("copy failed")
     with pytest.raises(HTTPException) as copy_error:
@@ -430,9 +486,24 @@ async def test_commit_route_covers_parse_dispatch_noop_and_success_paths(monkeyp
     monkeypatch.setattr(commit_ops, "process_lfs_file", lambda **kwargs: _async_return((False, None)))
     monkeypatch.setattr(commit_ops, "process_deleted_file", lambda **kwargs: _async_return(True))
     monkeypatch.setattr(commit_ops, "process_deleted_folder", lambda **kwargs: _async_return(True))
-    monkeypatch.setattr(commit_ops, "process_copy_file", lambda **kwargs: _async_return(True))
+    copied = iter([(True, {"path": "copied.bin", "sha256": "c" * 64, "size": 3, "old_sha256": None})])
+    monkeypatch.setattr(
+        commit_ops, "process_copy_file", lambda **kwargs: _async_return(next(copied, (True, None)))
+    )
     monkeypatch.setattr(commit_ops, "track_lfs_object", lambda **kwargs: tracked.append(kwargs))
-    monkeypatch.setattr(commit_ops, "run_gc_for_file", lambda **kwargs: gc_calls.append(kwargs) or 1)
+    monkeypatch.setattr(
+        commit_ops,
+        "record_evicted_versions",
+        lambda repo_arg, paths: gc_calls.append(list(paths)) or len(gc_calls) % 2,
+    )
+    collections = []
+    monkeypatch.setattr(commit_ops, "enqueue_lfs_collection", lambda: collections.append(1))
+    head_changes = []
+    monkeypatch.setattr(
+        commit_ops,
+        "record_head_change",
+        lambda repo_arg, branch, paths, folders: head_changes.append((branch, paths, folders)),
+    )
     monkeypatch.setattr(commit_ops, "create_commit", lambda **kwargs: tracked.append({"commit": kwargs["commit_id"]}))
     monkeypatch.setattr(commit_ops, "update_repository_storage", lambda repo_arg: _async_return(None))
     monkeypatch.setattr(commit_ops, "get_organization", lambda namespace: None)
@@ -484,7 +555,22 @@ async def test_commit_route_covers_parse_dispatch_noop_and_success_paths(monkeyp
     assert success_response["commitOid"] == "commit-created"
     assert success_response["commitUrl"] == "models/owner/repo/commit/commit-created"
     assert tracked
-    assert gc_calls
+    assert gc_calls == [["weights.bin"]]  # the path whose old version was replaced
+    assert collections == [1]
+    # What the branch head links now: LFS results, everything else touched links none
+    assert head_changes == [
+        (
+            "main",
+            {
+                "README.md": None,
+                "weights.bin": "oid",
+                "old.txt": None,
+                "copied.txt": None,
+                "copied.bin": "c" * 64,
+            },
+            ["folder/"],
+        )
+    ]
 
     client.raise_on["commit"] = RuntimeError("commit failed")
     with pytest.raises(HTTPException) as commit_failed:

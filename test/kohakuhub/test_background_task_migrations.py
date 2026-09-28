@@ -1,5 +1,6 @@
 """Tests for migrations 017 (background_task), 018 (timeline, progress, logs),
-019 (worker roster) and 020 (LFS garbage collection candidates).
+019 (worker roster), 020 (LFS garbage collection candidates) and 021 (LFS
+tombstones, recent objects and GC state).
 
 They run as one chain: a migration skips itself once any later migration is
 applied, so dropping only some of these tables would make the rest skip.
@@ -18,6 +19,10 @@ from kohakuhub.db import (
     BackgroundTaskLog,
     BackgroundWorker,
     LfsGcCandidate,
+    LfsGcState,
+    LfsHeadRef,
+    LfsObjectTombstone,
+    LfsRecentObject,
     db,
 )
 
@@ -28,10 +33,25 @@ TABLES = (
     "background_task_log",
     "background_worker",
     "lfs_gc_candidate",
+    "lfs_object_tombstone",
+    "lfs_recent_object",
+    "lfs_head_ref",
+    "lfs_gc_state",
 )
-MODELS = [BackgroundTask, BackgroundTaskEvent, BackgroundTaskLog, BackgroundWorker, LfsGcCandidate]
+MODELS = [
+    BackgroundTask,
+    BackgroundTaskEvent,
+    BackgroundTaskLog,
+    BackgroundWorker,
+    LfsGcCandidate,
+    LfsObjectTombstone,
+    LfsRecentObject,
+    LfsHeadRef,
+    LfsGcState,
+]
 DROP_ALL = (
-    'DROP TABLE IF EXISTS "lfs_gc_candidate", "background_worker", "background_task_log", '
+    'DROP TABLE IF EXISTS "lfs_gc_state", "lfs_head_ref", "lfs_recent_object", "lfs_object_tombstone", "lfs_gc_candidate", '
+    '"background_worker", "background_task_log", '
     '"background_task_event", "background_task"'
 )
 OLD_ROW = (
@@ -64,8 +84,12 @@ def _load_020():
     return _load("020_lfs_gc_candidates.py")
 
 
+def _load_021():
+    return _load("021_lfs_gc_tombstones.py")
+
+
 def _chain():
-    return _load_017(), _load_018(), _load_019(), _load_020()
+    return _load_017(), _load_018(), _load_019(), _load_020(), _load_021()
 
 
 def _schema(database):
@@ -104,7 +128,7 @@ def _sqlite_reference(path):
     return _schema(reference)
 
 
-def test_migrations_017_to_020_match_init_db_on_postgres(prepared_backend_test_state):
+def test_migrations_017_to_021_match_init_db_on_postgres(prepared_backend_test_state):
     expected = _schema(db)  # created by init_db()
     db.execute_sql(DROP_ALL)
     try:
@@ -133,7 +157,7 @@ def test_migration_018_upgrades_existing_rows_on_postgres(prepared_backend_test_
         db.create_tables(MODELS, safe=True)
 
 
-def test_migrations_017_to_020_match_init_db_on_sqlite(tmp_path, monkeypatch):
+def test_migrations_017_to_021_match_init_db_on_sqlite(tmp_path, monkeypatch):
     m017, *later = _chain()
     migrated = _sqlite(monkeypatch, m017, *later, path=tmp_path / "migrated.db")
 
@@ -160,7 +184,7 @@ def test_migration_018_resumes_a_partially_added_column_set(tmp_path, monkeypatc
     assert _schema(migrated) == _sqlite_reference(tmp_path / "reference.db")
 
 
-@pytest.mark.parametrize("loader", [_load_017, _load_018, _load_019, _load_020])
+@pytest.mark.parametrize("loader", [_load_017, _load_018, _load_019, _load_020, _load_021])
 def test_background_task_migrations_report_failure(tmp_path, monkeypatch, loader):
     migration = loader()
     _sqlite(monkeypatch, migration, path=tmp_path / "broken.db")
@@ -173,7 +197,7 @@ def test_background_task_migrations_report_failure(tmp_path, monkeypatch, loader
     assert migration.run() is False
 
 
-@pytest.mark.parametrize("loader", [_load_018, _load_019, _load_020])
+@pytest.mark.parametrize("loader", [_load_018, _load_019, _load_020, _load_021])
 def test_migrations_skip_when_a_later_migration_is_applied(tmp_path, monkeypatch, loader):
     migration = loader()
     _sqlite(monkeypatch, migration, path=tmp_path / "later.db")

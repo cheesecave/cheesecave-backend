@@ -58,7 +58,7 @@ By default, the application looks for `config.toml` in the current working direc
 | `KOHAKU_HUB_LFS_MULTIPART_THRESHOLD_BYTES` | The threshold for using multipart uploads for LFS. | `104857600` (100MB) |
 | `KOHAKU_HUB_LFS_MULTIPART_CHUNK_SIZE_BYTES` | The chunk size for LFS multipart uploads. | `52428800` (50MB) |
 | `KOHAKU_HUB_LFS_KEEP_VERSIONS` | The number of LFS file versions to keep during garbage collection. | `5` |
-| `KOHAKU_HUB_LFS_AUTO_GC` | If `true`, automatically runs garbage collection on commits. | `false` |
+| `KOHAKU_HUB_LFS_AUTO_GC` | If `true`, LFS versions beyond the keep count are collected in the background. | `false` |
 
 ## Authentication & Session Settings
 

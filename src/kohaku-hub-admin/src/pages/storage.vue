@@ -3,6 +3,7 @@ import { ref, computed, onMounted } from "vue";
 import { useRouter } from "vue-router";
 import AdminLayout from "@/components/AdminLayout.vue";
 import OrphanLakefsRepos from "@/components/storage/OrphanLakefsRepos.vue";
+import LfsReconciliation from "@/components/storage/LfsReconciliation.vue";
 import { useAdminStore } from "@/stores/admin";
 import {
   listS3Buckets,
@@ -387,6 +388,17 @@ onMounted(() => {
         @error="
           ElMessage.error(
             $event.response?.data?.detail?.error || 'LakeFS audit failed',
+          )
+        "
+      />
+
+      <LfsReconciliation
+        class="mt-6"
+        :token="adminStore.token"
+        @error="
+          ElMessage.error(
+            $event.response?.data?.detail?.error ||
+              'LFS reference reconciliation failed',
           )
         "
       />

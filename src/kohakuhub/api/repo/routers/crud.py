@@ -53,6 +53,7 @@ from kohakuhub.api.quota.util import (
     update_repository_storage,
 )
 from kohakuhub.api.repo.utils.gc import cleanup_repository_storage
+from kohakuhub.storage_cleanup import record_repository_lfs, refresh_head_refs
 from kohakuhub.api.fallback.cache import get_cache as get_fallback_cache
 from kohakuhub.api.validation import normalize_name
 from kohakuhub.api.operation_capabilities import (
@@ -649,9 +650,7 @@ async def delete_repo(
         )
         logger.info(
             f"S3 cleanup for {full_id}: "
-            f"{cleanup_stats['repo_objects_deleted']} repo objects, "
-            f"{cleanup_stats['lfs_objects_deleted']} LFS objects, "
-            f"{cleanup_stats['lfs_history_deleted']} history records deleted"
+            f"{cleanup_stats['repo_objects_deleted']} repo objects deleted"
         )
     except Exception as e:
         logger.warning(f"S3 cleanup failed for {full_id} (non-fatal): {e}")
@@ -659,6 +658,10 @@ async def delete_repo(
     # 5. Delete related metadata from database (CASCADE will handle related records)
     try:
         with db.atomic():
+            # LFS objects are shared: record this repository's as collection
+            # candidates in the same transaction, so the background collection
+            # decides them only once the rows below are gone (#114).
+            record_repository_lfs(repo_row)
             # ForeignKey CASCADE will automatically delete:
             # - All files (File.repository)
             # - All commits (Commit.repository)
@@ -1269,13 +1272,8 @@ async def squash_repo(
                 to_lakefs_repo=temp_lakefs_repo,
             )
 
-        # Clean up old storage
-        await cleanup_repository_storage(
-            repo_type=repo_type,
-            namespace=namespace,
-            name=name,
-            lakefs_repo=from_lakefs_repo,
-        )
+        # The old S3 prefix is left in place: an LFS path written by Reset can
+        # live there and the migration links it rather than copying it.
 
         logger.success(f"Moved to temporary repository: {temp_id}")
 
@@ -1311,14 +1309,6 @@ async def squash_repo(
                 to_lakefs_repo=final_lakefs_repo,
             )
 
-        # Clean up temp storage
-        await cleanup_repository_storage(
-            repo_type=repo_type,
-            namespace=namespace,
-            name=temp_name,
-            lakefs_repo=temp_lakefs_repo,
-        )
-
         # The temp id is never reused, so its deletion only needs to be observed
         # for logging; `_migrate_lakefs_repository` already waited for it.
 
@@ -1326,6 +1316,8 @@ async def squash_repo(
         # Storage might have changed after clearing history
         final_repo = get_repository(repo_type, namespace, name)
         if final_repo:
+            # The squashed repository has only main left
+            await refresh_head_refs(final_repo, "main", exact=True, whole_repository=True)
             logger.info(f"Recalculating storage for squashed repository {repo_id}")
             try:
                 await update_repository_storage(final_repo)

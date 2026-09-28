@@ -19,7 +19,9 @@ from kohakuhub.db_operations import (
     update_repository,
     update_user,
 )
+from kohakuhub.lfs_gc import keep_versions
 from kohakuhub.logger import get_logger
+from kohakuhub.storage_cleanup import enqueue_lfs_window_review
 from kohakuhub.api.fallback import with_user_fallback
 from kohakuhub.api.fallback.cache import get_cache as get_fallback_cache
 from kohakuhub.api.quota.util import calculate_repository_storage, check_quota
@@ -435,7 +437,11 @@ async def update_repo_settings(
 
     # Apply all updates if there are any
     if update_fields:
+        kept_before = keep_versions(repo_row)
         update_repository(repo_row, **update_fields)
+        # A lowered keep count pushes old versions out of the window (#114)
+        if cfg.app.lfs_auto_gc and keep_versions(repo_row) < kept_before:
+            enqueue_lfs_window_review(repo_row)
 
     # Strict-freshness invalidation (#79): a visibility flip changes
     # who can see the local repo, which in turn changes whether

@@ -59,6 +59,7 @@ export default defineConfig({
         "src/components/tasks/TaskOverview.vue",
         "src/components/tasks/TaskTimeline.vue",
         "src/components/storage/OrphanLakefsRepos.vue",
+        "src/components/storage/LfsReconciliation.vue",
         "src/components/tasks/TaskDetail.vue",
         "src/components/tasks/TaskLogViewer.vue",
         "src/components/tasks/TaskProgress.vue",

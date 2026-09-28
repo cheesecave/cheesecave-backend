@@ -1478,7 +1478,7 @@ lfs_threshold_bytes = 5_000_000  # 5MB - files larger use LFS
 lfs_multipart_threshold_bytes = 100_000_000  # 100MB - files larger use multipart upload
 lfs_multipart_chunk_size_bytes = 50_000_000  # 50MB - size of each part (min 5MB except last)
 lfs_keep_versions = 5  # Keep last K versions of each LFS file
-lfs_auto_gc = true  # Automatically delete old LFS objects on commit
+lfs_auto_gc = true  # Collect LFS versions beyond lfs_keep_versions in the background
 # Download tracking settings
 download_time_bucket_seconds = 900  # 15 minutes - session deduplication window
 download_session_cleanup_threshold = 100  # Trigger cleanup when sessions > this

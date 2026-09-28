@@ -6,13 +6,22 @@ Each test deletes baseline rows, so each restores the baseline first.
 import asyncio
 import importlib
 import json
+from datetime import timedelta
 
 import pytest
 from botocore.exceptions import ClientError
 
 from kohakuhub import lakefs_rest_client, storage_cleanup, tasks
 from kohakuhub.config import cfg
-from kohakuhub.db import BackgroundTask, File, LfsGcCandidate, Repository, User
+from kohakuhub.db import (
+    BackgroundTask,
+    File,
+    LfsGcCandidate,
+    LfsRecentObject,
+    Repository,
+    User,
+    utcnow,
+)
 from kohakuhub.db_operations import delete_organization, delete_repository
 from kohakuhub.utils.lakefs import resolve_lakefs_repo
 from kohakuhub.utils.s3 import get_s3_client
@@ -55,8 +64,17 @@ def _object_exists(key):
 
 
 async def _drain_storage_tasks(timeout=60.0):
-    """Run a real worker until every storage cleanup task has finished."""
-    kinds = (storage_cleanup.PURGE_KIND, storage_cleanup.COLLECT_LFS_KIND)
+    """Run a real worker until every storage cleanup task has finished.
+
+    The seeded uploads are past their grace period by then (see lfs_gc).
+    """
+    LfsRecentObject.update(touched_at=utcnow() - timedelta(days=2)).execute()
+    # With auto GC on, the first collection waits for a reconciliation
+    kinds = (
+        storage_cleanup.PURGE_KIND,
+        storage_cleanup.COLLECT_LFS_KIND,
+        storage_cleanup.RECONCILE_LFS_KIND,
+    )
 
     def pending():
         return (

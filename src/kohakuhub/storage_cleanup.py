@@ -9,7 +9,14 @@ background tasks do it (issue #109):
 
 - ``storage.purge_repository``, one per LakeFS repository, deletes its S3
   prefix and then the LakeFS repository itself;
-- ``storage.collect_lfs`` deletes the recorded LFS objects no row references.
+- ``storage.collect_lfs`` deletes the recorded LFS objects nothing relies on
+  any more, using the retention decision and tombstones in ``kohakuhub.lfs_gc``;
+- ``storage.expire_recent_lfs`` (hourly) turns uploads whose grace period
+  ended into candidates, and ``storage.review_lfs_window`` records the
+  versions a lowered keep count pushed out of a repository's windows;
+- ``storage.reconcile_lfs_references`` makes the database account for every
+  LFS object a branch head links (started from the admin Storage page, or by
+  the first collection with ``lfs_auto_gc`` on, which waits for it).
 
 ``find_orphan_lakefs_repositories`` lists LakeFS repositories no row points at
 (left by deletions before this module existed, or by crashed creates), so an
@@ -20,14 +27,25 @@ register the handlers (see docs/development/background-tasks.md).
 """
 
 import json
-from typing import Any, Iterable
+from collections import Counter
+from datetime import timedelta, timezone
+from typing import Any
 
 import httpx
 
-from kohakuhub import tasks
+from kohakuhub import lfs_gc, tasks
 from kohakuhub.async_utils import run_in_s3_executor
 from kohakuhub.config import cfg
-from kohakuhub.db import BackgroundTask, File, LFSObjectHistory, LfsGcCandidate, Repository
+from kohakuhub.db import (
+    BackgroundTask,
+    File,
+    LFSObjectHistory,
+    LfsGcCandidate,
+    LfsHeadRef,
+    Repository,
+    utcnow,
+)
+from kohakuhub.lfs_gc import lfs_key, record_candidates
 from kohakuhub.logger import get_logger
 from kohakuhub.utils.lakefs import get_lakefs_client, resolve_lakefs_repo
 from kohakuhub.utils.s3 import get_s3_client
@@ -36,13 +54,14 @@ logger = get_logger("STORAGE_CLEANUP")
 
 PURGE_KIND = "storage.purge_repository"
 COLLECT_LFS_KIND = "storage.collect_lfs"
+EXPIRE_RECENT_LFS_KIND = "storage.expire_recent_lfs"
+REVIEW_LFS_WINDOW_KIND = "storage.review_lfs_window"
+RECONCILE_LFS_KIND = "storage.reconcile_lfs_references"
+RECORD_BRANCH_KIND = "storage.record_branch_links"
+RETRY_GATE = timedelta(seconds=30)
 S3_DELETE_BATCH = 1000  # the S3 DeleteObjects maximum
 LFS_BATCH = 500
 LAKEFS_LIST_PAGE = 1000
-
-
-def lfs_key(sha256: str) -> str:
-    return f"lfs/{sha256[:2]}/{sha256[2:4]}/{sha256}"
 
 
 def _referenced_lakefs_repos() -> set[str]:
@@ -69,10 +88,72 @@ def lakefs_repo_in_use(lakefs_repo: str) -> bool:
     )
 
 
-def record_lfs_candidates(shas: Iterable[str]) -> None:
-    rows = [{"sha256": sha} for sha in sorted(set(shas))]
-    for start in range(0, len(rows), LFS_BATCH):
-        LfsGcCandidate.insert_many(rows[start : start + LFS_BATCH]).on_conflict_ignore().execute()
+def enqueue_lfs_collection() -> int | None:
+    return tasks.enqueue(COLLECT_LFS_KIND, dedupe_key=COLLECT_LFS_KIND)
+
+
+def enqueue_lfs_reconciliation() -> int | None:
+    """Schedule the reconciliation of LFS references; ``None`` if already pending."""
+    return tasks.enqueue(RECONCILE_LFS_KIND, dedupe_key=RECONCILE_LFS_KIND)
+
+
+def _reconciliation_pending() -> bool:
+    """Links not recorded yet: a new branch's (``storage.record_branch_links``),
+    or a reconciliation queued since the last one completed (after a failure
+    to record head links). The one completing, which enqueues the
+    collection while still running, predates its own mark and does not count.
+    """
+    T = BackgroundTask
+    pending = T.status.in_([tasks.QUEUED, tasks.RUNNING])
+    return (
+        T.select()
+        .where(
+            pending
+            & (
+                (T.kind == RECORD_BRANCH_KIND)
+                | ((T.kind == RECONCILE_LFS_KIND) & (T.created_at > lfs_gc.reconciled_since()))
+            )
+        )
+        .exists()
+    )
+
+
+def enqueue_lfs_window_review(repo: Repository) -> int | None:
+    """Review ``repo``'s keep windows after its keep count was lowered."""
+    return tasks.enqueue(
+        REVIEW_LFS_WINDOW_KIND, {"repo_id": repo.id}, dedupe_key=f"review-lfs:{repo.id}"
+    )
+
+
+def record_repository_lfs(repo: Repository) -> int:
+    """Record every LFS object ``repo`` used as a collection candidate.
+
+    Call it in the transaction that deletes the row: the cascade removes the
+    file, history and head-link rows read here, and the candidates must not be decided
+    before the row is gone. Returns how many objects were recorded.
+    """
+    shas = {
+        sha
+        for (sha,) in File.select(File.sha256)
+        .where((File.repository == repo) & (File.lfs == True))
+        .tuples()
+    }
+    shas.update(
+        sha
+        for (sha,) in LFSObjectHistory.select(LFSObjectHistory.sha256)
+        .where(LFSObjectHistory.repository == repo)
+        .tuples()
+    )
+    shas.update(
+        sha
+        for (sha,) in LfsHeadRef.select(LfsHeadRef.sha256)
+        .where(LfsHeadRef.repository == repo)
+        .tuples()
+    )
+    if shas:
+        record_candidates(shas)
+        enqueue_lfs_collection()
+    return len(shas)
 
 
 def enqueue_purge(lakefs_repo: str, label: str) -> int | None:
@@ -91,22 +172,8 @@ def schedule_repository_purge(repo: Repository) -> str:
     LakeFS repository id that will be purged.
     """
     lakefs_repo = resolve_lakefs_repo(repo)
-    shas = {
-        sha
-        for (sha,) in File.select(File.sha256)
-        .where((File.repository == repo) & (File.lfs == True))
-        .tuples()
-    }
-    shas.update(
-        sha
-        for (sha,) in LFSObjectHistory.select(LFSObjectHistory.sha256)
-        .where(LFSObjectHistory.repository == repo)
-        .tuples()
-    )
-    record_lfs_candidates(shas)
+    record_repository_lfs(repo)
     enqueue_purge(lakefs_repo, f"{repo.repo_type}:{repo.full_id}")
-    if shas:
-        tasks.enqueue(COLLECT_LFS_KIND, dedupe_key=COLLECT_LFS_KIND)
     return lakefs_repo
 
 
@@ -178,14 +245,27 @@ async def purge_repository(payload: dict[str, Any], ctx: tasks.TaskContext) -> N
 
 @tasks.task(COLLECT_LFS_KIND, timeout=6 * 3600, max_attempts=10)
 async def collect_lfs(payload: dict[str, Any], ctx: tasks.TaskContext) -> None:
-    """Delete recorded LFS objects that no file or LFS history row references.
+    """Delete recorded LFS objects that nothing relies on any more.
 
-    Candidates are consumed in batches and removed only after their objects
-    are gone, so an interrupted run simply continues with what is left.
+    Each candidate is decided and tombstoned under its lock
+    (``lfs_gc.begin_delete``); the batch's objects are then deleted from
+    storage and their tombstones completed. Candidates are consumed only
+    after that, so an interrupted run simply continues with what is left.
     """
-    # ponytail: like the regular delete path's LFS cleanup, this does not
-    # guard against an upload of the very same content racing the check;
-    # lock on the sha256 if concurrent re-uploads of deleted content matter.
+    if cfg.app.lfs_auto_gc and not lfs_gc.references_reconciled():
+        # Keep windows decide deletions only once what every branch head
+        # links is recorded; the reconciliation enqueues this task when done.
+        enqueue_lfs_reconciliation()
+        logger.warning("Waiting for the LFS reference reconciliation before collecting")
+        return
+    if cfg.app.lfs_auto_gc and _reconciliation_pending():
+        # Come back once the missing links are recorded; retrying later, not
+        # relying on the task recording them, which may still be finishing
+        tasks.enqueue(
+            COLLECT_LFS_KIND, dedupe_key=COLLECT_LFS_KIND, run_after=utcnow() + RETRY_GATE
+        )
+        logger.info("Waiting for LFS links to be recorded before collecting")
+        return
     C = LfsGcCandidate
     total = C.select().count()
     checked = deleted = 0
@@ -193,26 +273,265 @@ async def collect_lfs(payload: dict[str, Any], ctx: tasks.TaskContext) -> None:
     while shas := [
         sha for (sha,) in C.select(C.sha256).order_by(C.sha256).limit(LFS_BATCH).tuples()
     ]:
-        referenced = {
-            sha
-            for (sha,) in File.select(File.sha256)
-            .where(File.sha256.in_(shas) & (File.lfs == True) & (File.is_deleted == False))
-            .tuples()
-        }
-        referenced.update(
-            sha
-            for (sha,) in LFSObjectHistory.select(LFSObjectHistory.sha256)
-            .where(LFSObjectHistory.sha256.in_(shas))
-            .tuples()
-        )
-        orphans = [sha for sha in shas if sha not in referenced]
-        if orphans:
-            await run_in_s3_executor(_delete_keys, cfg.s3.bucket, [lfs_key(sha) for sha in orphans])
+        doomed = [sha for sha in shas if lfs_gc.begin_delete(sha)]
+        if doomed:
+            await run_in_s3_executor(_delete_keys, cfg.s3.bucket, [lfs_key(sha) for sha in doomed])
+            lfs_gc.finish_delete(doomed)
         C.delete().where(C.sha256.in_(shas)).execute()
         checked += len(shas)
-        deleted += len(orphans)
+        deleted += len(doomed)
         ctx.progress(checked, max(total, checked))
-    logger.info(f"Checked {checked} LFS object(s); deleted {deleted} no repository references")
+    logger.info(f"Checked {checked} LFS object(s); deleted {deleted} nothing relies on")
+
+
+@tasks.task(EXPIRE_RECENT_LFS_KIND, every=timedelta(hours=1), max_attempts=3)
+async def expire_recent_lfs(payload: dict[str, Any]) -> None:
+    """Hand uploads whose grace period ended to the collection."""
+    expired = lfs_gc.expire_recent()
+    if expired:
+        enqueue_lfs_collection()
+        logger.info(f"{expired} recently used LFS object(s) left their grace period")
+
+
+@tasks.task(REVIEW_LFS_WINDOW_KIND, timeout=3600, max_attempts=5)
+async def review_lfs_window(payload: dict[str, Any], ctx: tasks.TaskContext) -> None:
+    """Record the versions a lowered keep count pushed out of a repository's paths."""
+    repo = Repository.get_or_none(Repository.id == payload["repo_id"])
+    if repo is None:
+        return  # deleted since; its objects were recorded then
+    H = LFSObjectHistory
+    paths = [
+        path for (path,) in H.select(H.path_in_repo).where(H.repository == repo).distinct().tuples()
+    ]
+    recorded = 0
+    for done, path in enumerate(paths, start=1):
+        recorded += lfs_gc.record_evicted_versions(repo, [path])
+        ctx.progress(done, len(paths))
+    if recorded:
+        enqueue_lfs_collection()
+    logger.info(f"Reviewed {len(paths)} LFS path(s) of {repo.full_id}; {recorded} candidate(s)")
+
+
+async def _pages(fetch):
+    """Every result of a paginated LakeFS listing; ``fetch(after)`` gets a page."""
+    after = ""
+    while True:
+        page = await fetch(after)
+        for item in page.get("results", []):
+            yield item
+        pagination = page.get("pagination") or {}
+        if not pagination.get("has_more"):
+            return
+        after = pagination["next_offset"]
+
+
+async def lfs_links(
+    lakefs_repo: str, ref: str, counts: Counter | None = None, paths: set | None = None
+) -> dict:
+    """``{path: (sha256, size)}`` for every global LFS object ``ref`` links;
+    every object's path is added to ``paths`` when given."""
+    client = get_lakefs_client()
+    links = {}
+    # Without a delimiter the listing holds objects only, recursively.
+    objects = [
+        obj
+        async for obj in _pages(
+            lambda after: client.list_objects(
+                repository=lakefs_repo, ref=ref, after=after, amount=LAKEFS_LIST_PAGE
+            )
+        )
+    ]
+    for obj in objects:
+        if counts is not None:
+            counts["objects"] += 1
+        if paths is not None:
+            paths.add(obj["path"])
+        oid = lfs_gc.lfs_oid(obj.get("physical_address"))
+        if oid is not None:
+            links[obj["path"]] = (oid, obj.get("size_bytes", 0))
+    return links
+
+
+async def branch_head_references(lakefs_repo: str):
+    """The LFS objects the heads of a LakeFS repository's branches link.
+
+    Returns ``(heads, default_head, default_paths, counts)`` in the shape
+    ``lfs_gc.reconcile_references`` takes, or ``None`` when the LakeFS
+    repository does not exist.
+    """
+    client = get_lakefs_client()
+    try:
+        default_branch = (await client.get_repository(lakefs_repo))["default_branch"]
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code != 404:
+            raise
+        return None
+    heads: set[tuple[str, str, str]] = set()
+    default_head: dict[str, tuple[str, int]] = {}
+    counts = Counter()
+    listed: dict[str, tuple[dict, set]] = {}
+    default_paths: set[str] = set()
+    branches = [
+        branch
+        async for branch in _pages(
+            lambda after: client.list_branches(lakefs_repo, after=after, amount=LAKEFS_LIST_PAGE)
+        )
+    ]
+    for branch in branches:
+        counts["branches"] += 1
+        commit_id = branch["commit_id"]
+        if commit_id not in listed:  # branches at the same commit link the same objects
+            paths: set[str] = set()
+            listed[commit_id] = (await lfs_links(lakefs_repo, commit_id, counts, paths), paths)
+        links, paths = listed[commit_id]
+        heads.update((branch["id"], path, sha) for path, (sha, _) in links.items())
+        if branch["id"] == default_branch:
+            default_head, default_paths = links, paths
+    counts["lfs_references"] = len(heads)
+    return heads, default_head, default_paths, counts
+
+
+async def refresh_head_refs(
+    repo: Repository, branch: str, *, exact: bool, whole_repository: bool = False
+) -> None:
+    """Record what ``branch``'s head links now, after a branch operation.
+
+    ``exact`` replaces the branch's recorded links (the head was rewritten:
+    revert, merge, reset), or every branch's with ``whole_repository`` (a
+    move or squash leaves only this branch); otherwise links are only added
+    (a new branch, whose commits may already be recording their own).
+    Objects no longer linked become collection candidates. A failure queues
+    a reconciliation, which collection waits for.
+    """
+    try:
+        links = await lfs_links(resolve_lakefs_repo(repo), branch)
+        refs = {(branch, path, sha) for path, (sha, _) in links.items()}
+        if exact:
+            scope = None if whole_repository else branch
+            release_objects(lfs_gc.replace_head_refs(repo, scope, refs))
+        else:
+            lfs_gc.add_head_refs(repo, refs)
+    except Exception as e:
+        logger.warning(f"Could not record the LFS links of {repo.full_id}@{branch}: {e}")
+        enqueue_lfs_reconciliation()
+
+
+def record_head_change(
+    repo: Repository, branch: str, paths: dict[str, str | None], folders: list[str]
+) -> None:
+    """Record a commit's changes to what ``branch`` links (see ``lfs_gc.update_head_refs``).
+
+    A failure queues a reconciliation, which collection waits for.
+    """
+    try:
+        release_objects(lfs_gc.update_head_refs(repo, branch, paths, folders))
+    except Exception as e:
+        logger.warning(f"Could not record the LFS links of {repo.full_id}@{branch}: {e}")
+        enqueue_lfs_reconciliation()
+
+
+def enqueue_branch_links(repo: Repository, branch: str) -> int | None:
+    """Record a new branch's links in the background (``record_branch_links``).
+
+    Listing a big head takes time the branch creation should not wait for;
+    collection waits for it instead.
+    """
+    return tasks.enqueue(
+        RECORD_BRANCH_KIND,
+        {"repo_id": repo.id, "branch": branch},
+        dedupe_key=f"branch-links:{repo.id}:{branch}",
+    )
+
+
+@tasks.task(RECORD_BRANCH_KIND, timeout=3600, max_attempts=5)
+async def record_branch_links(payload: dict[str, Any], ctx: tasks.TaskContext) -> None:
+    """Record what a new branch's head links (only adds: its commits since
+    may already be recording their own), then let the collection run."""
+    repo = Repository.get_or_none(Repository.id == payload["repo_id"])
+    if repo is None:
+        return  # deleted since; its objects were recorded then
+    ctx.stage(f"listing {repo.full_id}@{payload['branch']}")
+    await refresh_head_refs(repo, payload["branch"], exact=False)
+    enqueue_lfs_collection()
+
+
+def forget_branch(repo: Repository, branch: str) -> None:
+    """A deleted branch links nothing any more."""
+    try:
+        if lfs_gc.drop_head_refs(repo, branch):
+            enqueue_lfs_collection()
+    except Exception as e:
+        logger.warning(f"Could not forget the LFS links of {repo.full_id}@{branch}: {e}")
+        enqueue_lfs_reconciliation()
+
+
+def release_objects(shas: set[str]) -> None:
+    """Hand objects no branch head may link any more to the collection."""
+    if shas:
+        record_candidates(shas)
+        enqueue_lfs_collection()
+
+
+@tasks.task(RECONCILE_LFS_KIND, timeout=24 * 3600, max_attempts=5)
+async def reconcile_lfs_references(payload: dict[str, Any], ctx: tasks.TaskContext) -> None:
+    """Make the database account for the LFS objects every branch head links.
+
+    Repository by repository, in id order, with the position and running
+    counts checkpointed after each one, so a retry or another worker resumes
+    where it stopped. Only adds or corrects rows (``reconcile_references``),
+    so running it again, or over data that already accounts, changes nothing.
+    """
+    state = ctx.checkpoint_state or {"after": 0, "stats": {}}
+    stats = Counter(state["stats"])
+    total = Repository.select().count()
+    done = Repository.select().where(Repository.id <= state["after"]).count()
+    remaining = Repository.select().where(Repository.id > state["after"]).order_by(Repository.id)
+    for repo in remaining:
+        if ctx.cancel_requested:
+            raise tasks.TaskCancelled()
+        ctx.stage(f"reconciling {repo.repo_type}:{repo.full_id}")
+        found = await branch_head_references(resolve_lakefs_repo(repo))
+        if found is None:
+            stats["repositories_without_lakefs"] += 1
+        else:
+            heads, default_head, default_paths, counts = found
+            stats.update(counts)
+            stats.update(lfs_gc.reconcile_references(repo, heads, default_head, default_paths))
+        stats["repositories"] += 1
+        done += 1
+        ctx.checkpoint({"after": repo.id, "stats": dict(stats)})
+        ctx.progress(done, max(total, done))
+    lfs_gc.mark_references_reconciled()
+    logger.info(
+        "LFS references reconciled: "
+        + ", ".join(f"{key} {value}" for key, value in sorted(stats.items()))
+    )
+    enqueue_lfs_collection()
+
+
+def _iso(value) -> str:
+    return value.replace(tzinfo=timezone.utc).isoformat()  # stored as naive UTC
+
+
+def lfs_reconciliation_status() -> dict[str, Any]:
+    """The reconciliation marker and the latest reconciliation task, for the admin panel."""
+    T = BackgroundTask
+    task = T.select().where(T.kind == RECONCILE_LFS_KIND).order_by(T.id.desc()).first()
+    return {
+        "reconciled_at": lfs_gc.reconciled_at(),
+        "auto_gc": cfg.app.lfs_auto_gc,
+        "task": task
+        and {
+            "id": task.id,
+            "status": task.status,
+            "progress_done": task.progress_done,
+            "progress_total": task.progress_total,
+            "stage": task.progress_stage,
+            "stats": (json.loads(task.checkpoint) if task.checkpoint else {}).get("stats", {}),
+            "created_at": _iso(task.created_at),
+            "finished_at": task.finished_at and _iso(task.finished_at),
+        },
+    }
 
 
 async def find_orphan_lakefs_repositories() -> list[dict[str, Any]]:

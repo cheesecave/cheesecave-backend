@@ -27,7 +27,14 @@ from kohakuhub.auth.permissions import check_repo_write_permission
 from kohakuhub.utils.lakefs import get_lakefs_client, resolve_lakefs_repo
 from kohakuhub.utils.s3 import get_object_metadata, object_exists
 from kohakuhub.api.quota.util import update_namespace_storage, update_repository_storage
-from kohakuhub.api.repo.utils.gc import run_gc_for_file, track_lfs_object
+from kohakuhub.api.repo.utils.gc import track_lfs_object
+from kohakuhub.lfs_gc import (
+    LfsObjectUnavailable,
+    claim_for_commit,
+    lfs_oid,
+    record_evicted_versions,
+)
+from kohakuhub.storage_cleanup import enqueue_lfs_collection, record_head_change
 from kohakuhub.api.repo.utils.hf import HFErrorCode
 
 logger = get_logger("FILE")
@@ -177,6 +184,28 @@ async def process_regular_file(
     return True
 
 
+async def _claim_lfs_object(oid: str, lfs_key: str, exists: bool | None = None) -> None:
+    """Protect an LFS object from garbage collection while this commit links it.
+
+    Answers 409 when the object is being collected or is gone, so the client
+    uploads it again instead of committing a pointer to missing content (#114).
+    """
+    if exists is None:
+        exists = await object_exists(cfg.s3.bucket, lfs_key)
+    try:
+        revived = claim_for_commit(oid, exists)
+        if revived and not await object_exists(cfg.s3.bucket, lfs_key):
+            raise LfsObjectUnavailable(oid)
+    except LfsObjectUnavailable:
+        raise HTTPException(
+            409,
+            detail={
+                "error": f"LFS object {oid} is not available (garbage collected or missing). "
+                "Upload it again and retry the commit."
+            },
+        )
+
+
 async def process_lfs_file(
     path: str,
     oid: str,
@@ -232,6 +261,7 @@ async def process_lfs_file(
             # Construct S3 physical address
             lfs_key = f"lfs/{oid[:2]}/{oid[2:4]}/{oid}"
             physical_address = f"s3://{cfg.s3.bucket}/{lfs_key}"
+            await _claim_lfs_object(oid, lfs_key)
 
             # Link the physical S3 object to LakeFS to restore
             try:
@@ -318,6 +348,7 @@ async def process_lfs_file(
                     f"Upload to S3 may have failed. Path: {lfs_key}"
                 },
             )
+        await _claim_lfs_object(oid, lfs_key, exists=True)
     except HTTPException:
         raise  # Re-raise HTTPException as-is
     except Exception as e:
@@ -531,14 +562,21 @@ async def process_deleted_folder(
 
         logger.success(f"Deleted {len(deleted_files)} files from folder {folder_path}")
 
-        # Mark as deleted in database (soft delete)
+        # Mark as deleted in database (soft delete). startswith is ILIKE, so
+        # narrow in SQL and match the prefix case-sensitively like LakeFS did:
+        # deleting data/ must not mark Data/ deleted.
         if deleted_files:
-            updated_count = (
-                File.update(is_deleted=True, updated_at=datetime.now(timezone.utc))
-                .where(
+            ids = [
+                row.id
+                for row in File.select(File.id, File.path_in_repo).where(
                     (File.repository == repo)
                     & (File.path_in_repo.startswith(folder_path))
                 )
+                if row.path_in_repo.startswith(folder_path)
+            ]
+            updated_count = (
+                File.update(is_deleted=True, updated_at=datetime.now(timezone.utc))
+                .where(File.id.in_(ids))
                 .execute()
             )
             logger.success(
@@ -558,7 +596,7 @@ async def process_copy_file(
     repo: Repository,
     lakefs_repo: str,
     revision: str,
-) -> bool:
+) -> tuple[bool, dict | None]:
     """Process file copy operation.
 
     Args:
@@ -570,7 +608,8 @@ async def process_copy_file(
         revision: Branch name
 
     Returns:
-        True (always changes repository)
+        Tuple of (True, lfs_tracking_info or None): copying always changes the
+        repository; a global LFS object is tracked like a linked upload
 
     Raises:
         HTTPException: If copy fails
@@ -589,6 +628,14 @@ async def process_copy_file(
         client = get_lakefs_client()
         src_obj = await client.stat_object(
             repository=lakefs_repo, ref=src_revision, path=src_path
+        )
+        # The address says which content is linked; the source path's file
+        # row describes its current version, not necessarily src_revision's.
+        oid = lfs_oid(src_obj["physical_address"])
+        if oid:
+            await _claim_lfs_object(oid, f"lfs/{oid[:2]}/{oid[2:4]}/{oid}")
+        previous = File.get_or_none(
+            (File.repository == repo) & (File.path_in_repo == dest_path)
         )
 
         # Use LakeFS staging API to link the physical address
@@ -614,7 +661,26 @@ async def process_copy_file(
         # Update database - copy file metadata
         src_file = get_file(repo, src_path)
 
-        if src_file:
+        if oid:
+            File.insert(
+                repository=repo,
+                path_in_repo=dest_path,
+                size=src_obj["size_bytes"],
+                sha256=oid,
+                lfs=True,
+                is_deleted=False,
+                owner=repo.owner,
+            ).on_conflict(
+                conflict_target=(File.repository, File.path_in_repo),
+                update={
+                    File.sha256: oid,
+                    File.size: src_obj["size_bytes"],
+                    File.lfs: True,
+                    File.is_deleted: False,
+                    File.updated_at: datetime.now(timezone.utc),
+                },
+            ).execute()
+        elif src_file:
             File.insert(
                 repository=repo,
                 path_in_repo=dest_path,
@@ -658,6 +724,8 @@ async def process_copy_file(
 
         logger.success(f"Successfully copied {src_path} to {dest_path}")
 
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(
             500,
@@ -666,7 +734,15 @@ async def process_copy_file(
             },
         )
 
-    return True
+    if not oid:
+        return True, None
+    replaced = previous and previous.lfs and previous.sha256 != oid
+    return True, {
+        "path": dest_path,
+        "sha256": oid,
+        "size": src_obj["size_bytes"],
+        "old_sha256": previous.sha256 if replaced else None,
+    }
 
 
 @router.post("/{repo_type}s/{namespace}/{name}/commit/{revision}")
@@ -839,7 +915,7 @@ async def commit(
 
             case "copyFile":
                 # Copy file
-                changed = await process_copy_file(
+                changed, lfs_info = await process_copy_file(
                     dest_path=path,
                     src_path=value.get("srcPath"),
                     src_revision=value.get("srcRevision", revision),
@@ -848,6 +924,8 @@ async def commit(
                     revision=revision,
                 )
                 files_changed = files_changed or changed
+                if lfs_info:
+                    pending_lfs_tracking.append(lfs_info)
 
     # If no files changed, return early
     if not files_changed:
@@ -926,7 +1004,7 @@ async def commit(
     )
     logger.success(f"Commit URL: {commit_url}")
 
-    # Track LFS objects and run GC
+    # Track LFS objects; schedule the collection of evicted versions
     if pending_lfs_tracking:
         logger.info(
             f"[COMMIT_LFS_TRACKING] Processing {len(pending_lfs_tracking)} LFS file(s) "
@@ -947,22 +1025,28 @@ async def commit(
                 commit_id=commit_result["id"],
             )
 
-            if cfg.app.lfs_auto_gc and lfs_info.get("old_sha256"):
-                deleted_count = run_gc_for_file(
-                    repo_type=repo_type.value,
-                    namespace=namespace,
-                    name=name,
-                    path_in_repo=lfs_info["path"],
-                    current_commit_id=commit_result["id"],
-                )
-                if deleted_count > 0:
-                    logger.info(
-                        f"GC: Cleaned up {deleted_count} old version(s) of {lfs_info['path']}"
-                    )
+        # Versions this commit pushed out of a path's keep window become
+        # collection candidates; the background collection decides (#114).
+        replaced = [info["path"] for info in pending_lfs_tracking if info.get("old_sha256")]
+        if record_evicted_versions(repo_row, replaced):
+            enqueue_lfs_collection()
     else:
         logger.warning(
             f"[COMMIT_LFS_TRACKING] No LFS files to track for commit {commit_result['id'][:8]}"
         )
+
+    # What the branch head links now; garbage collection never deletes it (#114)
+    head_paths = {
+        op["value"].get("path"): None
+        for op in operations
+        if op["key"] in ("file", "lfsFile", "deletedFile", "copyFile")
+    }
+    head_paths.update({info["path"]: info["sha256"] for info in pending_lfs_tracking})
+    folders = [
+        path if path.endswith("/") else f"{path}/"
+        for path in (op["value"].get("path") for op in operations if op["key"] == "deletedFolder")
+    ]
+    record_head_change(repo_row, revision, head_paths, folders)
 
     # Update storage usage for namespace and repository after successful commit
     try:
