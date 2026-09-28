@@ -498,6 +498,12 @@ async def test_commit_route_covers_parse_dispatch_noop_and_success_paths(monkeyp
     )
     collections = []
     monkeypatch.setattr(commit_ops, "enqueue_lfs_collection", lambda: collections.append(1))
+    head_changes = []
+    monkeypatch.setattr(
+        commit_ops,
+        "record_head_change",
+        lambda repo_arg, branch, paths, folders: head_changes.append((branch, paths, folders)),
+    )
     monkeypatch.setattr(commit_ops, "create_commit", lambda **kwargs: tracked.append({"commit": kwargs["commit_id"]}))
     monkeypatch.setattr(commit_ops, "update_repository_storage", lambda repo_arg: _async_return(None))
     monkeypatch.setattr(commit_ops, "get_organization", lambda namespace: None)
@@ -551,6 +557,20 @@ async def test_commit_route_covers_parse_dispatch_noop_and_success_paths(monkeyp
     assert tracked
     assert gc_calls == [["weights.bin"]]  # the path whose old version was replaced
     assert collections == [1]
+    # What the branch head links now: LFS results, everything else touched links none
+    assert head_changes == [
+        (
+            "main",
+            {
+                "README.md": None,
+                "weights.bin": "oid",
+                "old.txt": None,
+                "copied.txt": None,
+                "copied.bin": "c" * 64,
+            },
+            ["folder/"],
+        )
+    ]
 
     client.raise_on["commit"] = RuntimeError("commit failed")
     with pytest.raises(HTTPException) as commit_failed:

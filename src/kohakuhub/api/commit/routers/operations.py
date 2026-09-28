@@ -34,7 +34,7 @@ from kohakuhub.lfs_gc import (
     lfs_oid,
     record_evicted_versions,
 )
-from kohakuhub.storage_cleanup import enqueue_lfs_collection
+from kohakuhub.storage_cleanup import enqueue_lfs_collection, record_head_change
 from kohakuhub.api.repo.utils.hf import HFErrorCode
 
 logger = get_logger("FILE")
@@ -1027,6 +1027,19 @@ async def commit(
         logger.warning(
             f"[COMMIT_LFS_TRACKING] No LFS files to track for commit {commit_result['id'][:8]}"
         )
+
+    # What the branch head links now; garbage collection never deletes it (#114)
+    head_paths = {
+        op["value"].get("path"): None
+        for op in operations
+        if op["key"] in ("file", "lfsFile", "deletedFile", "copyFile")
+    }
+    head_paths.update({info["path"]: info["sha256"] for info in pending_lfs_tracking})
+    folders = [
+        path if path.endswith("/") else f"{path}/"
+        for path in (op["value"].get("path") for op in operations if op["key"] == "deletedFolder")
+    ]
+    record_head_change(repo_row, revision, head_paths, folders)
 
     # Update storage usage for namespace and repository after successful commit
     try:

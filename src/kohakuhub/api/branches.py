@@ -8,6 +8,7 @@ from pydantic import BaseModel
 from kohakuhub.db import Repository, User
 from kohakuhub.db_operations import create_commit, get_repository
 from kohakuhub.logger import get_logger
+from kohakuhub.storage_cleanup import forget_branch, refresh_head_refs
 from kohakuhub.auth.dependencies import get_current_user, get_optional_user
 from kohakuhub.auth.permissions import (
     check_repo_delete_permission,
@@ -123,6 +124,7 @@ async def create_branch(
 
         return hf_server_error(f"Failed to create branch: {error_msg}")
 
+    await refresh_head_refs(repo_row, payload.branch, exact=False)
     return {"success": True, "message": f"Branch '{payload.branch}' created"}
 
 
@@ -195,6 +197,7 @@ async def delete_branch(
     except Exception as e:
         return hf_server_error(f"Failed to delete branch: {str(e)}")
 
+    forget_branch(repo_row, branch)
     return {"success": True, "message": f"Branch '{branch}' deleted"}
 
 
@@ -621,6 +624,8 @@ async def revert_branch(
         # Don't fail the revert if tracking fails
         logger.warning(f"Failed to track LFS objects after revert: {e}")
 
+    await refresh_head_refs(repo_row, branch, exact=True)
+
     return {
         "success": True,
         "message": f"Successfully reverted commit {commit_id[:8]} on branch '{branch}'",
@@ -752,6 +757,8 @@ async def merge_branches(
     except Exception as e:
         # Don't fail the merge if tracking fails
         logger.warning(f"Failed to track LFS objects after merge: {e}")
+
+    await refresh_head_refs(repo_row, destination_branch, exact=True)
 
     return {
         "success": True,
@@ -987,6 +994,8 @@ async def reset_branch(
         except Exception as e:
             logger.exception(f"Failed to sync File table: {e}", e)
             logger.warning(f"Failed to sync File table: {e}")
+
+        await refresh_head_refs(repo_row, branch, exact=True)
 
         # Record reset commit in database
         try:

@@ -137,38 +137,42 @@ once for every repository, path and version with the same content. An object
 is kept while any of these holds:
 
 - it was uploaded, or linked by a commit, within the last 24 hours;
-- an active LFS file in **any** repository uses it;
+- the head of **any branch** of **any** repository links it (`lfs_head_ref`,
+  kept current by commits and branch operations);
+- an active file in any repository has this content;
 - an LFS history row references it. With `KOHAKU_HUB_LFS_AUTO_GC=true`, only
   while it is among the newest `keep_versions` unique versions of that
   repository path; with it off (the default) every version is kept.
 
+So `keep_versions` only decides how many *older* versions of a path stay for
+old commits; nothing a branch head links is ever collected. Versions only
+tags reference follow the keep window like any old commit.
+
 Nothing is deleted inside a request. Commits that push a version out of a
-path's window, repository deletion, lowering a repository's `keep_versions`,
-and uploads that were never committed record *candidates*; the
-`storage.collect_lfs` background task re-checks each one under a per-object
-lock and deletes the ones nothing relies on. A deleted object leaves a
-tombstone instead of losing its history rows, so the commit history, the
-recoverability check and quota know it is gone. A commit that links collected
-content is refused with `409` and the client uploads it again.
+path's window or stop linking it, deleted branches, repository deletion,
+lowering a repository's `keep_versions`, and uploads that were never
+committed record *candidates*; the `storage.collect_lfs` background task
+re-checks each one under a per-object lock and deletes the ones nothing
+relies on. A deleted object leaves a tombstone instead of losing its history
+rows, so the commit history, the recoverability check and quota know it is
+gone. A commit that links collected content is refused with `409` and the
+client uploads it again.
 
 ```yaml
 KOHAKU_HUB_LFS_AUTO_GC: true  # Collect versions beyond keep_versions
 ```
 
-Versions referenced only by tags or other branches are not pinned: with auto
-GC on, keep enough versions for them.
-
-**Upgrading an existing site.** Earlier versions could record LFS references
-that no keep window accounts for (`copyFile` from an older revision stored
-the source's current sha256; revert and reset derived the LFS flag from size
-rules). So with auto GC on, nothing is collected until the
+**Upgrading an existing site.** Earlier versions did not record what branch
+heads link, and could record LFS references wrongly (`copyFile` from an older
+revision stored the source's current sha256; revert and reset derived the LFS
+flag from size rules). So with auto GC on, nothing is collected until the
 `storage.reconcile_lfs_references` task has completed once: it records every
-LFS object the head of any branch links in its path's keep window, pins the
-ones a window cannot hold (a path with more distinct branch heads than
-`keep_versions`; pins last until the repository is deleted), and corrects the
-default branch's file rows. The first collection starts it automatically; admins can also
+LFS object the head of any branch links and corrects the default branch's
+file rows. The first collection starts it automatically; admins can also
 start it, and follow it, under **Storage → LFS reference reconciliation**.
-It only adds or corrects rows, so running it again is harmless.
+It only adds or corrects rows, so running it again changes nothing. If
+recording a branch operation's links ever fails, a reconciliation is queued
+and collection waits for it.
 
 ---
 

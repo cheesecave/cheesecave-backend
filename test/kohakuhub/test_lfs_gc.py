@@ -35,7 +35,7 @@ def m(prepared_backend_test_state):
         ns.db.BackgroundTask,
         ns.db.LfsGcCandidate,
         ns.db.LfsGcState,
-        ns.db.LfsHeadPin,
+        ns.db.LfsHeadRef,
         ns.db.LfsObjectTombstone,
         ns.db.LfsRecentObject,
     )
@@ -330,14 +330,15 @@ async def test_commits_collect_evicted_versions_and_keep_shared_content(
 
     for content in versions[:3]:
         assert (await _commit(owner_client, "demo-model", _lfs_op(content))).status_code == 200
-    assert _candidates(m) == {oids[0]}
+    # v0 left the keep window; v0 and v1 are no longer what main links
+    assert _candidates(m) == {oids[0], oids[1]}
     assert len(_queued(m, m.cleanup.COLLECT_LFS_KIND)) == 1
 
     # Version 0 is also the current content of another path: kept
     op = _lfs_op(versions[0], path="gc-test/copy.bin")
     assert (await _commit(owner_client, "demo-model", op)).status_code == 200
     assert (await _commit(owner_client, "demo-model", _lfs_op(versions[3]))).status_code == 200
-    assert _candidates(m) == {oids[0], oids[1]}
+    assert _candidates(m) == {oids[0], oids[1], oids[2]}
 
     _age_recent(m)  # the uploads' grace period is over
     m.gc.mark_references_reconciled()
@@ -452,18 +453,23 @@ def test_active_files_keep_content_whatever_their_lfs_flag(m):
         F.update(lfs=True).where(F.id == row.id).execute()
 
 
+def _refs(m, repo, branch=None):
+    R = m.db.LfsHeadRef
+    where = R.repository == repo
+    if branch:
+        where &= R.branch == branch
+    return set(R.select(R.branch, R.path_in_repo, R.sha256).where(where).tuples())
+
+
 def test_reconcile_references_adds_and_corrects_only_what_is_missing(m):
     repo = _repo(m)
-    repo.lfs_keep_versions = 2
     F = m.db.File
-    v = [_sha(f"h{i}") for i in range(4)]
-    a, b, c = _sha("three-a"), _sha("three-b"), _sha("three-c")
-    _history(m, repo, v)  # v3 and v2 are in the window, v1 and v0 are not
-    _history(m, repo, [a], path="gc-test/three.bin")
+    v = [_sha(f"h{i}") for i in range(3)]
+    m.gc.add_head_refs(repo, {("main", PATH, v[0])})  # recorded already
     wrong = F.create(
         repository=repo,
         path_in_repo="gc-test/copied.bin",
-        sha256=v[3],
+        sha256=v[0],
         size=1,
         lfs=True,
         owner=repo.owner_id,
@@ -477,14 +483,12 @@ def test_reconcile_references_adds_and_corrects_only_what_is_missing(m):
         owner=repo.owner_id,
     )
     heads = {
-        # main links v2 (in the window), dev still links v0: adding only v0
-        # would push v2 out, so both become the newest versions
-        PATH: {v[2]: (10, "main-head"), v[0]: (10, "dev-head")},
-        # three branches, three contents: a window of two cannot hold them
-        "gc-test/three.bin": {a: (10, "main-head"), b: (10, "dev-head"), c: (10, "rel-head")},
-        "gc-test/copied.bin": {v[1]: (10, "main-head")},  # copyFile of an older version
-        "gc-test/unflagged.bin": {v[2]: (10, "main-head")},
-        "gc-test/new.bin": {v[2]: (10, "main-head")},
+        ("main", PATH, v[0]),
+        ("dev", PATH, v[1]),  # an older version on another branch
+        ("release", PATH, v[2]),
+        ("main", "gc-test/copied.bin", v[1]),  # copyFile of an older version
+        ("main", "gc-test/unflagged.bin", v[2]),
+        ("main", "gc-test/new.bin", v[2]),
     }
     default_head = {
         "gc-test/copied.bin": (v[1], 10),
@@ -493,12 +497,11 @@ def test_reconcile_references_adds_and_corrects_only_what_is_missing(m):
     }
     try:
         assert m.gc.reconcile_references(repo, heads, default_head) == {
-            "history_added": 5,  # v2 and v0 on PATH, and the three paths without history
-            "pinned": 2,  # b and c; a is in its window
+            "head_refs_added": 5,
             "files_fixed": 3,
         }
-        assert set(m.gc._unique_versions(repo.id, PATH)[:2]) == {v[0], v[2]}
-        assert m.gc.retention_reason(b) == m.gc.retention_reason(c) == "pinned"
+        assert heads <= _refs(m, repo)
+        assert [m.gc.retention_reason(sha) for sha in v] == ["head"] * 3
         rows = {
             row.path_in_repo: (row.sha256, row.size, row.lfs, row.is_deleted)
             for row in F.select().where(F.path_in_repo.in_(list(default_head)))
@@ -510,17 +513,40 @@ def test_reconcile_references_adds_and_corrects_only_what_is_missing(m):
         }
         # Everything accounts now: running it again changes nothing
         assert m.gc.reconcile_references(repo, heads, default_head) == {
-            "history_added": 0,
-            "pinned": 0,
+            "head_refs_added": 0,
             "files_fixed": 0,
         }
-        # Pinned objects become candidates with their repository
+        # Linked objects become candidates with their repository
         m.cleanup.record_repository_lfs(repo)
-        assert {b, c} <= _candidates(m)
+        assert set(v) <= _candidates(m)
     finally:
         F.delete().where(
             F.id.in_([wrong.id, unflagged.id]) | (F.path_in_repo == "gc-test/new.bin")
         ).execute()
+
+
+def test_commits_and_branch_operations_keep_head_links_current(m, monkeypatch):
+    repo = _repo(m, "acme-labs/private-dataset", "dataset")  # links no LFS object yet
+    a, b, c = _sha("link-a"), _sha("link-b"), _sha("link-c")
+    monkeypatch.setattr(m.gc, "CANDIDATE_BATCH", 1)  # exercise the batching
+
+    assert m.gc.update_head_refs(repo, "main", {"x/1.bin": a, "x/2.bin": b, PATH: c}) == set()
+    assert m.gc.update_head_refs(repo, "dev", {"x/1.bin": a}) == set()
+    # A new version, a deletion and a regular file over an LFS path
+    released = m.gc.update_head_refs(repo, "main", {"x/1.bin": c, PATH: None}, ["x/"])
+    assert released == {a, b}  # c is still linked at x/1.bin
+    assert _refs(m, repo, "main") == {("main", "x/1.bin", c)}
+    assert _refs(m, repo, "dev") == {("dev", "x/1.bin", a)}  # other branches untouched
+    assert m.gc.update_head_refs(repo, "main", {}) == set()  # a commit without files
+
+    # A rewritten head (revert, merge, reset) and a deleted branch
+    assert m.gc.replace_head_refs(repo, "dev", {("dev", "y.bin", b)}) == {a}
+    assert m.gc.replace_head_refs(repo, "dev", set()) == {b}
+    assert m.gc.add_head_refs(repo, {("main", "x/1.bin", c)}) == 0
+    # A squashed repository keeps only main
+    m.gc.add_head_refs(repo, {("dev", "y.bin", b)})
+    assert m.gc.replace_head_refs(repo, None, {("main", "z.bin", a)}) == {b, c}
+    assert _refs(m, repo) == {("main", "z.bin", a)}
 
 
 async def test_collection_waits_for_the_reconciliation_with_auto_gc(m, monkeypatch):
@@ -576,12 +602,13 @@ async def test_branch_heads_are_listed_page_by_page(m, owner_client, monkeypatch
     heads, default_head, counts = await m.cleanup.branch_head_references(lakefs_repo)
 
     oid = hashlib.sha256(content).hexdigest()
-    assert list(heads["gc-test/dev.bin"]) == [oid]  # only on the dev branch
+    assert {(b, p) for b, p, sha in heads if sha == oid} == {("gc-dev", "gc-test/dev.bin")}
     assert "gc-test/dev.bin" not in default_head
     assert default_head[live.path_in_repo] == (live.sha256, live.size)
-    # main, gc-dev (main's objects plus dev.bin); zz-gc-same shares main's commit
+    # zz-gc-same shares main's commit: listed once, recorded for both
     assert counts["branches"] == 3
-    assert counts["lfs_references"] == 2 * len(default_head) + 1
+    assert {p for b, p, _ in heads if b == "zz-gc-same"} == set(default_head)
+    assert counts["lfs_references"] == len(heads) == 3 * len(default_head) + 1
     assert await m.cleanup.branch_head_references("m-gc-missing-0000") is None
 
 
@@ -602,9 +629,8 @@ async def test_branch_head_listing_surfaces_lakefs_errors(m, monkeypatch):
 
 async def test_the_reconciliation_converges_however_it_is_interrupted(m, owner_client):
     repo = _repo(m)
-    F, H = m.db.File, m.db.LFSObjectHistory
-    live = F.get((F.repository == repo) & (F.lfs == True))
-    baseline = {row.id for row in H.select(H.id)}
+    F, R = m.db.File, m.db.LfsHeadRef
+    live = F.get((F.repository == repo) & (F.path_in_repo == "weights/model.safetensors"))
     ghost = m.db.Repository.create(
         repo_type="model",
         namespace="owner",
@@ -615,15 +641,15 @@ async def test_the_reconciliation_converges_however_it_is_interrupted(m, owner_c
     )
 
     def reset():
-        # Data written by an earlier version: a wrong file row, no history
-        H.delete().where(H.id.not_in(baseline) | (H.sha256 == live.sha256)).execute()
+        # Data written by an earlier version: no head links, a wrong file row
+        R.delete().execute()
         F.update(sha256="0" * 64, lfs=False).where(F.id == live.id).execute()
         m.db.LfsGcState.delete().execute()
         m.db.BackgroundTask.delete().execute()
 
     def snapshot():
         return (
-            sorted((row.repository_id, row.path_in_repo, row.sha256) for row in H.select()),
+            sorted(R.select(R.repository, R.branch, R.path_in_repo, R.sha256).tuples()),
             F.get_by_id(live.id).sha256,
             F.get_by_id(live.id).lfs,
             m.gc.references_reconciled(),
@@ -634,18 +660,18 @@ async def test_the_reconciliation_converges_however_it_is_interrupted(m, owner_c
         points = await _live("kohakuhub.task_testing").run_with_interruptions(
             m.cleanup.reconcile_lfs_references, {}, reset=reset, snapshot=snapshot
         )
-        history, sha, lfs, reconciled, collections = snapshot()
+        refs, sha, lfs, reconciled, collections = snapshot()
         assert (sha, lfs, reconciled, collections) == (live.sha256, True, True, 1)
-        assert (repo.id, live.path_in_repo, live.sha256) in history
+        assert (repo.id, "main", live.path_in_repo, live.sha256) in refs
         assert points == 6 * m.db.Repository.select().count()  # stage, checkpoint, progress
 
         # Over data that already accounts, a run changes nothing
         ctx = RecordingContext()
         await m.cleanup.reconcile_lfs_references({}, ctx)
         stats = ctx.checkpoint_state["stats"]
-        assert (stats["history_added"], stats["files_fixed"]) == (0, 0)
+        assert (stats["head_refs_added"], stats["files_fixed"]) == (0, 0)
         assert stats["repositories_without_lakefs"] == 1
-        assert snapshot()[0] == history
+        assert snapshot()[0] == refs
 
         cancelled = RecordingContext()
         cancelled.cancel_requested = True
@@ -653,7 +679,6 @@ async def test_the_reconciliation_converges_however_it_is_interrupted(m, owner_c
             await m.cleanup.reconcile_lfs_references({}, cancelled)
     finally:
         ghost.delete_instance()
-        H.delete().where(H.id.not_in(baseline)).execute()
         F.update(sha256=live.sha256, lfs=True).where(F.id == live.id).execute()
 
 
@@ -704,3 +729,82 @@ async def test_copying_an_older_version_records_what_is_linked(m, owner_client):
     assert (row.sha256, row.lfs) == (oid, True)  # not the source's current version
     assert H.select().where((H.path_in_repo == "gc-test/copy.bin") & (H.sha256 == oid)).exists()
     assert m.gc.retention_reason(oid) == "recent"  # claimed like a linked upload
+
+
+async def test_a_branch_head_survives_main_moving_on(m, owner_client, monkeypatch):
+    """The upgrade run's failure: keep windows alone let main's new versions
+    push out what an idle branch still links."""
+    monkeypatch.setattr(m.cfg.app, "lfs_auto_gc", True)
+    repo = _repo(m)
+    repo.lfs_keep_versions = 2
+    repo.save()
+    versions = [f"gc branch v{i}".encode() for i in range(5)]
+    oids = [_put(m, content) for content in versions]
+    assert (await _commit(owner_client, "demo-model", _lfs_op(versions[0]))).status_code == 200
+    await _branch(owner_client, "gc-idle")
+    assert ("gc-idle", PATH, oids[0]) in _refs(m, repo, "gc-idle")
+    for content in versions[1:4]:
+        assert (await _commit(owner_client, "demo-model", _lfs_op(content))).status_code == 200
+
+    _age_recent(m)
+    m.gc.mark_references_reconciled()
+    await m.cleanup.collect_lfs({}, RecordingContext())
+    # v0: gc-idle's head; v1: nothing links it and it left the window
+    assert [_stored(m, oid) for oid in oids[:4]] == [True, False, True, True]
+    assert m.gc.retention_reason(oids[0]) == "head"
+
+    # Deleting the branch releases what only it linked
+    response = await owner_client.delete("/api/models/owner/demo-model/branch/gc-idle")
+    assert response.status_code == 200
+    assert _refs(m, repo, "gc-idle") == set()
+    assert oids[0] in _candidates(m)
+    await m.cleanup.collect_lfs({}, RecordingContext())
+    assert not _stored(m, oids[0])
+
+
+async def test_head_link_failures_queue_a_reconciliation_that_collection_waits_for(m, monkeypatch):
+    repo = _repo(m)
+    kind = m.cleanup.RECONCILE_LFS_KIND
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("database unavailable")
+
+    async def unreachable(*args, **kwargs):
+        raise RuntimeError("lakefs unavailable")
+
+    m.gc.mark_references_reconciled()  # reconciled once before
+    monkeypatch.setattr(m.gc, "update_head_refs", broken)
+    monkeypatch.setattr(m.gc, "replace_head_refs", broken)
+    monkeypatch.setattr(m.cleanup, "lfs_links", unreachable)
+    m.cleanup.record_head_change(repo, "main", {PATH: None}, [])
+    m.cleanup.forget_branch(repo, "gone")
+    await m.cleanup.refresh_head_refs(repo, "main", exact=True)
+    assert len(_queued(m, kind)) == 1  # deduplicated
+
+    # Reconciled once before, but a reconciliation is pending: nothing goes
+    monkeypatch.setattr(m.cfg.app, "lfs_auto_gc", True)
+    orphan = _sha("pending")
+    m.gc.record_candidates([orphan])
+    await m.cleanup.collect_lfs({}, RecordingContext())
+    assert _candidates(m) == {orphan}
+
+
+async def test_a_rewritten_head_replaces_what_the_branch_links(m, owner_client):
+    repo = _repo(m)
+    stale = _sha("stale-link")
+    m.gc.add_head_refs(repo, {("main", "gc-test/gone.bin", stale), ("gc-old", PATH, stale)})
+    live = m.db.File.get(
+        (m.db.File.repository == repo) & (m.db.File.path_in_repo == "weights/model.safetensors")
+    )
+
+    # After a revert, merge or reset: main's links are what its head links now
+    await m.cleanup.refresh_head_refs(repo, "main", exact=True)
+    assert ("main", live.path_in_repo, live.sha256) in _refs(m, repo, "main")
+    assert ("main", "gc-test/gone.bin", stale) not in _refs(m, repo)
+    assert ("gc-old", PATH, stale) in _refs(m, repo)  # another branch: untouched
+    assert m.gc.retention_reason(stale) == "head"  # a candidate, but gc-old links it
+
+    # After a squash only main is left
+    await m.cleanup.refresh_head_refs(repo, "main", exact=True, whole_repository=True)
+    assert {branch for branch, _, _ in _refs(m, repo)} == {"main"}
+    assert stale in _candidates(m) and m.gc.retention_reason(stale) is None

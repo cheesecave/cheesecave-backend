@@ -20,7 +20,7 @@ from kohakuhub.db import (
     BackgroundWorker,
     LfsGcCandidate,
     LfsGcState,
-    LfsHeadPin,
+    LfsHeadRef,
     LfsObjectTombstone,
     LfsRecentObject,
     db,
@@ -35,7 +35,7 @@ TABLES = (
     "lfs_gc_candidate",
     "lfs_object_tombstone",
     "lfs_recent_object",
-    "lfs_head_pin",
+    "lfs_head_ref",
     "lfs_gc_state",
 )
 MODELS = [
@@ -46,11 +46,11 @@ MODELS = [
     LfsGcCandidate,
     LfsObjectTombstone,
     LfsRecentObject,
-    LfsHeadPin,
+    LfsHeadRef,
     LfsGcState,
 ]
 DROP_ALL = (
-    'DROP TABLE IF EXISTS "lfs_gc_state", "lfs_head_pin", "lfs_recent_object", "lfs_object_tombstone", "lfs_gc_candidate", '
+    'DROP TABLE IF EXISTS "lfs_gc_state", "lfs_head_ref", "lfs_recent_object", "lfs_object_tombstone", "lfs_gc_candidate", '
     '"background_worker", "background_task_log", '
     '"background_task_event", "background_task"'
 )

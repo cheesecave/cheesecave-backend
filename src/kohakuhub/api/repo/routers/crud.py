@@ -53,7 +53,7 @@ from kohakuhub.api.quota.util import (
     update_repository_storage,
 )
 from kohakuhub.api.repo.utils.gc import cleanup_repository_storage
-from kohakuhub.storage_cleanup import record_repository_lfs
+from kohakuhub.storage_cleanup import record_repository_lfs, refresh_head_refs
 from kohakuhub.api.fallback.cache import get_cache as get_fallback_cache
 from kohakuhub.api.validation import normalize_name
 from kohakuhub.api.operation_capabilities import (
@@ -1316,6 +1316,8 @@ async def squash_repo(
         # Storage might have changed after clearing history
         final_repo = get_repository(repo_type, namespace, name)
         if final_repo:
+            # The squashed repository has only main left
+            await refresh_head_refs(final_repo, "main", exact=True, whole_repository=True)
             logger.info(f"Recalculating storage for squashed repository {repo_id}")
             try:
                 await update_repository_storage(final_repo)

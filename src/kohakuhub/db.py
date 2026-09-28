@@ -631,22 +631,24 @@ class LfsRecentObject(BaseModel):
         table_name = "lfs_recent_object"
 
 
-class LfsHeadPin(BaseModel):
-    """An LFS object a branch head linked that its path's keep window cannot
-    hold (more distinct branch heads than the repository keeps versions).
+class LfsHeadRef(BaseModel):
+    """An LFS object the head of a branch links at a path.
 
-    Written by the LFS reference reconciliation and kept until the repository
-    is deleted; garbage collection keeps pinned objects.
+    Garbage collection never deletes an object a branch head links; keep
+    windows only decide how many older versions stay. Commits and branch
+    operations keep these rows current, and the LFS reference reconciliation
+    adds what earlier versions never recorded (see ``kohakuhub.lfs_gc``).
     """
 
     repository = ForeignKeyField(Repository, on_delete="CASCADE", index=True)
+    branch = CharField()
     path_in_repo = CharField()
     sha256 = CharField(max_length=64, index=True)
     created_at = DateTimeField(default=utcnow)
 
     class Meta:
-        table_name = "lfs_head_pin"
-        indexes = ((("repository", "path_in_repo", "sha256"), True),)
+        table_name = "lfs_head_ref"
+        indexes = ((("repository", "branch", "path_in_repo", "sha256"), True),)
 
 
 class LfsGcState(BaseModel):
@@ -728,7 +730,7 @@ def init_db():
             LfsGcCandidate,
             LfsObjectTombstone,
             LfsRecentObject,
-            LfsHeadPin,
+            LfsHeadRef,
             LfsGcState,
         ],
         safe=True,
