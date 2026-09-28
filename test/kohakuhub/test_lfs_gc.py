@@ -482,6 +482,26 @@ def test_reconcile_references_adds_and_corrects_only_what_is_missing(m):
         lfs=False,
         owner=repo.owner_id,
     )
+    # A regular file an earlier folder deletion marked deleted by case mistake
+    mislabeled = F.create(
+        repository=repo,
+        path_in_repo="gc-test/Notes.txt",
+        sha256="blob",
+        size=3,
+        lfs=False,
+        is_deleted=True,
+        owner=repo.owner_id,
+    )
+    gone = F.create(
+        repository=repo,
+        path_in_repo="gc-test/gone.txt",
+        sha256="blob",
+        size=3,
+        lfs=False,
+        is_deleted=True,
+        owner=repo.owner_id,
+    )
+    default_paths = {"gc-test/Notes.txt", "gc-test/copied.bin", "gc-test/unflagged.bin"}
     heads = {
         ("main", PATH, v[0]),
         ("dev", PATH, v[1]),  # an older version on another branch
@@ -496,10 +516,14 @@ def test_reconcile_references_adds_and_corrects_only_what_is_missing(m):
         "gc-test/new.bin": (v[2], 10),
     }
     try:
-        assert m.gc.reconcile_references(repo, heads, default_head) == {
+        assert m.gc.reconcile_references(repo, heads, default_head, default_paths) == {
             "head_refs_added": 5,
-            "files_fixed": 3,
+            "files_fixed": 4,  # three LFS rows, and Notes.txt restored
         }
+        assert (F.get_by_id(mislabeled.id).is_deleted, F.get_by_id(gone.id).is_deleted) == (
+            False,
+            True,  # really deleted: left alone
+        )
         assert heads <= _refs(m, repo)
         assert [m.gc.retention_reason(sha) for sha in v] == ["head"] * 3
         rows = {
@@ -512,7 +536,7 @@ def test_reconcile_references_adds_and_corrects_only_what_is_missing(m):
             "gc-test/new.bin": (v[2], 10, True, False),
         }
         # Everything accounts now: running it again changes nothing
-        assert m.gc.reconcile_references(repo, heads, default_head) == {
+        assert m.gc.reconcile_references(repo, heads, default_head, default_paths) == {
             "head_refs_added": 0,
             "files_fixed": 0,
         }
@@ -521,7 +545,8 @@ def test_reconcile_references_adds_and_corrects_only_what_is_missing(m):
         assert set(v) <= _candidates(m)
     finally:
         F.delete().where(
-            F.id.in_([wrong.id, unflagged.id]) | (F.path_in_repo == "gc-test/new.bin")
+            F.id.in_([wrong.id, unflagged.id, mislabeled.id, gone.id])
+            | (F.path_in_repo == "gc-test/new.bin")
         ).execute()
 
 
@@ -604,7 +629,8 @@ async def test_branch_heads_are_listed_page_by_page(m, owner_client, monkeypatch
     monkeypatch.setattr(m.cleanup, "LAKEFS_LIST_PAGE", 1)
     lakefs_repo = _live("kohakuhub.utils.lakefs").resolve_lakefs_repo(_repo(m))
 
-    heads, default_head, counts = await m.cleanup.branch_head_references(lakefs_repo)
+    heads, default_head, default_paths, counts = await m.cleanup.branch_head_references(lakefs_repo)
+    assert set(default_head) <= default_paths and "README.md" in default_paths
 
     oid = hashlib.sha256(content).hexdigest()
     assert {(b, p) for b, p, sha in heads if sha == oid} == {("gc-dev", "gc-test/dev.bin")}
@@ -819,3 +845,40 @@ async def test_a_rewritten_head_replaces_what_the_branch_links(m, owner_client):
     await m.cleanup.refresh_head_refs(repo, "main", exact=True, whole_repository=True)
     assert {branch for branch, _, _ in _refs(m, repo)} == {"main"}
     assert stale in _candidates(m) and m.gc.retention_reason(stale) is None
+
+
+async def test_deleting_a_folder_leaves_folders_differing_only_in_case(m, owner_client):
+    content = b"gc case payload"
+    oid = _put(m, content)
+    files = [
+        _lfs_op(content, path="gc-case/Data/model.bin"),
+        {
+            "key": "file",
+            "value": {"path": "gc-case/data/scratch.txt", "content": "dG1w", "encoding": "base64"},
+        },
+    ]
+    response = await owner_client.post(
+        "/api/models/owner/demo-model/commit/main",
+        content=encode_ndjson([{"key": "header", "value": {"summary": "two folders"}}, *files]),
+        headers={"Content-Type": "application/x-ndjson"},
+    )
+    assert response.status_code == 200
+    delete = {"key": "deletedFolder", "value": {"path": "gc-case/data"}}
+    assert (await _commit(owner_client, "demo-model", delete)).status_code == 200
+
+    F = m.db.File
+    rows = {
+        row.path_in_repo: row.is_deleted
+        for row in F.select().where(F.path_in_repo.startswith("gc-case/"))
+    }
+    assert rows == {"gc-case/Data/model.bin": False, "gc-case/data/scratch.txt": True}
+    assert ("main", "gc-case/Data/model.bin", oid) in _refs(m, _repo(m), "main")
+    batch = await owner_client.post(
+        "/models/owner/demo-model.git/info/lfs/objects/batch",
+        json={"operation": "download", "objects": [{"oid": oid, "size": len(content)}]},
+    )
+    assert "download" in batch.json()["objects"][0]["actions"]
+    tree = (await owner_client.get("/api/models/owner/demo-model/tree/main/gc-case/Data")).json()
+    assert [(item["path"], item["lfs"]["oid"]) for item in tree] == [
+        ("gc-case/Data/model.bin", oid)
+    ]

@@ -562,14 +562,21 @@ async def process_deleted_folder(
 
         logger.success(f"Deleted {len(deleted_files)} files from folder {folder_path}")
 
-        # Mark as deleted in database (soft delete)
+        # Mark as deleted in database (soft delete). startswith is ILIKE, so
+        # narrow in SQL and match the prefix case-sensitively like LakeFS did:
+        # deleting data/ must not mark Data/ deleted.
         if deleted_files:
-            updated_count = (
-                File.update(is_deleted=True, updated_at=datetime.now(timezone.utc))
-                .where(
+            ids = [
+                row.id
+                for row in File.select(File.id, File.path_in_repo).where(
                     (File.repository == repo)
                     & (File.path_in_repo.startswith(folder_path))
                 )
+                if row.path_in_repo.startswith(folder_path)
+            ]
+            updated_count = (
+                File.update(is_deleted=True, updated_at=datetime.now(timezone.utc))
+                .where(File.id.in_(ids))
                 .execute()
             )
             logger.success(

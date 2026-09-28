@@ -188,11 +188,20 @@ def add_head_refs(repo: Repository, refs: Iterable[tuple[str, str, str]]) -> int
     replaced, is left as it is (an extra row only keeps an object longer).
     """
     R = LfsHeadRef
-    existing = set(R.select(R.branch, R.path_in_repo, R.sha256).where(_head_refs(repo)).tuples())
+    refs = set(refs)
+    paths = sorted({path for _, path, _ in refs})
+    # Look up only the paths involved, so a commit costs what it changes
+    existing = {
+        row
+        for start in range(0, len(paths), CANDIDATE_BATCH)
+        for row in R.select(R.branch, R.path_in_repo, R.sha256)
+        .where(_head_refs(repo) & R.path_in_repo.in_(paths[start : start + CANDIDATE_BATCH]))
+        .tuples()
+    }
     now = utcnow()
     rows = [
         {"repository": repo.id, "branch": b, "path_in_repo": p, "sha256": s, "created_at": now}
-        for b, p, s in sorted(set(refs) - existing)
+        for b, p, s in sorted(refs - existing)
     ]
     for start in range(0, len(rows), CANDIDATE_BATCH):
         R.insert_many(rows[start : start + CANDIDATE_BATCH]).on_conflict_ignore().execute()
@@ -263,6 +272,7 @@ def reconcile_references(
     repo: Repository,
     heads: set[tuple[str, str, str]],
     default_head: dict[str, tuple[str, int]],
+    default_paths: Iterable[str] = (),
 ) -> dict[str, int]:
     """Make the database account for the LFS objects ``repo``'s branches link.
 
@@ -276,10 +286,21 @@ def reconcile_references(
       content, whatever the keep windows say;
     - the default branch's file rows get the linked sha256, size and LFS
       flag (``copyFile`` recorded the source's current sha256, revert and
-      reset derived the flag from size rules).
+      reset derived the flag from size rules);
+    - a file row marked deleted while its path is on the default branch
+      head (``default_paths``, every object there) is active again: deleting
+      a folder also marked folders differing only in case deleted.
 
     Returns counts of what it added or corrected.
     """
+    default_paths = set(default_paths)
+    restored = [
+        row.id
+        for row in File.select(File.id, File.path_in_repo).where(
+            (File.repository == repo) & (File.is_deleted == True)
+        )
+        if row.path_in_repo in default_paths and row.path_in_repo not in default_head
+    ]
     files = {
         row.path_in_repo: row
         for start in range(0, len(default_head), CANDIDATE_BATCH)
@@ -310,7 +331,11 @@ def reconcile_references(
             else:
                 continue
             fixed += 1
-    return {"head_refs_added": added, "files_fixed": fixed}
+        for start in range(0, len(restored), CANDIDATE_BATCH):
+            File.update(is_deleted=False, updated_at=now).where(
+                File.id.in_(restored[start : start + CANDIDATE_BATCH])
+            ).execute()
+    return {"head_refs_added": added, "files_fixed": fixed + len(restored)}
 
 
 def record_candidates(shas: Iterable[str]) -> int:

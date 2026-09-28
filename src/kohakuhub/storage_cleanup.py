@@ -310,8 +310,11 @@ async def _pages(fetch):
         after = pagination["next_offset"]
 
 
-async def lfs_links(lakefs_repo: str, ref: str, counts: Counter | None = None) -> dict:
-    """``{path: (sha256, size)}`` for every global LFS object ``ref`` links."""
+async def lfs_links(
+    lakefs_repo: str, ref: str, counts: Counter | None = None, paths: set | None = None
+) -> dict:
+    """``{path: (sha256, size)}`` for every global LFS object ``ref`` links;
+    every object's path is added to ``paths`` when given."""
     client = get_lakefs_client()
     links = {}
     # Without a delimiter the listing holds objects only, recursively.
@@ -326,6 +329,8 @@ async def lfs_links(lakefs_repo: str, ref: str, counts: Counter | None = None) -
     for obj in objects:
         if counts is not None:
             counts["objects"] += 1
+        if paths is not None:
+            paths.add(obj["path"])
         oid = lfs_gc.lfs_oid(obj.get("physical_address"))
         if oid is not None:
             links[obj["path"]] = (oid, obj.get("size_bytes", 0))
@@ -335,7 +340,7 @@ async def lfs_links(lakefs_repo: str, ref: str, counts: Counter | None = None) -
 async def branch_head_references(lakefs_repo: str):
     """The LFS objects the heads of a LakeFS repository's branches link.
 
-    Returns ``(heads, default_head, counts)`` in the shape
+    Returns ``(heads, default_head, default_paths, counts)`` in the shape
     ``lfs_gc.reconcile_references`` takes, or ``None`` when the LakeFS
     repository does not exist.
     """
@@ -349,7 +354,8 @@ async def branch_head_references(lakefs_repo: str):
     heads: set[tuple[str, str, str]] = set()
     default_head: dict[str, tuple[str, int]] = {}
     counts = Counter()
-    listed: dict[str, dict] = {}
+    listed: dict[str, tuple[dict, set]] = {}
+    default_paths: set[str] = set()
     branches = [
         branch
         async for branch in _pages(
@@ -360,13 +366,14 @@ async def branch_head_references(lakefs_repo: str):
         counts["branches"] += 1
         commit_id = branch["commit_id"]
         if commit_id not in listed:  # branches at the same commit link the same objects
-            listed[commit_id] = await lfs_links(lakefs_repo, commit_id, counts)
-        links = listed[commit_id]
+            paths: set[str] = set()
+            listed[commit_id] = (await lfs_links(lakefs_repo, commit_id, counts, paths), paths)
+        links, paths = listed[commit_id]
         heads.update((branch["id"], path, sha) for path, (sha, _) in links.items())
         if branch["id"] == default_branch:
-            default_head = links
+            default_head, default_paths = links, paths
     counts["lfs_references"] = len(heads)
-    return heads, default_head, counts
+    return heads, default_head, default_paths, counts
 
 
 async def refresh_head_refs(
@@ -446,9 +453,9 @@ async def reconcile_lfs_references(payload: dict[str, Any], ctx: tasks.TaskConte
         if found is None:
             stats["repositories_without_lakefs"] += 1
         else:
-            heads, default_head, counts = found
+            heads, default_head, default_paths, counts = found
             stats.update(counts)
-            stats.update(lfs_gc.reconcile_references(repo, heads, default_head))
+            stats.update(lfs_gc.reconcile_references(repo, heads, default_head, default_paths))
         stats["repositories"] += 1
         done += 1
         ctx.checkpoint({"after": repo.id, "stats": dict(stats)})
