@@ -779,6 +779,17 @@ async def test_a_branch_head_survives_main_moving_on(m, owner_client, monkeypatc
     oids = [_put(m, content) for content in versions]
     assert (await _commit(owner_client, "demo-model", _lfs_op(versions[0]))).status_code == 200
     await _branch(owner_client, "gc-idle")
+    # Recorded in the background; collection waits for it meanwhile
+    assert _refs(m, repo, "gc-idle") == set()
+    orphan = _sha("waits-for-the-branch")
+    m.gc.record_candidates([orphan])
+    m.gc.mark_references_reconciled()
+    await m.cleanup.collect_lfs({}, RecordingContext())
+    assert orphan in _candidates(m)
+    B = m.db.BackgroundTask
+    (task,) = B.select().where(B.kind == m.cleanup.RECORD_BRANCH_KIND)
+    await m.cleanup.record_branch_links(json.loads(task.payload), RecordingContext())
+    task.delete_instance()
     assert ("gc-idle", PATH, oids[0]) in _refs(m, repo, "gc-idle")
     for content in versions[1:4]:
         assert (await _commit(owner_client, "demo-model", _lfs_op(content))).status_code == 200
@@ -824,6 +835,11 @@ async def test_head_link_failures_queue_a_reconciliation_that_collection_waits_f
     m.gc.record_candidates([orphan])
     await m.cleanup.collect_lfs({}, RecordingContext())
     assert _candidates(m) == {orphan}
+    # ...and comes back later rather than relying on the task that is
+    # recording the links, which may be finishing right now
+    B = m.db.BackgroundTask
+    (retry,) = B.select().where((B.kind == m.cleanup.COLLECT_LFS_KIND) & (B.status == "queued"))
+    assert retry.run_after > m.db.utcnow()
 
 
 async def test_a_rewritten_head_replaces_what_the_branch_links(m, owner_client):
@@ -882,3 +898,18 @@ async def test_deleting_a_folder_leaves_folders_differing_only_in_case(m, owner_
     assert [(item["path"], item["lfs"]["oid"]) for item in tree] == [
         ("gc-case/Data/model.bin", oid)
     ]
+
+
+async def test_a_deleted_branch_releases_its_links_in_two_statements(m):
+    repo = _repo(m, "acme-labs/private-dataset", "dataset")
+    a, b = _sha("drop-a"), _sha("drop-b")
+    m.gc.add_head_refs(repo, {("gone", "x.bin", a), ("gone", "y.bin", a), ("gone", "z.bin", b)})
+    m.gc.add_head_refs(repo, {("kept", "x.bin", a)})
+    assert m.gc.drop_head_refs(repo, "gone") == 3
+    assert _refs(m, repo) == {("kept", "x.bin", a)}
+    assert {a, b} <= _candidates(m)
+    assert m.gc.retention_reason(a) == "head" and m.gc.retention_reason(b) is None
+    assert m.gc.drop_head_refs(repo, "never-existed") == 0
+
+    # The branch-links task of a repository deleted since does nothing
+    await m.cleanup.record_branch_links({"repo_id": -1, "branch": "x"}, RecordingContext())

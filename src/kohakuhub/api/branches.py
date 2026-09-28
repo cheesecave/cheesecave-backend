@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from kohakuhub.db import Repository, User
 from kohakuhub.db_operations import create_commit, get_repository
 from kohakuhub.logger import get_logger
-from kohakuhub.storage_cleanup import forget_branch, refresh_head_refs
+from kohakuhub.storage_cleanup import enqueue_branch_links, forget_branch, refresh_head_refs
 from kohakuhub.auth.dependencies import get_current_user, get_optional_user
 from kohakuhub.auth.permissions import (
     check_repo_delete_permission,
@@ -124,7 +124,7 @@ async def create_branch(
 
         return hf_server_error(f"Failed to create branch: {error_msg}")
 
-    await refresh_head_refs(repo_row, payload.branch, exact=False)
+    enqueue_branch_links(repo_row, payload.branch)
     return {"success": True, "message": f"Branch '{payload.branch}' created"}
 
 

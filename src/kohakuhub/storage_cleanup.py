@@ -43,6 +43,7 @@ from kohakuhub.db import (
     LfsGcCandidate,
     LfsHeadRef,
     Repository,
+    utcnow,
 )
 from kohakuhub.lfs_gc import lfs_key, record_candidates
 from kohakuhub.logger import get_logger
@@ -56,6 +57,8 @@ COLLECT_LFS_KIND = "storage.collect_lfs"
 EXPIRE_RECENT_LFS_KIND = "storage.expire_recent_lfs"
 REVIEW_LFS_WINDOW_KIND = "storage.review_lfs_window"
 RECONCILE_LFS_KIND = "storage.reconcile_lfs_references"
+RECORD_BRANCH_KIND = "storage.record_branch_links"
+RETRY_GATE = timedelta(seconds=30)
 S3_DELETE_BATCH = 1000  # the S3 DeleteObjects maximum
 LFS_BATCH = 500
 LAKEFS_LIST_PAGE = 1000
@@ -95,17 +98,21 @@ def enqueue_lfs_reconciliation() -> int | None:
 
 
 def _reconciliation_pending() -> bool:
-    """A reconciliation queued since the last one completed (after a failure
+    """Links not recorded yet: a new branch's (``storage.record_branch_links``),
+    or a reconciliation queued since the last one completed (after a failure
     to record head links). The one completing, which enqueues the
     collection while still running, predates its own mark and does not count.
     """
     T = BackgroundTask
+    pending = T.status.in_([tasks.QUEUED, tasks.RUNNING])
     return (
         T.select()
         .where(
-            (T.kind == RECONCILE_LFS_KIND)
-            & T.status.in_([tasks.QUEUED, tasks.RUNNING])
-            & (T.created_at > lfs_gc.reconciled_since())
+            pending
+            & (
+                (T.kind == RECORD_BRANCH_KIND)
+                | ((T.kind == RECONCILE_LFS_KIND) & (T.created_at > lfs_gc.reconciled_since()))
+            )
         )
         .exists()
     )
@@ -245,11 +252,19 @@ async def collect_lfs(payload: dict[str, Any], ctx: tasks.TaskContext) -> None:
     storage and their tombstones completed. Candidates are consumed only
     after that, so an interrupted run simply continues with what is left.
     """
-    if cfg.app.lfs_auto_gc and (not lfs_gc.references_reconciled() or _reconciliation_pending()):
+    if cfg.app.lfs_auto_gc and not lfs_gc.references_reconciled():
         # Keep windows decide deletions only once what every branch head
         # links is recorded; the reconciliation enqueues this task when done.
         enqueue_lfs_reconciliation()
         logger.warning("Waiting for the LFS reference reconciliation before collecting")
+        return
+    if cfg.app.lfs_auto_gc and _reconciliation_pending():
+        # Come back once the missing links are recorded; retrying later, not
+        # relying on the task recording them, which may still be finishing
+        tasks.enqueue(
+            COLLECT_LFS_KIND, dedupe_key=COLLECT_LFS_KIND, run_after=utcnow() + RETRY_GATE
+        )
+        logger.info("Waiting for LFS links to be recorded before collecting")
         return
     C = LfsGcCandidate
     total = C.select().count()
@@ -415,10 +430,36 @@ def record_head_change(
         enqueue_lfs_reconciliation()
 
 
+def enqueue_branch_links(repo: Repository, branch: str) -> int | None:
+    """Record a new branch's links in the background (``record_branch_links``).
+
+    Listing a big head takes time the branch creation should not wait for;
+    collection waits for it instead.
+    """
+    return tasks.enqueue(
+        RECORD_BRANCH_KIND,
+        {"repo_id": repo.id, "branch": branch},
+        dedupe_key=f"branch-links:{repo.id}:{branch}",
+    )
+
+
+@tasks.task(RECORD_BRANCH_KIND, timeout=3600, max_attempts=5)
+async def record_branch_links(payload: dict[str, Any], ctx: tasks.TaskContext) -> None:
+    """Record what a new branch's head links (only adds: its commits since
+    may already be recording their own), then let the collection run."""
+    repo = Repository.get_or_none(Repository.id == payload["repo_id"])
+    if repo is None:
+        return  # deleted since; its objects were recorded then
+    ctx.stage(f"listing {repo.full_id}@{payload['branch']}")
+    await refresh_head_refs(repo, payload["branch"], exact=False)
+    enqueue_lfs_collection()
+
+
 def forget_branch(repo: Repository, branch: str) -> None:
     """A deleted branch links nothing any more."""
     try:
-        release_objects(lfs_gc.replace_head_refs(repo, branch, set()))
+        if lfs_gc.drop_head_refs(repo, branch):
+            enqueue_lfs_collection()
     except Exception as e:
         logger.warning(f"Could not forget the LFS links of {repo.full_id}@{branch}: {e}")
         enqueue_lfs_reconciliation()

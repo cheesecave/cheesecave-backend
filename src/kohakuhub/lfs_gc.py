@@ -31,7 +31,7 @@ import re
 from collections.abc import Iterable
 from datetime import datetime, timedelta, timezone
 
-from peewee import PostgresqlDatabase
+from peewee import PostgresqlDatabase, fn
 
 from kohakuhub.config import cfg
 from kohakuhub.db import (
@@ -248,6 +248,18 @@ def update_head_refs(
             R.delete().where(R.id.in_(ids[start : start + CANDIDATE_BATCH])).execute()
         add_head_refs(repo, ((branch, path, sha) for path, sha in new))
     return {sha for _, _, sha in rows} - {sha for _, sha in new}
+
+
+def drop_head_refs(repo: Repository, branch: str) -> int:
+    """Forget a deleted branch's links, handing them to the collection as
+    candidates, in two statements whatever the branch holds. Returns how
+    many links it forgot."""
+    R, C = LfsHeadRef, LfsGcCandidate
+    where = _head_refs(repo, branch)
+    with _database().atomic():
+        released = R.select(R.sha256, fn.MIN(R.created_at)).where(where).group_by(R.sha256)
+        C.insert_from(released, [C.sha256, C.created_at]).on_conflict_ignore().execute()
+        return R.delete().where(where).execute()
 
 
 def replace_head_refs(

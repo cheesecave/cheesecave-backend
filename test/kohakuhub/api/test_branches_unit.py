@@ -117,6 +117,10 @@ async def test_create_branch_and_tag_routes_cover_success_and_error_paths(monkey
     monkeypatch.setattr(branches_api, "check_repo_delete_permission", lambda repo_arg, user_arg: None)
     monkeypatch.setattr(branches_api, "resolve_lakefs_repo", lambda repo: f"{repo.repo_type}:{repo.full_id}")
     monkeypatch.setattr(branches_api, "get_lakefs_client", lambda: client)
+    recorded = []
+    monkeypatch.setattr(
+        branches_api, "enqueue_branch_links", lambda repo_arg, branch: recorded.append(branch)
+    )
 
     create_branch_response = await branches_api.create_branch(
         "model",
@@ -152,6 +156,8 @@ async def test_create_branch_and_tag_routes_cover_success_and_error_paths(monkey
     assert create_branch_response["success"] is True
     assert create_tag_response["success"] is True
     assert compat_branch_response["success"] is True
+    # Both creations record the new branch's LFS links in the background
+    assert len(recorded) == 2 and recorded[0] == "feature"
     assert compat_tag_response["success"] is True
     assert ("create_branch", {"repository": "model:owner/repo", "name": "feature", "source": "branch-head"}) in client.calls
     assert ("create_tag", {"repository": "model:owner/repo", "id": "v1", "ref": "branch-head"}) in client.calls
