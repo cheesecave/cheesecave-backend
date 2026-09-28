@@ -36,7 +36,14 @@ import httpx
 from kohakuhub import lfs_gc, tasks
 from kohakuhub.async_utils import run_in_s3_executor
 from kohakuhub.config import cfg
-from kohakuhub.db import BackgroundTask, File, LFSObjectHistory, LfsGcCandidate, Repository
+from kohakuhub.db import (
+    BackgroundTask,
+    File,
+    LFSObjectHistory,
+    LfsGcCandidate,
+    LfsHeadPin,
+    Repository,
+)
 from kohakuhub.lfs_gc import lfs_key, record_candidates
 from kohakuhub.logger import get_logger
 from kohakuhub.utils.lakefs import get_lakefs_client, resolve_lakefs_repo
@@ -98,7 +105,7 @@ def record_repository_lfs(repo: Repository) -> int:
     """Record every LFS object ``repo`` used as a collection candidate.
 
     Call it in the transaction that deletes the row: the cascade removes the
-    file and history rows read here, and the candidates must not be decided
+    file, history and pin rows read here, and the candidates must not be decided
     before the row is gone. Returns how many objects were recorded.
     """
     shas = {
@@ -111,6 +118,12 @@ def record_repository_lfs(repo: Repository) -> int:
         sha
         for (sha,) in LFSObjectHistory.select(LFSObjectHistory.sha256)
         .where(LFSObjectHistory.repository == repo)
+        .tuples()
+    )
+    shas.update(
+        sha
+        for (sha,) in LfsHeadPin.select(LfsHeadPin.sha256)
+        .where(LfsHeadPin.repository == repo)
         .tuples()
     )
     if shas:

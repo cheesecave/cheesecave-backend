@@ -35,6 +35,7 @@ def m(prepared_backend_test_state):
         ns.db.BackgroundTask,
         ns.db.LfsGcCandidate,
         ns.db.LfsGcState,
+        ns.db.LfsHeadPin,
         ns.db.LfsObjectTombstone,
         ns.db.LfsRecentObject,
     )
@@ -456,7 +457,9 @@ def test_reconcile_references_adds_and_corrects_only_what_is_missing(m):
     repo.lfs_keep_versions = 2
     F = m.db.File
     v = [_sha(f"h{i}") for i in range(4)]
+    a, b, c = _sha("three-a"), _sha("three-b"), _sha("three-c")
     _history(m, repo, v)  # v3 and v2 are in the window, v1 and v0 are not
+    _history(m, repo, [a], path="gc-test/three.bin")
     wrong = F.create(
         repository=repo,
         path_in_repo="gc-test/copied.bin",
@@ -474,7 +477,11 @@ def test_reconcile_references_adds_and_corrects_only_what_is_missing(m):
         owner=repo.owner_id,
     )
     heads = {
-        PATH: {v[3]: (10, "main-head"), v[0]: (10, "dev-head")},  # dev still links v0
+        # main links v2 (in the window), dev still links v0: adding only v0
+        # would push v2 out, so both become the newest versions
+        PATH: {v[2]: (10, "main-head"), v[0]: (10, "dev-head")},
+        # three branches, three contents: a window of two cannot hold them
+        "gc-test/three.bin": {a: (10, "main-head"), b: (10, "dev-head"), c: (10, "rel-head")},
         "gc-test/copied.bin": {v[1]: (10, "main-head")},  # copyFile of an older version
         "gc-test/unflagged.bin": {v[2]: (10, "main-head")},
         "gc-test/new.bin": {v[2]: (10, "main-head")},
@@ -486,11 +493,12 @@ def test_reconcile_references_adds_and_corrects_only_what_is_missing(m):
     }
     try:
         assert m.gc.reconcile_references(repo, heads, default_head) == {
-            "history_added": 4,  # v0 on PATH, and the three paths without history
+            "history_added": 5,  # v2 and v0 on PATH, and the three paths without history
+            "pinned": 2,  # b and c; a is in its window
             "files_fixed": 3,
         }
-        assert m.gc.evicted_versions(repo, PATH) == [v[3], v[2], v[1]][1:]  # v0 is newest now
-        assert m.gc._unique_versions(repo.id, PATH)[:2] == [v[0], v[3]]
+        assert set(m.gc._unique_versions(repo.id, PATH)[:2]) == {v[0], v[2]}
+        assert m.gc.retention_reason(b) == m.gc.retention_reason(c) == "pinned"
         rows = {
             row.path_in_repo: (row.sha256, row.size, row.lfs, row.is_deleted)
             for row in F.select().where(F.path_in_repo.in_(list(default_head)))
@@ -503,8 +511,12 @@ def test_reconcile_references_adds_and_corrects_only_what_is_missing(m):
         # Everything accounts now: running it again changes nothing
         assert m.gc.reconcile_references(repo, heads, default_head) == {
             "history_added": 0,
+            "pinned": 0,
             "files_fixed": 0,
         }
+        # Pinned objects become candidates with their repository
+        m.cleanup.record_repository_lfs(repo)
+        assert {b, c} <= _candidates(m)
     finally:
         F.delete().where(
             F.id.in_([wrong.id, unflagged.id]) | (F.path_in_repo == "gc-test/new.bin")

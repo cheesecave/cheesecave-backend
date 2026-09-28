@@ -163,8 +163,10 @@ that no keep window accounts for (`copyFile` from an older revision stored
 the source's current sha256; revert and reset derived the LFS flag from size
 rules). So with auto GC on, nothing is collected until the
 `storage.reconcile_lfs_references` task has completed once: it records every
-LFS object the head of any branch links and corrects the default branch's
-file rows. The first collection starts it automatically; admins can also
+LFS object the head of any branch links in its path's keep window, pins the
+ones a window cannot hold (a path with more distinct branch heads than
+`keep_versions`; pins last until the repository is deleted), and corrects the
+default branch's file rows. The first collection starts it automatically; admins can also
 start it, and follow it, under **Storage → LFS reference reconciliation**.
 It only adds or corrects rows, so running it again is harmless.
 

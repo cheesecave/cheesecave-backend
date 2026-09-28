@@ -38,6 +38,7 @@ from kohakuhub.db import (
     LFSObjectHistory,
     LfsGcCandidate,
     LfsGcState,
+    LfsHeadPin,
     LfsObjectTombstone,
     LfsRecentObject,
     Repository,
@@ -115,6 +116,8 @@ def retention_reason(sha256: str, now: datetime | None = None) -> str | None:
 
     - ``recent``: uploaded or claimed by a commit within ``RECENT_GRACE``;
     - ``file``: an active file in any repository has this content;
+    - ``pinned``: a branch head linked it where a keep window could not hold
+      it (see ``reconcile_references``);
     - ``history``: a history row references it. With ``lfs_auto_gc`` on,
       only while it is among the newest ``keep_versions`` unique versions
       of that repository path; with it off every version is kept.
@@ -128,6 +131,8 @@ def retention_reason(sha256: str, now: datetime | None = None) -> str | None:
     # and reset recompute the flag from size rules that may have changed.
     if File.select().where((File.sha256 == sha256) & (File.is_deleted == False)).exists():
         return "file"
+    if LfsHeadPin.select().where(LfsHeadPin.sha256 == sha256).exists():
+        return "pinned"
     H = LFSObjectHistory
     references = list(
         H.select(H.repository, H.path_in_repo).where(H.sha256 == sha256).distinct().tuples()
@@ -177,9 +182,12 @@ def reconcile_references(
     corrects rows, never deletes, and changes nothing when everything already
     accounts (running it again is a no-op):
 
-    - a linked object not among its path's newest ``keep_versions`` unique
-      versions gets a history row at the head commit, which makes it the
-      newest, so no keep window can evict what a branch head links;
+    - a path whose branch heads link objects its keep window (the newest
+      ``keep_versions`` unique versions) does not hold gets a history row
+      for every object its heads link, at the head commits: together they
+      become the newest versions, so none pushes another head out; when a
+      path has more distinct heads than versions kept, the ones the window
+      cannot hold are pinned instead (``lfs_head_pin``);
     - the default branch's file rows get the linked sha256, size and LFS
       flag (``copyFile`` recorded the source's current sha256, revert and
       reset derived the flag from size rules).
@@ -199,21 +207,36 @@ def reconcile_references(
         seen = versions.setdefault(path, [])
         if sha not in seen:
             seen.append(sha)
+    pinned = set(
+        LfsHeadPin.select(LfsHeadPin.path_in_repo, LfsHeadPin.sha256)
+        .where(LfsHeadPin.repository == repo)
+        .tuples()
+    )
     keep = keep_versions(repo)
     now = datetime.now(timezone.utc)  # like the history and file rows' defaults
-    history = [
-        {
-            "repository": repo.id,
-            "path_in_repo": path,
-            "sha256": sha,
-            "size": size,
-            "commit_id": commit_id,
-            "created_at": now,
-        }
-        for path, linked in sorted(heads.items())
-        for sha, (size, commit_id) in sorted(linked.items())
-        if sha not in versions.get(path, [])[:keep]
-    ]
+    history, pins = [], []
+    for path, linked in sorted(heads.items()):
+        window = versions.get(path, [])[:keep]
+        if all(sha in window or (path, sha) in pinned for sha in linked):
+            continue
+        if len(linked) <= keep:
+            history += [
+                {
+                    "repository": repo.id,
+                    "path_in_repo": path,
+                    "sha256": sha,
+                    "size": size,
+                    "commit_id": commit_id,
+                    "created_at": now,
+                }
+                for sha, (size, commit_id) in sorted(linked.items())
+            ]
+        else:
+            pins += [
+                {"repository": repo.id, "path_in_repo": path, "sha256": sha, "created_at": utcnow()}
+                for sha in sorted(linked)
+                if sha not in window and (path, sha) not in pinned
+            ]
     files = {
         row.path_in_repo: row
         for start in range(0, len(default_head), CANDIDATE_BATCH)
@@ -226,6 +249,8 @@ def reconcile_references(
     with _database().atomic():
         for start in range(0, len(history), CANDIDATE_BATCH):
             H.insert_many(history[start : start + CANDIDATE_BATCH]).execute()
+        for start in range(0, len(pins), CANDIDATE_BATCH):
+            LfsHeadPin.insert_many(pins[start : start + CANDIDATE_BATCH]).execute()
         for path, (sha, size) in sorted(default_head.items()):
             row = files.get(path)
             if row is None:
@@ -238,13 +263,13 @@ def reconcile_references(
                     owner=repo.owner_id,
                 )
             elif (row.sha256, row.size, row.lfs, row.is_deleted) != (sha, size, True, False):
-                File.update(sha256=sha, size=size, lfs=True, is_deleted=False, updated_at=now).where(
-                    File.id == row.id
-                ).execute()
+                File.update(
+                    sha256=sha, size=size, lfs=True, is_deleted=False, updated_at=now
+                ).where(File.id == row.id).execute()
             else:
                 continue
             fixed += 1
-    return {"history_added": len(history), "files_fixed": fixed}
+    return {"history_added": len(history), "pinned": len(pins), "files_fixed": fixed}
 
 
 def record_candidates(shas: Iterable[str]) -> int:
