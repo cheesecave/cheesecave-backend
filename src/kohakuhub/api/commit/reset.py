@@ -5,7 +5,9 @@ No file content passes through this service: LFS files link their global
 store, and files the target lacks are deleted in batches. The tree is built on
 a scratch branch and squash-merged onto the branch in one step, so readers
 never see a half-done reset. The result must equal the target exactly: when a
-concurrent commit got in, the reset runs again from the new head (#99).
+concurrent commit got in, the reset runs again from the new head (#99);
+where the concurrent commit changed the same paths, the merge takes the
+target's version, so only paths the reset did not touch need another round.
 
 The database is brought up to date before the request returns, from what the
 branch holds for the paths the reset changed; the versions it replaced are
@@ -172,6 +174,9 @@ async def _merge(
                     message=message,
                     metadata=metadata,
                     squash_merge=True,
+                    # A path a concurrent commit changed too takes the
+                    # target's version: the reset is to equal the target
+                    strategy="source-wins",
                 )
                 return merged["reference"]
             except httpx.HTTPStatusError as e:

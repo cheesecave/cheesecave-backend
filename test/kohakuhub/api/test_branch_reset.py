@@ -245,12 +245,9 @@ async def test_a_concurrent_commit_is_reset_too(m, owner_client, monkeypatch):
     concurrent commits stay in the history."""
     repo, (initial, c1, c2, c3, c4, c5) = await _linear(m, owner_client, "reset-race")
     merge = m.rest.LakeFSRestClient.merge_into_branch
-    commits = iter(
-        [
-            (lfs("a.bin", b"a v9"),),  # the same path: a conflict, then again
-            (_file("late.txt", "late"),),  # another path: merges, then reset again
-        ]
-    )
+    # a.bin: the same path, whose target version wins the merge; late.txt:
+    # another path, merged alongside, so the reset runs once more
+    commits = iter([(lfs("a.bin", b"a v9"), _file("late.txt", "late"))])
     concurrent = []
 
     async def racing_merge(self, *args, **kwargs):
@@ -277,19 +274,21 @@ async def test_a_concurrent_commit_is_reset_too(m, owner_client, monkeypatch):
 
 
 async def test_a_branch_that_keeps_moving_gives_up(m, owner_client, monkeypatch):
+    """Conflicts LakeFS cannot settle every time: nothing merged, 409."""
     repo, (initial, c1, *_rest) = await _linear(m, owner_client, "reset-moving")
-    merge = m.rest.LakeFSRestClient.merge_into_branch
-    counter = iter(range(100))
 
-    async def racing_merge(self, *args, **kwargs):
-        await repo.commit(lfs("a.bin", f"a racing {next(counter)}".encode()))
-        return await merge(self, *args, **kwargs)
+    async def conflict(self, *args, **kwargs):
+        request = httpx.Request("POST", "http://lakefs")
+        response = httpx.Response(409, request=request, text="conflict")
+        raise httpx.HTTPStatusError("conflict", request=request, response=response)
 
-    monkeypatch.setattr(m.rest.LakeFSRestClient, "merge_into_branch", racing_merge)
+    monkeypatch.setattr(m.rest.LakeFSRestClient, "merge_into_branch", conflict)
+    head = await repo.head()
     response = await _reset(repo, c1)
     assert response.status_code == 409
     detail = response.json()["detail"]
     assert "kept changing" in detail["error"] and detail["commits"] == []
+    assert await repo.head() == head
     assert _scratch_branches(await m.client.list_branches(repo.lakefs_repo)) == []
 
 
@@ -301,15 +300,15 @@ async def test_giving_up_after_a_merge_still_records_it(m, owner_client, monkeyp
     counter = iter(range(100))
 
     async def racing_merge(self, *args, **kwargs):
-        # late.txt: merged alongside the first time, a conflict every time after
-        await repo.commit(_file("late.txt", f"late {next(counter)}"))
+        # A new file before every merge: merged alongside, so never the target
+        await repo.commit(_file(f"late{next(counter)}.txt", "late"))
         return await merge(self, *args, **kwargs)
 
     monkeypatch.setattr(m.rest.LakeFSRestClient, "merge_into_branch", racing_merge)
     response = await _reset(repo, c1)
     assert response.status_code == 409
     detail = response.json()["detail"]
-    assert len(detail["commits"]) == 1 and "reset commit" in detail["error"]
+    assert len(detail["commits"]) == 3 and "reset commit" in detail["error"]
     made = await m.client.get_commit(repository=repo.lakefs_repo, commit_id=detail["commits"][0])
     assert made["metadata"]["reset_to"] == c1
     assert _head_refs(m, repo) == {("a.bin", sha(b"a v1"))}
@@ -601,12 +600,13 @@ async def test_giving_up_records_what_the_branch_holds(m, owner_client, monkeypa
     counter = iter(range(100))
 
     async def racing_merge(self, *args, **kwargs):
+        # A new file before every merge keeps the reset going; right after it,
+        # a.bin, which the reset changed, changes again
         n = next(counter)
-        if n == 0:
-            await repo.commit(_file("late.txt", "late"))  # merged alongside
-        else:
-            await repo.commit(lfs("a.bin", f"a racing {n}".encode()))
-        return await merge(self, *args, **kwargs)
+        await repo.commit(_file(f"late{n}.txt", "late"))
+        merged = await merge(self, *args, **kwargs)
+        await repo.commit(lfs("a.bin", f"a racing {n}".encode()))
+        return merged
 
     monkeypatch.setattr(m.rest.LakeFSRestClient, "merge_into_branch", racing_merge)
     response = await _reset(repo, c1)
