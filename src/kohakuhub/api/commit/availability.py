@@ -367,15 +367,21 @@ def _collected_versions(repo: Repository) -> dict[str, set[str]]:
     return versions
 
 
-async def _links_collected(client, lakefs_repo, ref, versions, budget: Budget) -> list[str]:
-    """The paths where ``ref`` links a tombstoned version (raises past the budget)."""
-    paths = sorted(versions)
-    linked = await entries(client, lakefs_repo, ref, paths, budget)
-    return [
+async def _links_collected(client, lakefs_repo, ref, versions, budget, head_links) -> list[str]:
+    """The paths where ``ref`` links a tombstoned version the head does not
+    link there too (raises past the budget)."""
+    linked = await _linked(client, lakefs_repo, ref, versions, budget)
+    return sorted(
         path
-        for path, entry in linked.items()
-        if entry is not None and lfs_oid(entry.get("physical_address")) in versions[path]
-    ]
+        for path, oid in linked.items()
+        if oid in versions[path] and head_links.get(path) != oid
+    )
+
+
+async def _linked(client, lakefs_repo, ref, versions, budget: Budget) -> dict[str, str]:
+    """``ref``'s LFS object at each of ``versions``' paths."""
+    linked = await entries(client, lakefs_repo, ref, sorted(versions), budget)
+    return {path: lfs_oid(e.get("physical_address")) for path, e in linked.items() if e}
 
 
 async def quick_verdicts(
@@ -389,16 +395,22 @@ async def quick_verdicts(
     only within ``QUICK_BUDGET``:
 
     - resetting to ``C`` needs every object ``C`` links that the head does
-      not; the head's own objects are never collected, so ``C`` linking a
-      tombstoned version proves the reset impossible;
+      not, so ``C`` linking a tombstoned version the head does not link
+      at that path proves the reset impossible;
     - reverting ``C`` restores its parent's versions of the paths it
-      changed; a tombstoned one among them is either needed or differs from
-      the head (a conflict): impossible either way.
+      changed; a tombstoned one among them the head does not link there is
+      either needed or differs from the head (a conflict): impossible
+      either way.
+
+    The head's own objects are normally never collected, but a revert,
+    merge or reset can link one without claiming it, so where the head
+    links a tombstoned version is read rather than assumed.
 
     Conflicts need the full check, so a revert is otherwise unknown.
     """
     versions = _collected_versions(repo)
     budget = Budget(QUICK_BUDGET)
+    head_links = None
     results = {}
     for commit in commits:
         revert, reset = UNKNOWN, UNKNOWN
@@ -407,9 +419,11 @@ async def quick_verdicts(
         if commit["id"] == head:
             reset = verdict("already_current", "reset")
         try:
+            if versions and head_links is None:
+                head_links = await _linked(client, lakefs_repo, head, versions, budget)
             if versions and reset is UNKNOWN:
                 missing = await _links_collected(
-                    client, lakefs_repo, commit["id"], versions, budget
+                    client, lakefs_repo, commit["id"], versions, budget, head_links
                 )
                 if missing:
                     reset = verdict("lfs_missing", "reset", missing_lfs=missing)
@@ -420,7 +434,9 @@ async def quick_verdicts(
                     await changed_paths(client, lakefs_repo, parent, commit["id"], budget)
                 )
                 own = {p: v for p, v in versions.items() if p in changed}
-                missing = own and await _links_collected(client, lakefs_repo, parent, own, budget)
+                missing = own and await _links_collected(
+                    client, lakefs_repo, parent, own, budget, head_links
+                )
                 if missing:
                     revert = verdict("lfs_missing", "revert", missing_lfs=missing)
         except OutOfBudget:

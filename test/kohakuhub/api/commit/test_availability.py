@@ -646,3 +646,23 @@ async def test_the_diff_survives_the_bucket_failing(m, owner_client, monkeypatch
         "unknown",
         "collected",
     )
+
+
+async def test_the_list_proves_nothing_from_an_object_the_head_links(m, owner_client):
+    """An object the head links unclaimed (after a revert, merge or reset) can
+    be collected; where the head links it too, nothing needs it."""
+    repo, (initial, c1, c2, c3, c4, c5) = await _linear(m, owner_client, "avail-list-head")
+    c6 = await repo.commit(lfs("b.bin", b"b v2"))
+    c7 = await repo.commit(lfs("b.bin", b"b v1"))
+    m.db.LfsObjectTombstone.create(sha256=hashlib.sha256(b"b v1").hexdigest(), state=m.gc.DELETED)
+    quick = (await repo.quick([c3, c4, c6])).json()["commits"]
+    # Resetting to c3 or c4 leaves b.bin as it is; reverting c6 finds it
+    # undone (so it changes nothing, but needs no stored object either)
+    for commit, op in ((c3, "reset"), (c4, "reset"), (c6, "revert")):
+        assert quick[commit][op]["available"] is None, (commit, op, quick[commit][op])
+        exact = (await repo.preflight(commit)).json()[op]
+        assert exact.get("reason") != "lfs_missing", (commit, op, exact)
+    # A version the head does not link still proves it
+    m.db.LfsObjectTombstone.create(sha256=hashlib.sha256(b"b v2").hexdigest(), state=m.gc.DELETED)
+    quick = (await repo.quick([c6])).json()["commits"]
+    assert quick[c6]["reset"]["reason"] == "lfs_missing"
