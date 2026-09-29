@@ -709,6 +709,19 @@
                         {{ commit.id.slice(0, 7) }}
                       </div>
                       <el-tooltip
+                        v-if="commitUnavailableFiles[commit.id]"
+                        :content="filesUnavailableMessage(commit.id)"
+                        placement="top"
+                      >
+                        <el-tag
+                          size="small"
+                          type="danger"
+                          effect="plain"
+                          :data-testid="`commit-files-unavailable-${commit.id}`"
+                          >Files unavailable</el-tag
+                        >
+                      </el-tooltip>
+                      <el-tooltip
                         v-for="badge in unavailableOperations(commit.id)"
                         :key="badge.op"
                         :content="badge.message"
@@ -1035,6 +1048,9 @@ const commitsHasMore = ref(false);
 const commitOperationVerdicts = ref({});
 const commitOperationCaps = ref(null);
 const OPERATION_BADGES = { revert: "Can't revert", reset: "Can't reset" };
+// Files whose version a commit introduced that garbage collection removed
+const commitUnavailableFiles = ref({});
+const SHOWN_FILES = 20;
 const commitsNextCursor = ref(null);
 const filesLoading = ref(true);
 // Classified tree / readme errors (utils/http-errors.js shape). A
@@ -1810,6 +1826,30 @@ function unavailableOperations(commitId) {
     .map(([op, label]) => ({ op, label, message: verdicts[op].message }));
 }
 
+function filesUnavailableMessage(commitId) {
+  const paths = commitUnavailableFiles.value[commitId];
+  const shown = paths.slice(0, SHOWN_FILES).join(", ");
+  const more = paths.length > SHOWN_FILES ? ` and ${paths.length - SHOWN_FILES} more` : "";
+  return `Versions this commit added are no longer stored (garbage collected): ${shown}${more}.`;
+}
+
+async function loadUnavailableFiles(page) {
+  try {
+    const { data } = await repoAPI.getCommitsUnavailableFiles(
+      props.repoType,
+      props.namespace,
+      props.name,
+      page.map((commit) => commit.id),
+    );
+    commitUnavailableFiles.value = {
+      ...commitUnavailableFiles.value,
+      ...data.commits,
+    };
+  } catch (err) {
+    console.warn("Failed to check which commits lost files:", err);
+  }
+}
+
 async function loadCommitVerdicts(page) {
   try {
     if (commitOperationCaps.value === null) {
@@ -1849,6 +1889,7 @@ async function loadCommits() {
 
     commits.value = data.commits || [];
     loadCommitVerdicts(commits.value);
+    loadUnavailableFiles(commits.value);
     commitsHasMore.value = data.hasMore || false;
     commitsNextCursor.value = data.nextCursor || null;
   } catch (err) {
@@ -1874,6 +1915,7 @@ async function loadMoreCommits() {
 
     commits.value.push(...(data.commits || []));
     loadCommitVerdicts(data.commits);
+    loadUnavailableFiles(data.commits);
     commitsHasMore.value = data.hasMore || false;
     commitsNextCursor.value = data.nextCursor || null;
   } catch (err) {

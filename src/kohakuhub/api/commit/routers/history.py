@@ -16,6 +16,7 @@ from kohakuhub.logger import get_logger
 from kohakuhub.auth.dependencies import get_optional_user
 from kohakuhub.auth.permissions import check_repo_read_permission
 from kohakuhub.utils.lakefs import resolve_lakefs_repo
+from kohakuhub.api.commit.availability import mark_lfs_statuses
 from kohakuhub.api.repo.utils.hf import (
     format_hf_datetime,
     hf_repo_not_found,
@@ -361,6 +362,7 @@ async def get_commit_diff(
                     obj_stat = await client.stat_object(
                         repository=lakefs_repo, ref=commit_id, path=path
                     )
+                    file_info["_address"] = obj_stat.get("physical_address")
                     current_size = obj_stat.get("size_bytes")
                     checksum = obj_stat.get("checksum", "")
                     if checksum and ":" in checksum:
@@ -376,6 +378,7 @@ async def get_commit_diff(
                     parent_obj_stat = await client.stat_object(
                         repository=lakefs_repo, ref=parent_id, path=path
                     )
+                    file_info["_previous_address"] = parent_obj_stat.get("physical_address")
                     previous_size = parent_obj_stat.get("size_bytes")
                     checksum = parent_obj_stat.get("checksum", "")
                     if checksum and ":" in checksum:
@@ -483,6 +486,8 @@ async def get_commit_diff(
         files = await asyncio.gather(
             *[process_diff_entry(entry) for entry in diff_results]
         )
+        # Whether each LFS version is still stored (#116)
+        await mark_lfs_statuses(files)
 
         # Get our commit record for user info using repository FK
         our_commit = get_commit(commit_id, repo_row)

@@ -19,7 +19,7 @@ const mocks = vi.hoisted(() => ({
     revertBranch: vi.fn(),
     resetBranch: vi.fn(),
   },
-  repoAPI: { getCommitOperations: vi.fn() },
+  repoAPI: { getCommitOperations: vi.fn(), getCommitUnavailableFiles: vi.fn() },
 }));
 
 vi.mock("vue-router/auto", () => ({
@@ -41,12 +41,18 @@ const TooltipStub = {
     '<div class="tooltip" :data-content="content" :data-disabled="String(disabled)"><slot /></div>',
 };
 
+// Renders the title slot, where the file tags are
+const CollapseItemStub = {
+  template: '<div class="collapse-item"><slot name="title" /><slot /></div>',
+};
+
 function mountPage() {
   return mount(CommitPage, {
     global: {
       stubs: {
         ...ElementPlusStubs,
         ElTooltip: TooltipStub,
+        ElCollapseItem: CollapseItemStub,
         RouterLink: RouterLinkStub,
       },
     },
@@ -89,6 +95,9 @@ describe("commit page operation checks", () => {
             },
       }),
     );
+    mocks.repoAPI.getCommitUnavailableFiles.mockResolvedValue({
+      data: { files: [] },
+    });
     mocks.settingsAPI.getSiteConfig.mockResolvedValue({
       data: {
         capabilities: {
@@ -228,5 +237,101 @@ describe("commit page operation checks", () => {
     await flushPromises();
     expect(mocks.repoAPI.getCommitOperations).not.toHaveBeenCalled();
     expect(wrapper.find('[data-testid="revert-action"]').exists()).toBe(false);
+  });
+
+  it("lists every file of the commit that is no longer stored", async () => {
+    mocks.repoAPI.getCommitOperations.mockResolvedValue(
+      checks({ available: true, files: 1 }, { available: true, files: 1 }),
+    );
+    mocks.repoAPI.getCommitUnavailableFiles.mockResolvedValue({
+      data: {
+        files: [
+          { path: "weights.bin", sha256: "a".repeat(64) },
+          { path: "extra/old.bin", sha256: "b".repeat(64) },
+        ],
+      },
+    });
+    axios.get.mockImplementation((url) =>
+      Promise.resolve({
+        data: url.endsWith("/diff")
+          ? {
+              files: [
+                {
+                  path: "weights.bin",
+                  type: "changed",
+                  is_lfs: true,
+                  lfs_status: "collected",
+                  previous_lfs_status: "missing",
+                },
+                {
+                  path: "tokenizer.bin",
+                  type: "added",
+                  is_lfs: true,
+                  lfs_status: "available",
+                },
+              ],
+            }
+          : {
+              commit_id: "commit-1",
+              message: "A commit",
+              author: "owner",
+              date: 1,
+            },
+      }),
+    );
+    const wrapper = mountPage();
+    await flushPromises();
+
+    expect(mocks.repoAPI.getCommitUnavailableFiles).toHaveBeenCalledWith(
+      "model",
+      "owner",
+      "demo",
+      "commit-1",
+      "main",
+    );
+    const panel = wrapper.get('[data-testid="unavailable-files"]');
+    expect(panel.text()).toContain(
+      "2 file(s) of this commit are no longer stored",
+    );
+    expect(panel.text()).toContain("extra/old.bin");
+    const marks = wrapper
+      .findAll('[data-testid="file-unavailable-weights.bin"]')
+      .map((tag) => [
+        tag.text(),
+        tag.element.parentElement.getAttribute("data-content"),
+      ]);
+    expect(marks).toEqual([
+      ["Unavailable", "This version is no longer stored: garbage collected."],
+      [
+        "Previous version unavailable",
+        "The version before this commit is no longer stored: missing from storage.",
+      ],
+    ]);
+    expect(
+      wrapper.find('[data-testid="file-unavailable-tokenizer.bin"]').exists(),
+    ).toBe(false);
+  });
+
+  it("shows no list when nothing is lost or it cannot be told", async () => {
+    mocks.repoAPI.getCommitOperations.mockResolvedValue(
+      checks({ available: true, files: 1 }, { available: true, files: 1 }),
+    );
+    mocks.repoAPI.getCommitUnavailableFiles.mockResolvedValue({
+      data: { files: null, reason: "too_large" },
+    });
+    let wrapper = mountPage();
+    await flushPromises();
+    expect(wrapper.find('[data-testid="unavailable-files"]').exists()).toBe(
+      false,
+    );
+
+    mocks.repoAPI.getCommitUnavailableFiles.mockRejectedValue(
+      new Error("offline"),
+    );
+    wrapper = mountPage();
+    await flushPromises();
+    expect(wrapper.find('[data-testid="unavailable-files"]').exists()).toBe(
+      false,
+    );
   });
 });

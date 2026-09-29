@@ -40,6 +40,7 @@ PAGE = 1000  # LakeFS listing maximum
 STAT_CONCURRENCY = 16
 LISTING_THRESHOLD = 200  # more paths than this: list the ref instead of one stat each
 EXACT_PATHS = 20_000  # changed paths an exact check reads before giving up
+STORAGE_CHECK_LIMIT = 400  # LFS objects a commit's diff asks the bucket about
 QUICK_BUDGET = 400  # LakeFS calls one list page may spend proving LFS objects missing
 # (charged as made: a stat per path, or a page when a whole ref is listed)
 SHOWN_PATHS = 20
@@ -185,13 +186,16 @@ def _stored(s3, oid: str) -> bool:
         return False
 
 
-async def missing_lfs(needed: dict[str, dict]) -> list[str]:
-    """Paths whose LFS object is gone: tombstoned, or not in the bucket."""
-    oids = {path: lfs_oid(entry.get("physical_address")) for path, entry in needed.items()}
-    oids = {path: oid for path, oid in oids.items() if oid}
-    collected = deleted_shas(oids.values())
-    missing = {path for path, oid in oids.items() if oid in collected}
-    rest = sorted({oid for path, oid in oids.items() if path not in missing})
+async def lfs_statuses(oids, check_storage: bool = True) -> dict[str, str]:
+    """Each LFS object's state: ``collected`` (garbage collection tombstoned
+    it), ``missing`` (the bucket no longer holds it), ``available``, or
+    ``unknown`` when the bucket was not asked."""
+    oids = set(oids)
+    collected = deleted_shas(oids)
+    status = {oid: "collected" for oid in collected}
+    rest = sorted(oids - collected)
+    if not check_storage:
+        return {**status, **{oid: "unknown" for oid in rest}}
     if rest:
         # One client for the batch: creating one per request costs more than the request
         s3 = await run_in_s3_executor(get_s3_client)
@@ -201,9 +205,74 @@ async def missing_lfs(needed: dict[str, dict]) -> list[str]:
             async with limit:
                 return await run_in_s3_executor(_stored, s3, oid)
 
-        present = dict(zip(rest, await asyncio.gather(*(stored(oid) for oid in rest))))
-        missing |= {path for path, oid in oids.items() if not present.get(oid, True)}
-    return sorted(missing)
+        present = await asyncio.gather(*(stored(oid) for oid in rest))
+        status.update({oid: "available" if here else "missing" for oid, here in zip(rest, present)})
+    return status
+
+
+async def missing_lfs(needed: dict[str, dict]) -> list[str]:
+    """Paths whose LFS object is gone: tombstoned, or not in the bucket."""
+    oids = {path: lfs_oid(entry.get("physical_address")) for path, entry in needed.items()}
+    oids = {path: oid for path, oid in oids.items() if oid}
+    status = await lfs_statuses(oids.values())
+    return sorted(path for path, oid in oids.items() if status[oid] != "available")
+
+
+async def mark_lfs_statuses(files: list[dict]) -> None:
+    """Set ``lfs_status`` / ``previous_lfs_status`` on a commit diff's files,
+    from the ``_address`` / ``_previous_address`` its stats found (dropped).
+
+    The bucket is only asked for up to ``STORAGE_CHECK_LIMIT`` objects; past
+    that, anything not tombstoned is ``unknown``.
+    """
+    targets: dict[str, list[tuple[dict, str]]] = {}
+    for file in files:
+        for key, field in (
+            ("_address", "lfs_status"),
+            ("_previous_address", "previous_lfs_status"),
+        ):
+            oid = lfs_oid(file.pop(key, None))
+            if oid:
+                targets.setdefault(oid, []).append((file, field))
+    status = await lfs_statuses(targets, check_storage=len(targets) <= STORAGE_CHECK_LIMIT)
+    for oid, marks in targets.items():
+        for file, field in marks:
+            file[field] = status[oid]
+
+
+async def unavailable_files(client, lakefs_repo: str, commit_id: str, head: str) -> list | None:
+    """Every LFS file of ``commit_id``'s tree that garbage collection removed.
+
+    Only paths differing from the branch head can be: an object any branch
+    head links is never collected (``lfs_head_ref``). Tombstones only, so it
+    is cheap enough for every reader; ``None`` past ``EXACT_PATHS``.
+    """
+    try:
+        paths = await changed_paths(client, lakefs_repo, head, commit_id, limit=EXACT_PATHS)
+    except OutOfBudget:
+        return None
+    target = await entries(client, lakefs_repo, commit_id, paths)
+    oids = {p: lfs_oid(e.get("physical_address")) for p, e in target.items() if e is not None}
+    oids = {p: oid for p, oid in oids.items() if oid}
+    collected = deleted_shas(oids.values())
+    return [{"path": p, "sha256": oid} for p, oid in sorted(oids.items()) if oid in collected]
+
+
+def introduced_unavailable(repo: Repository, commit_ids: list[str]) -> dict[str, list[str]]:
+    """The paths whose version each commit introduced garbage collection removed.
+
+    One query over the LFS history, whatever the history's length.
+    """
+    H, T = LFSObjectHistory, LfsObjectTombstone
+    found: dict[str, set[str]] = {}
+    for commit_id, path in (
+        H.select(H.commit_id, H.path_in_repo)
+        .join(T, on=(H.sha256 == T.sha256))
+        .where((H.repository == repo) & H.commit_id.in_(commit_ids))
+        .tuples()
+    ):
+        found.setdefault(commit_id, set()).add(path)
+    return {commit_id: sorted(paths) for commit_id, paths in found.items()}
 
 
 async def revert_verdict(client, lakefs_repo: str, commit: dict, head: str) -> dict:

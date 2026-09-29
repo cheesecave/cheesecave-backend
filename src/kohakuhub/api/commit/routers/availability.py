@@ -149,3 +149,51 @@ async def commits_operations(
             if not caps[op]:
                 commit_verdicts[op] = availability.verdict("disabled", op)
     return {**response, "commits": verdicts}
+
+
+@router.get("/{repo_type}s/{namespace}/{name}/commit/{commit_id}/unavailable-files")
+async def commit_unavailable_files(
+    repo_type: str,
+    namespace: str,
+    name: str,
+    commit_id: str,
+    branch: str = "main",
+    user: User | None = Depends(get_optional_user),
+):
+    """Every LFS file of the commit's tree that garbage collection removed.
+
+    For every reader: tombstones only, no bucket requests. ``files`` is
+    ``None`` when the commit differs from the branch in too many paths.
+    """
+    repo = get_repository(repo_type, namespace, name)
+    if not repo:
+        return hf_repo_not_found(f"{namespace}/{name}", repo_type)
+    check_repo_read_permission(repo, user)
+    lakefs_repo = resolve_lakefs_repo(repo)
+    client = get_lakefs_client()
+    head = await _branch_head(client, lakefs_repo, branch)
+    commit = await _commit(client, lakefs_repo, commit_id)
+    if commit is None:
+        raise HTTPException(404, detail={"error": f"Commit not found: {commit_id}"})
+    files = await availability.unavailable_files(client, lakefs_repo, commit["id"], head)
+    response = {"commit": commit["id"], "branch": branch, "files": files}
+    if files is None:
+        response["reason"] = "too_large"
+    return response
+
+
+@router.post("/{repo_type}s/{namespace}/{name}/commits/unavailable-files")
+async def commits_unavailable_files(
+    repo_type: str,
+    namespace: str,
+    name: str,
+    payload: CommitIds,
+    user: User | None = Depends(get_optional_user),
+):
+    """For a commit list page: the files whose version each commit introduced
+    that garbage collection removed. One database query, for every reader."""
+    repo = get_repository(repo_type, namespace, name)
+    if not repo:
+        return hf_repo_not_found(f"{namespace}/{name}", repo_type)
+    check_repo_read_permission(repo, user)
+    return {"commits": availability.introduced_unavailable(repo, payload.commit_ids)}

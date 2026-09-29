@@ -497,3 +497,93 @@ async def test_too_many_changed_paths_are_left_to_the_operation(m, owner_client,
         assert body[op]["available"] is None and body[op]["reason"] == "too_large"
         assert "checked when it runs" in body[op]["message"]
     assert body["reset"]["requires_force"] is True
+
+
+# ----- which files of a commit are no longer available -----
+
+
+async def _unavailable(repo, commit, branch="main", client=None):
+    return await (client or repo.client).get(
+        f"/api/models/{repo.id}/commit/{commit}/unavailable-files", params={"branch": branch}
+    )
+
+
+async def test_the_commit_page_lists_every_unavailable_file(m, owner_client, visitor_client, app):
+    repo, (initial, c1, c2, c3, c4, c5) = await _linear(m, owner_client, "avail-files")
+    old = hashlib.sha256(b"a v1").hexdigest()
+    body = (await _unavailable(repo, c1)).json()
+    assert body == {"commit": c1, "branch": "main", "files": []}
+
+    m.db.LfsObjectTombstone.create(sha256=old, state=m.gc.DELETED)
+    # The whole tree counts, not only what the commit changed
+    for commit in (c1,):
+        body = (await _unavailable(repo, commit, client=visitor_client)).json()
+        assert body["files"] == [{"path": "a.bin", "sha256": old}]
+    for commit in (c2, c3, c5):  # a.bin is v2 or v3 there
+        assert (await _unavailable(repo, commit)).json()["files"] == []
+
+    monkeypatch_limit = m.avail.EXACT_PATHS
+    m.avail.EXACT_PATHS = 0
+    try:
+        body = (await _unavailable(repo, c1)).json()
+        assert body["files"] is None and body["reason"] == "too_large"
+    finally:
+        m.avail.EXACT_PATHS = monkeypatch_limit
+
+    assert (await _unavailable(repo, "f" * 64)).status_code == 404
+    assert (await _unavailable(repo, c1, branch="missing")).status_code == 404
+    response = await owner_client.get(
+        "/api/models/owner/avail-nope/commit/abc/unavailable-files", params={"branch": "main"}
+    )
+    assert response.status_code == 404
+    private = await Repo(m, owner_client, "avail-files-private").create()
+    await owner_client.put(f"/api/models/{private.id}/settings", json={"visibility": "private"})
+    head = await private.head()
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+    ) as anonymous:
+        assert (await _unavailable(private, head, client=anonymous)).status_code == 404
+        response = await anonymous.post(
+            f"/api/models/{private.id}/commits/unavailable-files", json={"commit_ids": [head]}
+        )
+        assert response.status_code == 404
+
+
+async def test_the_diff_marks_versions_that_are_gone(m, owner_client, monkeypatch):
+    repo, (initial, c1, c2, *_rest) = await _linear(m, owner_client, "avail-diff")
+    v1, v2 = hashlib.sha256(b"a v1").hexdigest(), hashlib.sha256(b"a v2").hexdigest()
+
+    async def diff(commit):
+        files = (await owner_client.get(f"/api/models/{repo.id}/commit/{commit}/diff")).json()[
+            "files"
+        ]
+        return {f["path"]: (f.get("lfs_status"), f.get("previous_lfs_status")) for f in files}
+
+    assert (await diff(c2))["a.bin"] == ("available", "available")
+    m.db.LfsObjectTombstone.create(sha256=v1, state=m.gc.DELETED)
+    m.s3.delete_object(Bucket=m.cfg.s3.bucket, Key=m.gc.lfs_key(v2))
+    assert (await diff(c2))["a.bin"] == ("missing", "collected")
+    # Regular files have no LFS object to lose
+    assert (await diff(c1)) == {"a.bin": ("collected", None), "r.txt": (None, None)}
+
+    # Past the storage check limit only the tombstones are consulted
+    monkeypatch.setattr(m.avail, "STORAGE_CHECK_LIMIT", 0)
+    assert (await diff(c2))["a.bin"] == ("unknown", "collected")
+
+
+async def test_the_list_marks_commits_whose_own_versions_are_gone(m, owner_client, visitor_client):
+    repo, commits = await _linear(m, owner_client, "avail-list-files")
+    initial, c1, c2, c3, c4, c5 = commits
+    url = f"/api/models/{repo.id}/commits/unavailable-files"
+    assert (await owner_client.post(url, json={"commit_ids": commits})).json() == {"commits": {}}
+
+    m.db.LfsObjectTombstone.create(sha256=hashlib.sha256(b"a v1").hexdigest(), state=m.gc.DELETED)
+    m.db.LfsObjectTombstone.create(sha256=hashlib.sha256(b"b v1").hexdigest(), state=m.gc.DELETED)
+    body = (await visitor_client.post(url, json={"commit_ids": commits})).json()
+    assert body == {"commits": {c1: ["a.bin"], c3: ["b.bin"]}}  # readers see it too
+    assert (await owner_client.post(url, json={"commit_ids": ["x"] * 101})).status_code == 422
+    assert (await owner_client.post(url, json={"commit_ids": ["x" * 65]})).status_code == 422
+    response = await owner_client.post(
+        "/api/models/owner/avail-nope/commits/unavailable-files", json={"commit_ids": []}
+    )
+    assert response.status_code == 404

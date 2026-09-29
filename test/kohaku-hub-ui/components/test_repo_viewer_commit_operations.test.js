@@ -43,9 +43,16 @@ const unavailable = (reason, message) => ({
 
 describe("RepoViewer commit operation badges", () => {
   const posted = [];
+  const lost = [];
 
-  function install({ caps = { revert: true, reset: true }, verdicts, pages }) {
+  function install({
+    caps = { revert: true, reset: true },
+    verdicts,
+    pages,
+    gone = {},
+  }) {
     posted.length = 0;
+    lost.length = 0;
     server.use(
       http.get("/api/users/open-media-lab/type", () =>
         jsonResponse({ type: "org" }),
@@ -68,6 +75,16 @@ describe("RepoViewer commit operation badges", () => {
           ? { Link: `<${BASE}/commits/main?after=${page.next}>; rel="next"` }
           : {};
         return HttpResponse.json(page.commits, { headers });
+      }),
+      http.post(`${BASE}/commits/unavailable-files`, async ({ request }) => {
+        const { commit_ids: ids } = await request.json();
+        lost.push(ids);
+        if (verdicts === "fail") return HttpResponse.json({}, { status: 500 });
+        return jsonResponse({
+          commits: Object.fromEntries(
+            ids.map((id) => [id, gone[id]]).filter(([, v]) => v),
+          ),
+        });
       }),
       http.post(`${BASE}/commits/main/operations`, async ({ request }) => {
         const { commit_ids: ids } = await request.json();
@@ -199,5 +216,34 @@ describe("RepoViewer commit operation badges", () => {
     expect(posted).toEqual([["c1"]]);
     expect(badges(wrapper)).toEqual([]);
     expect(wrapper.text()).toContain("First"); // the list itself is unaffected
+  });
+
+  it("marks commits whose own versions are gone, for everyone", async () => {
+    const many = Array.from({ length: 22 }, (_, i) => `w${i}.bin`);
+    install({
+      caps: { revert: false, reset: false }, // no operations: the mark still shows
+      pages: {
+        first: { commits: [commit("c2", "Second"), commit("c1", "First")] },
+      },
+      verdicts: {},
+      gone: { c1: ["weights.bin"], c2: many },
+    });
+    const wrapper = mountViewer();
+    await flushPromises();
+    await flushPromises();
+
+    expect(lost).toEqual([["c2", "c1"]]);
+    const tags = wrapper.findAll('[data-testid^="commit-files-unavailable-"]');
+    expect(tags.map((tag) => tag.text())).toEqual([
+      "Files unavailable",
+      "Files unavailable",
+    ]);
+    const tooltips = tags.map((tag) =>
+      tag.element.parentElement.getAttribute("data-content"),
+    );
+    expect(tooltips[1]).toBe(
+      "Versions this commit added are no longer stored (garbage collected): weights.bin.",
+    );
+    expect(tooltips[0]).toContain("w19.bin and 2 more.");
   });
 });

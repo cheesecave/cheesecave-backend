@@ -301,6 +301,30 @@
         </template>
       </el-dialog>
 
+      <!-- Files of this commit that are no longer stored -->
+      <el-alert
+        v-if="unavailableFiles.length"
+        type="warning"
+        :closable="false"
+        show-icon
+        class="mb-4"
+        data-testid="unavailable-files"
+      >
+        <template #title>
+          {{ unavailableFiles.length }} file(s) of this commit are no longer
+          stored (garbage collected)
+        </template>
+        <el-collapse>
+          <el-collapse-item title="Show the files" name="files">
+            <ul class="font-mono text-xs max-h-64 overflow-y-auto">
+              <li v-for="file in unavailableFiles" :key="file.path">
+                {{ file.path }}
+              </li>
+            </ul>
+          </el-collapse-item>
+        </el-collapse>
+      </el-alert>
+
       <!-- Files Changed -->
       <div class="card">
         <h2 class="text-xl font-bold mb-4 flex items-center gap-2">
@@ -347,6 +371,20 @@
                   <el-tag v-if="file.is_lfs" type="warning" size="small"
                     >LFS</el-tag
                   >
+                  <el-tooltip
+                    v-for="mark in versionMarks(file)"
+                    :key="mark.label"
+                    :content="mark.reason"
+                    placement="top"
+                  >
+                    <el-tag
+                      type="danger"
+                      size="small"
+                      effect="plain"
+                      :data-testid="`file-unavailable-${file.path}`"
+                      >{{ mark.label }}</el-tag
+                    >
+                  </el-tooltip>
                   <el-tag v-if="file.diff" type="info" size="small"
                     >Diff</el-tag
                   >
@@ -662,6 +700,45 @@ function operationCheck(op) {
 }
 
 const revertCheck = computed(() => operationCheck("revert"));
+
+// Which files of this commit are no longer stored
+const unavailableFiles = ref([]);
+const VERSION_STATES = {
+  collected: "garbage collected",
+  missing: "missing from storage",
+};
+
+function versionMarks(file) {
+  const marks = [];
+  if (VERSION_STATES[file.lfs_status]) {
+    marks.push({
+      label: "Unavailable",
+      reason: `This version is no longer stored: ${VERSION_STATES[file.lfs_status]}.`,
+    });
+  }
+  if (VERSION_STATES[file.previous_lfs_status]) {
+    marks.push({
+      label: "Previous version unavailable",
+      reason: `The version before this commit is no longer stored: ${VERSION_STATES[file.previous_lfs_status]}.`,
+    });
+  }
+  return marks;
+}
+
+async function loadUnavailableFiles() {
+  try {
+    const { data } = await repoAPI.getCommitUnavailableFiles(
+      type.value,
+      namespace.value,
+      name.value,
+      commitId.value,
+      selectedBranch.value,
+    );
+    unavailableFiles.value = data.files || [];
+  } catch (err) {
+    console.warn("Failed to check which files are still stored:", err);
+  }
+}
 const resetCheck = computed(() => operationCheck("reset"));
 
 async function loadCommitDetails() {
@@ -1009,6 +1086,7 @@ function renderDiff(diff) {
 
 onMounted(async () => {
   loadCommitDetails();
+  loadUnavailableFiles();
   await loadOperationCapabilities();
   await loadOperationChecks();
 });

@@ -232,6 +232,40 @@ for when the repository's history references garbage-collected ones.
 Conflicts need the exact check. Nothing is evaluated for users without write
 access or when both operations are off (`commits` is empty).
 
+## Files No Longer Stored
+
+LFS objects garbage collection removed (see
+[LFS garbage collection](../features/core/lfs.md#garbage-collection)) are
+known up front, for every reader.
+
+### A commit's whole tree
+
+**Pattern:** `GET /api/{repo_type}s/{namespace}/{name}/commit/{commit_id}/unavailable-files?branch=main`
+
+Every LFS file of the commit's tree whose object was garbage collected:
+`{"commit", "branch", "files": [{"path", "sha256"}]}`. Only paths differing
+from the branch head can be affected (the head's objects are never
+collected), so this reads one diff and the tombstones, and never asks the
+bucket. `files` is `null` (`"reason": "too_large"`) when the commit differs
+from the branch in too many paths.
+
+### The files a commit changed
+
+`GET .../commit/{commit_id}/diff` marks each LFS file with `lfs_status`
+(the commit's version) and `previous_lfs_status` (the version before it):
+`available`, `collected` (garbage collected), `missing` (gone from storage)
+or `unknown` (a large commit: the bucket is only asked about a bounded
+number of objects).
+
+### A commit list page
+
+**Pattern:** `POST /api/{repo_type}s/{namespace}/{name}/commits/unavailable-files`
+
+Body: `{"commit_ids": [...]}`, at most 100. Returns
+`{"commits": {id: [paths]}}`: the files whose version each commit introduced
+that garbage collection removed. One database query, whatever the history's
+length; files a commit only inherited are listed on its commit page.
+
 ## Usage Examples
 
 ### View Recent Commits
