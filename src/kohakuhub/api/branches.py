@@ -503,8 +503,9 @@ async def revert_branch(
     """Revert a commit on a branch.
 
     This endpoint reverts the changes from a specific commit, creating a new
-    commit that undoes those changes. It checks if all LFS files from the
-    target commit are still available before reverting.
+    commit that undoes those changes (``kohakuhub.api.commit.revert``): it
+    checks for conflicts and that the versions it restores are still stored,
+    and records the commit it makes like any commit.
 
     Args:
         repo_type: Repository type (model/dataset/space)
@@ -672,7 +673,13 @@ async def merge_branches(
     if merge_commit_id:
         merge_msg = payload.message or f"Merge {source_ref} into {destination_branch}"
         try:
-            rounds = [await records.commit_changes(client, lakefs_repo, merge_commit_id, base)]
+            # A true merge: against its first parent, which a commit landing
+            # meanwhile is part of; a squash: against the head read before
+            parents = (
+                await client.get_commit(repository=lakefs_repo, commit_id=merge_commit_id)
+            ).get("parents") or []
+            since = parents[0] if len(parents) > 1 else base
+            rounds = [await records.commit_changes(client, lakefs_repo, merge_commit_id, since)]
         except Exception as e:
             # The merge happened: record its commit; the reconciliation
             # records what the branch links
@@ -691,6 +698,7 @@ async def merge_branches(
         )
     else:
         logger.warning("Merge result did not contain commit reference")
+        enqueue_lfs_reconciliation()  # whatever it did, the reconciliation records it
 
     return {
         "success": True,

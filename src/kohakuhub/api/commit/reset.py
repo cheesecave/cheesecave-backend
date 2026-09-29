@@ -103,7 +103,8 @@ async def _merge(
                 if why == "other":
                     records.refused_by_lakefs(e, "merge")
                 # An upload in flight: the tree built is still right, wait for it
-                await asyncio.sleep(records.RETRY_DELAY * (attempt + 1))
+                if attempt < records.DIRTY_WAITS - 1:
+                    await asyncio.sleep(records.RETRY_DELAY * (attempt + 1))
         raise OperationRefused(
             409,
             {"error": "The branch has uncommitted changes (an upload in progress?); try again."},

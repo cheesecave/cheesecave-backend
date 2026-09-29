@@ -254,7 +254,10 @@ accepting the open issues in #99 and #107, and requires:
 - `200 OK` - Reverted successfully
 - `400 Bad Request` - Nothing to revert, versions no longer stored, the first commit, or an invalid `parent_number`
 - `404 Not Found` - Commit not found
+- `404 Not Found` - Branch not found
 - `409 Conflict` - Later commits changed the same files (listed), or the branch has uncommitted changes
+- Other `4xx` - LakeFS refused the revert (a protected branch, a hook): its status and message
+- `500 Internal Server Error` - The revert failed, or it may have been applied but its commit could not be found; the branch's references are then reconciled
 - `503 Service Unavailable` - Revert operation is disabled by server policy
 
 ---

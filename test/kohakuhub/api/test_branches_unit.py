@@ -299,7 +299,10 @@ async def test_merge_branches_covers_not_found_conflict_success_and_tracking_pat
     monkeypatch.setattr(branches_api, "get_lakefs_client", lambda: client)
     queued = []
 
+    bases = []
+
     async def changes(client_arg, lakefs_repo, commit_id, base=None):
+        bases.append(base)
         return commit_id, {"a.bin": None}
 
     async def record(client_arg, lakefs_repo, repo_arg, branch, rounds, user_arg, message, description):
@@ -341,12 +344,23 @@ async def test_merge_branches_covers_not_found_conflict_success_and_tracking_pat
         "merge it",
         "Merged feature",
     )
+    # A squash (one parent) is measured from the head read before merging;
+    # a true merge from its first parent
+    head_before = client.branch_data["commit_id"]
+    assert bases[-1] == head_before
+    client.commit_data = {**client.commit_data, "parents": ["first-parent", "second-parent"]}
+    await branches_api.merge_branches(
+        "model", "owner", "repo", "feature", "main", branches_api.MergePayload(), user=user
+    )
+    assert bases[-1] == "first-parent"
 
     client.merge_result = {"status": "ok"}
     result = await branches_api.merge_branches(
         "model", "owner", "repo", "feature", "main", branches_api.MergePayload(), user=user
     )
     assert result["success"] is True
+    assert queued == [1]  # no commit id: the reconciliation records what it did
+    queued.clear()
 
     async def broken_changes(*args, **kwargs):
         raise RuntimeError("tracking broke")

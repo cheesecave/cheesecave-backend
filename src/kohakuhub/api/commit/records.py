@@ -139,7 +139,11 @@ async def commit_changes(
 
 async def _regular_ids(client, lakefs_repo: str, ref: str, paths: list[str]) -> dict:
     """Git blob ids of regular files, as commits record them (small by
-    definition: bigger files are LFS). A file that cannot be read is left out."""
+    definition: bigger files are LFS). A file that cannot be read is left out.
+
+    ponytail: reads every changed regular file inside the request; thousands
+    of them would want the id stored as object metadata at upload instead.
+    """
     limit = asyncio.Semaphore(cfg.lakefs.operation_concurrency)
     ids = {}
 

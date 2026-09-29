@@ -100,12 +100,26 @@ async def test_a_conflict_names_its_files(m, owner_client):
     assert detail["conflicts"] == ["a.bin"] and "a.bin" in detail["error"]
     assert await repo.head() == c5
 
-    # A tombstoned version the conflict would need, but stored again: the
-    # claim settles it, and the conflict is what refuses the revert
+    # A tombstoned version only a conflicting path would need: the conflict
+    # is what refuses the revert, not the version
     m.db.LfsObjectTombstone.create(sha256=sha(b"a v1"), state=m.gc.DELETED)
     response = await _revert(repo, c2)
     assert response.status_code == 409
     assert response.json()["detail"]["conflicts"] == ["a.bin"]
+
+
+async def test_a_revived_version_to_restore_alongside_a_conflict(m, owner_client):
+    """The claim revives a tombstoned version uploaded again on a path the
+    revert would undo; the other path's conflict then refuses it."""
+    repo = await Repo(m, owner_client, "revert-revived-conflict").create()
+    await repo.commit(lfs("x.bin", b"x old"), lfs("y.bin", b"y old"))
+    both = await repo.commit(lfs("x.bin", b"x new"), lfs("y.bin", b"y new"))
+    await repo.commit(lfs("y.bin", b"y later"))  # y.bin: a conflict now
+    m.db.LfsObjectTombstone.create(sha256=sha(b"x old"), state=m.gc.DELETED)  # still stored
+    response = await _revert(repo, both)
+    assert response.status_code == 409
+    assert response.json()["detail"]["conflicts"] == ["y.bin"]
+    assert m.gc.tombstone_state(sha(b"x old")) is None  # revived by the claim
 
 
 async def test_a_version_no_longer_stored_refuses_it(m, owner_client):
@@ -146,6 +160,8 @@ async def test_guardrails(m, owner_client, visitor_client):
     response = await _revert(repo, c1, parent_number=2)
     assert response.status_code == 400 and "parent_number" in response.json()["detail"]["error"]
     assert (await _revert(repo, "f" * 64)).status_code == 404
+    response = await _revert(repo, c1, branch="missing")
+    assert response.status_code == 404 and "Branch not found" in response.text
     assert (await _revert(repo, c1, client=visitor_client)).status_code in (403, 404)
 
 
@@ -166,6 +182,11 @@ async def test_a_merge_commit_reverts_against_the_chosen_parent(m, owner_client)
     response = await _revert(repo, merge_commit, parent_number=1)
     assert response.status_code == 200, response.text
     assert "x.bin" not in await _tree(m, repo, response.json()["new_commit_id"])
+    # Against the second parent (dev's side): undo what main did since
+    response = await _revert(repo, merge_commit, parent_number=2)
+    assert response.status_code == 200, response.text
+    tree = await _tree(m, repo, response.json()["new_commit_id"])
+    assert "main.txt" not in tree
     assert (await _revert(repo, merge_commit, parent_number=3)).status_code == 400
 
 
@@ -219,6 +240,7 @@ async def test_the_new_commit_is_found_by_its_marker(m, owner_client, monkeypatc
     monkeypatch.setattr(m.branches, "enqueue_lfs_reconciliation", lambda: queued.append(1))
     response = await _revert(repo, c4)  # the whole log searched
     assert response.status_code == 500 and queued == [1]
+    assert "may have been applied" in response.json()["detail"]["error"]
     monkeypatch.setattr(m.revert, "FIND_DEPTH", 2)  # or only its newest commits
     response = await _revert(repo, c5)
     assert response.status_code == 500 and queued == [1, 1]
@@ -297,6 +319,24 @@ async def test_other_refusals_keep_their_status(m, owner_client, monkeypatch):
     assert (await _revert(repo, c3)).status_code == 500
     assert queued == [1]
 
+    # A conflict LakeFS sees but the check does not (it compares checksums,
+    # LakeFS object identities): said as such
+    async def conflict(self, *args, **kwargs):
+        raise _refused(409, "conflict found")
+
+    monkeypatch.setattr(m.rest.LakeFSRestClient, "revert_branch", conflict)
+    response = await _revert(repo, c3)
+    assert response.status_code == 409
+    detail = response.json()["detail"]
+    assert detail["conflicts"] == [] and "LakeFS reported a conflict" in detail["error"]
+
+    # Reading the branch failing otherwise than "not found" is an error
+    async def branch_down(self, *args, **kwargs):
+        raise _refused(503, "down")
+
+    monkeypatch.setattr(m.rest.LakeFSRestClient, "get_branch", branch_down)
+    assert (await _revert(repo, c3)).status_code == 500
+
 
 async def test_collection_racing_the_claim_refuses_it(m, owner_client, monkeypatch):
     repo, (initial, c1, c2, c3, c4, c5) = await _linear(m, owner_client, "revert-claim")
@@ -355,3 +395,14 @@ async def test_a_merge_records_every_path(m, owner_client, monkeypatch):
     assert H.select().where(H.commit_id == merge_commit).count() == 150
     row = m.db.Commit.get(m.db.Commit.commit_id == merge_commit)
     assert row.description == "Merged feature" and row.message == "Merge feature"
+
+    # A squash merge (one parent) is recorded against the head before it
+    await repo.commit(lfs("feat/w000.bin", b"feat changed"), branch="feature")
+    response = await owner_client.post(
+        f"/api/models/{repo.id}/merge/feature/into/main",
+        json={"message": "Squash feature", "squash_merge": True},
+    )
+    assert response.status_code == 200, response.text
+    squashed = response.json()["result"]["reference"]
+    assert H.select().where(H.commit_id == squashed).count() == 1
+    assert ("feat/w000.bin", sha(b"feat changed")) in _head_refs(m, repo)

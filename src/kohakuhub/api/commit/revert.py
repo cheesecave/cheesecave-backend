@@ -28,14 +28,14 @@ NOTHING = "Nothing to revert: the branch already undoes this commit's changes."
 
 def _conflict(conflicts: list[str], since_check: bool = False) -> OperationRefused:
     when = "the branch changed since the check, and " if since_check else ""
-    return OperationRefused(
-        409,
-        {
-            "error": f"Revert conflict: {when}later commits changed the same files: "
-            f"{records.shown(conflicts)}",
-            "conflicts": conflicts,
-        },
-    )
+    if not conflicts:  # LakeFS compares object identities, the check checksums
+        error = "Revert conflict: LakeFS reported a conflict with a concurrent change; try again."
+    else:
+        error = (
+            f"Revert conflict: {when}later commits changed the same files: "
+            f"{records.shown(conflicts)}"
+        )
+    return OperationRefused(409, {"error": error, "conflicts": conflicts})
 
 
 def _refuse(plan: dict, commit_id: str) -> None:
@@ -51,11 +51,12 @@ def _refuse(plan: dict, commit_id: str) -> None:
 
 
 async def _find(client, lakefs_repo: str, branch: str, marker: str) -> str:
-    """The commit carrying ``marker``: the head may already be someone else's."""
+    """The commit carrying ``marker``: the head may already be someone else's.
+    It is on the branch's first-parent chain, which merges cannot lengthen."""
     after, seen = "", 0
     while seen < FIND_DEPTH:
         page = await client.log_commits(
-            repository=lakefs_repo, ref=branch, after=after, amount=FIND_PAGE
+            repository=lakefs_repo, ref=branch, after=after, amount=FIND_PAGE, first_parent=True
         )
         for commit in page["results"]:
             if (commit.get("metadata") or {}).get("kh_operation") == marker:
@@ -64,7 +65,10 @@ async def _find(client, lakefs_repo: str, branch: str, marker: str) -> str:
         if not page["pagination"]["has_more"]:
             break
         after = page["pagination"]["next_offset"]
-    raise RuntimeError(f"the revert commit ({marker}) is not among the branch's newest commits")
+    raise RuntimeError(
+        f"the revert may have been applied, but its commit (marker {marker}) is not among "
+        "the branch's newest commits"
+    )
 
 
 async def revert_commit(
@@ -92,7 +96,12 @@ async def revert_commit(
                 f"parent_number must be between 1 and {len(parents)}"
             },
         )
-    head = (await client.get_branch(repository=lakefs_repo, branch=branch))["commit_id"]
+    try:
+        head = (await client.get_branch(repository=lakefs_repo, branch=branch))["commit_id"]
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code != 404:
+            raise
+        raise OperationRefused(404, {"error": f"Branch not found: {branch}"})
     plan, restores, changed = await availability.revert_plan(
         client, lakefs_repo, commit, head, parent_number
     )
@@ -135,7 +144,8 @@ async def revert_commit(
             if why == "other":
                 records.refused_by_lakefs(e, "revert")
             # An upload in flight on the branch: wait for it
-            await asyncio.sleep(records.RETRY_DELAY * (attempt + 1))
+            if attempt < records.DIRTY_WAITS - 1:
+                await asyncio.sleep(records.RETRY_DELAY * (attempt + 1))
     else:
         raise OperationRefused(
             409,
