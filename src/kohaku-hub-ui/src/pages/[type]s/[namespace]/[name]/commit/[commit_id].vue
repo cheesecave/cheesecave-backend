@@ -96,6 +96,31 @@
                 >
                   {{ commitData.commit_id?.substring(0, 8) }}
                 </code>
+                <!-- Files of this commit's tree that are no longer stored -->
+                <el-tooltip
+                  v-if="unavailableFiles?.length"
+                  :content="`${unavailableFiles.length} file(s) of this commit are no longer stored (garbage collected). Changed files are marked Unavailable below.`"
+                  placement="top"
+                >
+                  <el-tag
+                    type="warning"
+                    size="small"
+                    data-testid="unavailable-files"
+                    >{{ unavailableFiles.length }} file(s) unavailable</el-tag
+                  >
+                </el-tooltip>
+                <el-tooltip
+                  v-else-if="unavailableFiles === null"
+                  content="This commit differs from the branch in too many files to check which are still stored."
+                  placement="top"
+                >
+                  <el-tag
+                    type="info"
+                    size="small"
+                    data-testid="unavailable-files-unchecked"
+                    >Storage not checked</el-tag
+                  >
+                </el-tooltip>
               </div>
             </div>
             <div
@@ -107,26 +132,50 @@
           </div>
         </div>
 
-        <!-- Action Buttons -->
+        <!-- Action Buttons: greyed out, with the reason, when unavailable -->
         <div v-if="revertEnabled || resetEnabled" class="flex gap-3 mb-4">
-          <el-button
+          <el-tooltip
             v-if="revertEnabled"
-            size="small"
-            @click="showRevertDialog"
-            class="btn-revert"
+            :content="revertCheck.reason"
+            :disabled="!revertCheck.reason"
+            placement="top"
           >
-            <div class="i-carbon-undo inline-block mr-1" />
-            Revert Commit
-          </el-button>
-          <el-button
+            <span
+              class="inline-block operation-action"
+              data-testid="revert-action"
+            >
+              <el-button
+                size="small"
+                :disabled="revertCheck.blocked"
+                @click="showRevertDialog"
+                class="btn-revert"
+              >
+                <div class="i-carbon-undo inline-block mr-1" />
+                Revert Commit
+              </el-button>
+            </span>
+          </el-tooltip>
+          <el-tooltip
             v-if="resetEnabled"
-            type="primary"
-            size="small"
-            @click="showResetDialog"
+            :content="resetCheck.reason"
+            :disabled="!resetCheck.reason"
+            placement="top"
           >
-            <div class="i-carbon-reset inline-block mr-1" />
-            Reset to This State
-          </el-button>
+            <span
+              class="inline-block operation-action"
+              data-testid="reset-action"
+            >
+              <el-button
+                type="primary"
+                size="small"
+                :disabled="resetCheck.blocked"
+                @click="showResetDialog"
+              >
+                <div class="i-carbon-reset inline-block mr-1" />
+                Reset to This State
+              </el-button>
+            </span>
+          </el-tooltip>
         </div>
 
         <!-- Parent commit link -->
@@ -153,6 +202,13 @@
         width="500px"
       >
         <div class="space-y-4">
+          <p
+            v-if="operationChecks?.revert?.files"
+            class="text-sm text-gray-600 dark:text-gray-400"
+            data-testid="revert-scope"
+          >
+            Undoes the changes to {{ operationChecks.revert.files }} file(s).
+          </p>
           <p class="text-gray-700 dark:text-gray-300">
             This will create a new commit that undoes the changes from commit
             <code
@@ -205,6 +261,14 @@
         width="500px"
       >
         <div class="space-y-4">
+          <p
+            v-if="operationChecks?.reset?.files"
+            class="text-sm text-gray-600 dark:text-gray-400"
+            data-testid="reset-scope"
+          >
+            Restores {{ operationChecks.reset.files }} file(s) to this commit's
+            version.
+          </p>
           <p class="text-gray-700 dark:text-gray-300">
             This will create a new commit that restores the branch to the state
             of commit
@@ -308,6 +372,20 @@
                   <el-tag v-if="file.is_lfs" type="warning" size="small"
                     >LFS</el-tag
                   >
+                  <el-tooltip
+                    v-for="mark in versionMarks(file)"
+                    :key="mark.label"
+                    :content="mark.reason"
+                    placement="top"
+                  >
+                    <el-tag
+                      type="danger"
+                      size="small"
+                      effect="plain"
+                      :data-testid="`${mark.testid}-${file.path}`"
+                      >{{ mark.label }}</el-tag
+                    >
+                  </el-tooltip>
                   <el-tag v-if="file.diff" type="info" size="small"
                     >Diff</el-tag
                   >
@@ -571,7 +649,7 @@ import axios from "axios";
 import dayjs from "dayjs";
 import relativeTime from "dayjs/plugin/relativeTime";
 import { ElMessage } from "element-plus";
-import { settingsAPI } from "@/utils/api";
+import { repoAPI, settingsAPI } from "@/utils/api";
 import { getRepositoryOperationCapabilities } from "@/utils/repositoryOperationCapabilities";
 
 dayjs.extend(relativeTime);
@@ -604,6 +682,67 @@ const resetMessage = ref("");
 
 // Selected branch for operations
 const selectedBranch = ref("main");
+
+// Whether this commit can be reverted / the branch reset to it
+const operationChecks = ref(null);
+const checkingOperations = ref(false);
+
+function operationCheck(op) {
+  if (checkingOperations.value) {
+    return { blocked: true, reason: "Checking whether this is possible…" };
+  }
+  // Unknown (the check failed, or too much to check in advance): leave
+  // the action to the server's own checks, explaining why when known
+  const check = operationChecks.value?.[op];
+  if (!check || check.available !== false) {
+    return { blocked: false, reason: check?.message || "" };
+  }
+  return { blocked: true, reason: check.message };
+}
+
+const revertCheck = computed(() => operationCheck("revert"));
+
+// Which files of this commit are no longer stored; null: too many to check
+const unavailableFiles = ref([]);
+const VERSION_STATES = {
+  collected: "garbage collected",
+  missing: "missing from storage",
+};
+
+function versionMarks(file) {
+  const marks = [];
+  if (VERSION_STATES[file.lfs_status]) {
+    marks.push({
+      label: "Unavailable",
+      testid: "file-unavailable",
+      reason: `This version is no longer stored: ${VERSION_STATES[file.lfs_status]}.`,
+    });
+  }
+  if (VERSION_STATES[file.previous_lfs_status]) {
+    marks.push({
+      label: "Previous version unavailable",
+      testid: "file-previous-unavailable",
+      reason: `The version before this commit is no longer stored: ${VERSION_STATES[file.previous_lfs_status]}.`,
+    });
+  }
+  return marks;
+}
+
+async function loadUnavailableFiles() {
+  try {
+    const { data } = await repoAPI.getCommitUnavailableFiles(
+      type.value,
+      namespace.value,
+      name.value,
+      commitId.value,
+      selectedBranch.value,
+    );
+    unavailableFiles.value = data.files;
+  } catch (err) {
+    console.warn("Failed to check which files are still stored:", err);
+  }
+}
+const resetCheck = computed(() => operationCheck("reset"));
 
 async function loadCommitDetails() {
   loading.value = true;
@@ -643,6 +782,25 @@ async function loadOperationCapabilities() {
     // Keep both actions hidden when capabilities cannot be established.
     console.warn("Failed to load repository operation capabilities:", err);
   }
+}
+
+async function loadOperationChecks() {
+  if (!revertEnabled.value && !resetEnabled.value) return;
+  checkingOperations.value = true;
+  try {
+    const { data } = await repoAPI.getCommitOperations(
+      type.value,
+      namespace.value,
+      name.value,
+      commitId.value,
+      selectedBranch.value,
+    );
+    operationChecks.value = data;
+  } catch (err) {
+    console.warn("Failed to check repository operations:", err);
+    operationChecks.value = null;
+  }
+  checkingOperations.value = false;
 }
 
 function showRevertDialog() {
@@ -929,9 +1087,11 @@ function renderDiff(diff) {
   return colored.join("\n");
 }
 
-onMounted(() => {
+onMounted(async () => {
   loadCommitDetails();
-  loadOperationCapabilities();
+  loadUnavailableFiles();
+  await loadOperationCapabilities();
+  await loadOperationChecks();
 });
 </script>
 
@@ -975,6 +1135,20 @@ onMounted(() => {
 :deep(.dark) .btn-revert:hover {
   background-color: #c2410c !important;
   border-color: #c2410c !important;
+}
+
+/* An action the commit cannot take: plainly grey, whatever its colour */
+.operation-action :deep(.el-button.is-disabled),
+.operation-action :deep(.el-button.is-disabled:hover) {
+  background-color: #e5e7eb !important;
+  border-color: #d1d5db !important;
+  color: #9ca3af !important;
+}
+
+:deep(.dark) .operation-action .el-button.is-disabled {
+  background-color: #374151 !important;
+  border-color: #4b5563 !important;
+  color: #6b7280 !important;
 }
 
 /* Diff viewer styling */

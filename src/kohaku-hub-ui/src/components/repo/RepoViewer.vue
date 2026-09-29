@@ -708,6 +708,33 @@
                       <div class="font-mono text-xs">
                         {{ commit.id.slice(0, 7) }}
                       </div>
+                      <el-tooltip
+                        v-if="commitUnavailableFiles[commit.id]"
+                        :content="filesUnavailableMessage(commit.id)"
+                        placement="top"
+                      >
+                        <el-tag
+                          size="small"
+                          type="danger"
+                          effect="plain"
+                          :data-testid="`commit-files-unavailable-${commit.id}`"
+                          >Files unavailable</el-tag
+                        >
+                      </el-tooltip>
+                      <el-tooltip
+                        v-for="badge in unavailableOperations(commit.id)"
+                        :key="badge.op"
+                        :content="badge.message"
+                        placement="top"
+                      >
+                        <el-tag
+                          size="small"
+                          type="info"
+                          effect="plain"
+                          :data-testid="`commit-${badge.op}-unavailable-${commit.id}`"
+                          >{{ badge.label }}</el-tag
+                        >
+                      </el-tooltip>
                     </div>
                   </div>
                 </div>
@@ -960,7 +987,8 @@ import { useAuthStore } from "@/stores/auth";
 import { copyToClipboard } from "@/utils/clipboard";
 import { parseYAMLFrontmatter, normalizeMetadata } from "@/utils/yaml-parser";
 import { parseTags } from "@/utils/tag-parser";
-import { likesAPI, repoAPI } from "@/utils/api";
+import { likesAPI, repoAPI, settingsAPI } from "@/utils/api";
+import { getRepositoryOperationCapabilities } from "@/utils/repositoryOperationCapabilities";
 import { classifyError, classifyResponse } from "@/utils/http-errors";
 import { resolveRepoTreeEntryPath } from "@/utils/repo-paths";
 import MarkdownViewer from "@/components/common/MarkdownViewer.vue";
@@ -1016,6 +1044,13 @@ const fileTree = ref([]);
 const commits = ref([]);
 const commitsLoading = ref(false);
 const commitsHasMore = ref(false);
+// Revert / reset proven unavailable per commit, for the list's badges
+const commitOperationVerdicts = ref({});
+const commitOperationCaps = ref(null);
+const OPERATION_BADGES = { revert: "Can't revert", reset: "Can't reset" };
+// Files whose version a commit introduced that garbage collection removed
+const commitUnavailableFiles = ref({});
+const SHOWN_FILES = 20;
 const commitsNextCursor = ref(null);
 const filesLoading = ref(true);
 // Classified tree / readme errors (utils/http-errors.js shape). A
@@ -1779,8 +1814,70 @@ async function findReadmeViaPathsInfo() {
   }
 }
 
+function unavailableOperations(commitId) {
+  const verdicts = commitOperationVerdicts.value[commitId] || {};
+  // Site-wide switches and access are not about the commit: no badge
+  return Object.entries(OPERATION_BADGES)
+    .filter(
+      ([op]) =>
+        verdicts[op]?.available === false &&
+        !["disabled", "forbidden"].includes(verdicts[op].reason),
+    )
+    .map(([op, label]) => ({ op, label, message: verdicts[op].message }));
+}
+
+function filesUnavailableMessage(commitId) {
+  const paths = commitUnavailableFiles.value[commitId];
+  const shown = paths.slice(0, SHOWN_FILES).join(", ");
+  const more = paths.length > SHOWN_FILES ? ` and ${paths.length - SHOWN_FILES} more` : "";
+  return `Files this commit committed are no longer stored (garbage collected): ${shown}${more}.`;
+}
+
+async function loadUnavailableFiles(page) {
+  try {
+    const { data } = await repoAPI.getCommitsUnavailableFiles(
+      props.repoType,
+      props.namespace,
+      props.name,
+      page.map((commit) => commit.id),
+    );
+    commitUnavailableFiles.value = {
+      ...commitUnavailableFiles.value,
+      ...data.commits,
+    };
+  } catch (err) {
+    console.warn("Failed to check which commits lost files:", err);
+  }
+}
+
+async function loadCommitVerdicts(page) {
+  try {
+    if (commitOperationCaps.value === null) {
+      const { data } = await settingsAPI.getSiteConfig();
+      commitOperationCaps.value = getRepositoryOperationCapabilities(data);
+    }
+    const caps = commitOperationCaps.value;
+    if (!page.length || (!caps.revert && !caps.reset)) return;
+    const { data } = await repoAPI.getCommitsOperations(
+      props.repoType,
+      props.namespace,
+      props.name,
+      currentBranch.value,
+      page.map((commit) => commit.id),
+    );
+    commitOperationVerdicts.value = {
+      ...commitOperationVerdicts.value,
+      ...data.commits,
+    };
+  } catch (err) {
+    // Badges are only a hint: the commit page checks again
+    console.warn("Failed to check commit operations:", err);
+  }
+}
+
 async function loadCommits() {
   commitsLoading.value = true;
+  commitOperationVerdicts.value = {};
   try {
     const { data } = await repoAPI.listCommits(
       props.repoType,
@@ -1791,6 +1888,8 @@ async function loadCommits() {
     );
 
     commits.value = data.commits || [];
+    loadCommitVerdicts(commits.value);
+    loadUnavailableFiles(commits.value);
     commitsHasMore.value = data.hasMore || false;
     commitsNextCursor.value = data.nextCursor || null;
   } catch (err) {
@@ -1815,6 +1914,8 @@ async function loadMoreCommits() {
     );
 
     commits.value.push(...(data.commits || []));
+    loadCommitVerdicts(data.commits);
+    loadUnavailableFiles(data.commits);
     commitsHasMore.value = data.hasMore || false;
     commitsNextCursor.value = data.nextCursor || null;
   } catch (err) {

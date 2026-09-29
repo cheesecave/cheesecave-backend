@@ -174,6 +174,101 @@ GET /api/models/username/my-model/commit/abc123/diff
 
 ---
 
+## Revert and Reset Availability
+
+KohakuHub-only endpoints that tell whether a commit can be reverted, or a
+branch reset to it, before trying. They are separate from the Hugging Face
+compatible commit list on purpose: that payload stays what
+`huggingface_hub` expects, and clients paging through a history never pay
+for these checks.
+
+Every verdict is `{"available": true | false | null, "reason", "message"}`.
+`reason` is one of:
+
+| Reason | Meaning |
+|---|---|
+| `disabled` | The operation is switched off on this site |
+| `forbidden` | The user has no write access to the repository |
+| `initial_commit` | Revert: the repository's first commit has nothing to revert |
+| `conflict` | Revert: later commits changed the same files (`conflicts` lists them) |
+| `no_changes` | No file's content would change (already undone, or the branch already has this content). LakeFS then refuses a revert, or records an empty commit |
+| `lfs_missing` | LFS objects it would restore are garbage collected or gone from storage (`missing_lfs`; a revert also lists any `conflicts`). Reported before a conflict |
+| `already_current` | Reset: the branch is at this commit |
+
+### One commit (exact)
+
+**Pattern:** `GET /api/{repo_type}s/{namespace}/{name}/commit/{commit_id}/operations?branch=main`
+
+Decides exactly, from LakeFS and the bucket: for revert, LakeFS's three-way
+rule per path the commit changed (the branch still at the commit's version
+is undone, already at the parent's is left alone, anything else is a
+conflict); for reset, a two-dot diff between the branch head and the
+commit. Available verdicts carry `files` (how many files change); reset
+verdicts carry `requires_force` (the reset endpoint requires `force` for
+`main`).
+
+```json
+{
+  "commit": "8a4f…", "branch": "main", "head": "c01d…",
+  "can_write": true, "operations": {"revert": true, "reset": true},
+  "parents": ["77be…"],
+  "revert": {"available": false, "reason": "conflict",
+             "message": "Later commits changed the same files: weights.bin.",
+             "conflicts": ["weights.bin"]},
+  "reset": {"available": true, "files": 3, "requires_force": true}
+}
+```
+
+### A commit list page (only what is proven)
+
+**Pattern:** `POST /api/{repo_type}s/{namespace}/{name}/commits/{branch}/operations`
+
+Body: `{"commit_ids": [...]}`, at most 100. Returns
+`{"branch", "head", "can_write", "operations", "commits": {id: {"revert", "reset"}}}`.
+Only what is proven unavailable at bounded cost is reported; everything else
+is `{"available": null}` (unknown, never "available"): the initial commit
+cannot be reverted, the head needs no reset, and LFS objects are only looked
+for when the repository's history references garbage-collected ones.
+Conflicts need the exact check. Nothing is evaluated for users without write
+access or when both operations are off (`commits` is empty).
+
+## Files No Longer Stored
+
+LFS objects garbage collection removed (see
+[LFS garbage collection](../features/core/lfs.md#garbage-collection)) are
+known up front, for every reader.
+
+### A commit's whole tree
+
+**Pattern:** `GET /api/{repo_type}s/{namespace}/{name}/commit/{commit_id}/unavailable-files?branch=main`
+
+Every LFS file of the commit's tree whose object was garbage collected:
+`{"commit", "branch", "files": [{"path", "sha256"}]}`. Garbage collection
+never removes an object the branch head claimed, so this reads one diff
+(the paths differing from the head), the tombstones, and the objects the
+head links that are tombstoned anyway (a revert, merge or reset can link an
+object without claiming it). It never asks the bucket, and makes a bounded
+number of LakeFS calls: `files` is `null` (`"reason": "too_large"`) past
+that.
+
+### The files a commit changed
+
+`GET .../commit/{commit_id}/diff` marks each LFS file with `lfs_status`
+(the commit's version) and `previous_lfs_status` (the version before it):
+`available`, `collected` (garbage collected), `missing` (gone from storage)
+or `unknown` (a large commit, where the bucket is only asked about a bounded
+number of objects, or the bucket could not be reached).
+
+### A commit list page
+
+**Pattern:** `POST /api/{repo_type}s/{namespace}/{name}/commits/unavailable-files`
+
+Body: `{"commit_ids": [...]}`, at most 100. Returns
+`{"commits": {id: [paths]}}`: the LFS files each commit committed (added,
+changed, restored, or re-committed unchanged) whose object garbage
+collection removed. One database query, whatever the history's
+length; files a commit only inherited are listed on its commit page.
+
 ## Usage Examples
 
 ### View Recent Commits

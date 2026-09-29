@@ -29,6 +29,8 @@ const mocks = vi.hoisted(() => ({
   repoAPI: {
     getInfo: vi.fn(),
     delete: vi.fn(),
+    getCommitOperations: vi.fn(),
+    getCommitUnavailableFiles: vi.fn(),
   },
   validationAPI: { checkName: vi.fn() },
   quotaAPI: {
@@ -107,6 +109,8 @@ describe("repository operation capability consumers", () => {
     mocks.settingsAPI.resetBranch.mockResolvedValue({ data: {} });
     mocks.settingsAPI.squashRepo.mockResolvedValue({ data: {} });
     mocks.repoAPI.getInfo.mockResolvedValue({ data: { private: false } });
+    mocks.repoAPI.getCommitOperations.mockResolvedValue({ data: {} });
+    mocks.repoAPI.getCommitUnavailableFiles.mockResolvedValue({ data: { files: [] } });
   });
 
   it("hides commit actions when capability loading fails", async () => {

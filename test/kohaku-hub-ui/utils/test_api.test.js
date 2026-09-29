@@ -104,6 +104,12 @@ describe("frontend API client", () => {
     await repoAPI.listCommits("space", "alice", "demo", "main", {
       limit: 20,
     });
+    await repoAPI.getCommitsOperations("model", "alice", "demo", "dev", [
+      "commit-1",
+    ]);
+    await repoAPI.getCommitOperations("model", "alice", "demo", "commit-1", "dev");
+    await repoAPI.getCommitUnavailableFiles("model", "alice", "demo", "commit-1", "dev");
+    await repoAPI.getCommitsUnavailableFiles("model", "alice", "demo", ["commit-1"]);
     await settingsAPI.revertBranch("model", "alice", "demo", "main", {
       ref: "commit-1",
     });
@@ -203,6 +209,22 @@ describe("frontend API client", () => {
     expect(getSpy).toHaveBeenCalledWith(
       "/api/models/alice/demo/tree/main/nested",
       { params: { recursive: true } },
+    );
+    expect(postSpy).toHaveBeenCalledWith(
+      "/api/models/alice/demo/commits/dev/operations",
+      { commit_ids: ["commit-1"] },
+    );
+    expect(getSpy).toHaveBeenCalledWith(
+      "/api/models/alice/demo/commit/commit-1/operations",
+      { params: { branch: "dev" } },
+    );
+    expect(getSpy).toHaveBeenCalledWith(
+      "/api/models/alice/demo/commit/commit-1/unavailable-files",
+      { params: { branch: "dev" } },
+    );
+    expect(postSpy).toHaveBeenCalledWith(
+      "/api/models/alice/demo/commits/unavailable-files",
+      { commit_ids: ["commit-1"] },
     );
     expect(postSpy).toHaveBeenCalledWith("/org/create", { name: "acme" });
     expect(putSpy).toHaveBeenCalledWith(
