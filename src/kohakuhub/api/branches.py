@@ -8,7 +8,13 @@ from pydantic import BaseModel
 from kohakuhub.db import Repository, User
 from kohakuhub.db_operations import create_commit, get_repository
 from kohakuhub.logger import get_logger
-from kohakuhub.storage_cleanup import enqueue_branch_links, forget_branch, refresh_head_refs
+from kohakuhub.storage_cleanup import (
+    SCRATCH_BRANCH_PREFIX,
+    enqueue_branch_links,
+    enqueue_lfs_reconciliation,
+    forget_branch,
+    refresh_head_refs,
+)
 from kohakuhub.auth.dependencies import get_current_user, get_optional_user
 from kohakuhub.auth.permissions import (
     check_repo_delete_permission,
@@ -84,6 +90,12 @@ async def create_branch(
 
     # Check if user has permission
     check_repo_delete_permission(repo_row, user)
+    if payload.branch.startswith(SCRATCH_BRANCH_PREFIX):  # a reset's working branch
+        return hf_error_response(
+            400,
+            HFErrorCode.BAD_REQUEST,
+            f"Branch names starting with '{SCRATCH_BRANCH_PREFIX}' are reserved",
+        )
 
     lakefs_repo = resolve_lakefs_repo(repo_row)
     client = get_lakefs_client()
@@ -852,6 +864,9 @@ async def reset_branch(
         raise HTTPException(status_code=e.status, detail=e.detail)
     except Exception as e:
         logger.exception(f"Failed to reset branch: {e}", e)
+        # Whether a merge landed before the failure is unknown here: have the
+        # reconciliation record what the branch links (collection waits for it)
+        enqueue_lfs_reconciliation()
         raise HTTPException(status_code=500, detail={"error": f"Reset failed: {e}"})
     await reset.record_reset(
         client, lakefs_repo, repo_row, branch, commit_id, rounds, user, message

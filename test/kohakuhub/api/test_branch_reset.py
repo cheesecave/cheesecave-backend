@@ -237,6 +237,10 @@ async def test_guardrails_keep_their_behaviour(m, owner_client, visitor_client):
         assert response.status_code == 400
         assert response.json()["detail"]["error"] == "Branch is already at the target state"
     assert (await _reset(repo, "f" * 64)).status_code == 404
+    response = await owner_client.post(
+        f"/api/models/{repo.id}/branch", json={"branch": "kh-reset-mine", "revision": c5}
+    )
+    assert response.status_code == 400 and "reserved" in response.headers["x-error-message"]
     assert (await _reset(repo, c3, client=visitor_client)).status_code in (403, 404)
 
 
@@ -268,6 +272,10 @@ async def test_a_concurrent_commit_is_reset_too(m, owner_client, monkeypatch):
         )
     )
     assert set(concurrent) <= {c["id"] for c in log}
+    # Round 1 merged despite a.bin changing on both sides (the target's
+    # version wins); late.txt then took round 2
+    resets = [c for c in log if (c.get("metadata") or {}).get("reset_to") == c1]
+    assert len(resets) == 2
     assert _files(m, repo)["late.txt"][2] is True
     assert _head_refs(m, repo) == {("a.bin", sha(b"a v1"))}
     assert _scratch_branches(await m.client.list_branches(repo.lakefs_repo)) == []
@@ -359,8 +367,13 @@ async def test_an_upload_in_flight_is_waited_for(m, owner_client, monkeypatch):
         )
 
     monkeypatch.setattr(m.rest.LakeFSRestClient, "merge_into_branch", broken)
+    queued = []
+    monkeypatch.setattr(
+        _live("kohakuhub.api.branches"), "enqueue_lfs_reconciliation", lambda: queued.append(1)
+    )
     assert (await _reset(repo, c2)).status_code == 500
     assert await repo.head() == head
+    assert queued == [1]  # a merge may have landed: the reconciliation records it
 
 
 async def test_a_branch_that_stays_dirty_is_named(m, owner_client, monkeypatch):
@@ -622,6 +635,8 @@ async def test_giving_up_records_what_the_branch_holds(m, owner_client, monkeypa
     H = m.db.LFSObjectHistory
     first = H.get_or_none((H.commit_id == commits[0]) & (H.path_in_repo == "a.bin"))
     assert first.sha256 == sha(b"a v1") and first.file is not None
+    after = H.get(H.sha256 == sha(b"a racing 0"))
+    assert first.created_at <= after.created_at
 
 
 async def test_an_unreadable_regular_file_keeps_its_row(m, owner_client, monkeypatch):
@@ -678,3 +693,63 @@ async def test_storage_usage_follows_and_its_failure_is_harmless(m, owner_client
 
     monkeypatch.setattr(m.reset, "update_repository_storage", broken)
     assert (await _reset(repo, c2)).status_code == 200
+
+
+async def test_a_failure_dropping_the_scratch_references_is_harmless(m, owner_client, monkeypatch):
+    repo, (initial, c1, *_rest) = await _linear(m, owner_client, "reset-drop-refs")
+    queued = []
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("database hiccup")
+
+    monkeypatch.setattr(m.reset, "drop_head_refs", broken)
+    monkeypatch.setattr(m.reset, "enqueue_lfs_reconciliation", lambda: queued.append(1))
+    response = await _reset(repo, c1)
+    assert response.status_code == 200, response.text  # the merge is kept and recorded
+    assert _head_refs(m, repo) == {("a.bin", sha(b"a v1"))}
+    assert queued == [1]
+
+
+async def test_the_commits_are_recorded_even_if_reading_the_branch_fails(
+    m, owner_client, monkeypatch
+):
+    repo, (initial, c1, *_rest) = await _linear(m, owner_client, "reset-books-early")
+    merge = m.rest.LakeFSRestClient.merge_into_branch
+    get_branch = m.rest.LakeFSRestClient.get_branch
+    merged = []
+
+    async def tracking_merge(self, *args, **kwargs):
+        result = await merge(self, *args, **kwargs)
+        merged.append(result["reference"])
+        return result
+
+    async def failing_after_merge(self, *args, **kwargs):
+        if merged:
+            raise RuntimeError("LakeFS unavailable")
+        return await get_branch(self, *args, **kwargs)
+
+    queued = []
+    monkeypatch.setattr(m.rest.LakeFSRestClient, "merge_into_branch", tracking_merge)
+    monkeypatch.setattr(m.rest.LakeFSRestClient, "get_branch", failing_after_merge)
+    monkeypatch.setattr(m.reset, "enqueue_lfs_reconciliation", lambda: queued.append(1))
+    response = await _reset(repo, c1)
+    assert response.status_code == 200, response.text
+    assert m.db.Commit.get_or_none(m.db.Commit.commit_id == merged[0]) is not None
+    assert queued == [1]
+
+    # And a commit row that cannot be written does not stop the rest
+    monkeypatch.undo()
+    monkeypatch.setattr(m.cfg.app, "repository_reset_enabled", True)
+    monkeypatch.setattr(m.reset, "RETRY_DELAY", 0)
+
+    def no_commit_rows(**kwargs):
+        raise RuntimeError("database hiccup")
+
+    monkeypatch.setattr(m.reset, "create_commit", no_commit_rows)
+    ids = await _pages(
+        lambda after: m.client.log_commits(
+            repository=repo.lakefs_repo, ref="main", after=after, amount=1000
+        )
+    )
+    response = await _reset(repo, ids[2]["id"])
+    assert response.status_code == 200, response.text

@@ -202,7 +202,11 @@ async def _merge(
             await client.delete_branch(repository=lakefs_repo, branch=scratch)
         except Exception as e:
             logger.warning(f"Could not delete the scratch branch {scratch}: {e}")
-        drop_head_refs(repo, scratch)  # in case a reconciliation listed it meanwhile
+        try:  # in case a reconciliation listed it meanwhile
+            drop_head_refs(repo, scratch)
+        except Exception as e:
+            logger.warning(f"Could not drop the scratch branch's references: {e}")
+            enqueue_lfs_reconciliation()
 
 
 async def reset_branch(
@@ -242,6 +246,7 @@ async def reset_branch(
     except Exception as e:
         if not rounds:
             raise
+        logger.exception(f"Reset of {lakefs_repo}@{branch} failed after merging", e)
         raise ResetRefused(
             500,
             {"error": f"Reset failed: {e}", "commits": [commit for commit, _ in rounds]},
@@ -298,23 +303,9 @@ async def record_reset(
     """
     if not rounds:
         return  # the branch came to equal the target on its own
-    try:
-        changed = sorted(set().union(*(wanted for _, wanted in rounds)))
-        head = (await client.get_branch(repository=lakefs_repo, branch=branch))["commit_id"]
-        actual = await availability.entries(client, lakefs_repo, head, changed)
-        oids = {path: lfs_oid(e.get("physical_address")) for path, e in actual.items() if e}
-        lfs_now = {path: oid for path, oid in oids.items() if oid}
-        R = LfsHeadRef
-        replaced = set()  # LFS paths whose version changed: keep windows to review
-        for batch in _batches(list(lfs_now)):
-            replaced.update(
-                path
-                for (path,) in R.select(R.path_in_repo)
-                .where((R.repository == repo) & (R.branch == branch) & R.path_in_repo.in_(batch))
-                .tuples()
-            )
-        record_head_change(repo, branch, {path: lfs_now.get(path) for path in changed}, [])
-        for commit_id, _ in rounds:
+    # The commits first: nothing below repairs a missing one
+    for commit_id, _ in rounds:
+        try:
             create_commit(
                 commit_id=commit_id,
                 repository=repo,
@@ -325,6 +316,27 @@ async def record_reset(
                 message=message,
                 description=f"Reset to {target}",
             )
+        except Exception as e:
+            logger.warning(f"Could not record the reset commit {commit_id[:8]}: {e}")
+    try:
+        changed = sorted(set().union(*(wanted for _, wanted in rounds)))
+        head = (await client.get_branch(repository=lakefs_repo, branch=branch))["commit_id"]
+        actual = await availability.entries(client, lakefs_repo, head, changed)
+        oids = {path: lfs_oid(e.get("physical_address")) for path, e in actual.items() if e}
+        lfs_now = {path: oid for path, oid in oids.items() if oid}
+        R = LfsHeadRef
+        # LFS paths whose version changed, to review their keep windows. A path
+        # the head did not link as LFS before is not reviewed: a version it
+        # pushes out is kept (a leak at worst, never a loss)
+        replaced = set()
+        for batch in _batches(list(lfs_now)):
+            replaced.update(
+                path
+                for (path,) in R.select(R.path_in_repo)
+                .where((R.repository == repo) & (R.branch == branch) & R.path_in_repo.in_(batch))
+                .tuples()
+            )
+        record_head_change(repo, branch, {path: lfs_now.get(path) for path in changed}, [])
 
         present = {path: e for path, e in actual.items() if e is not None}
         regular = [
@@ -372,6 +384,13 @@ async def record_reset(
             await asyncio.sleep(0)
 
         # Each round's LFS versions, attributed to the commit that merged them
+        # and dated when it did: a commit that landed after it stays newer
+        merged_at = {}
+        for commit_id, _ in rounds:
+            created = (await client.get_commit(repository=lakefs_repo, commit_id=commit_id))[
+                "creation_date"
+            ]
+            merged_at[commit_id] = datetime.fromtimestamp(created, tz=timezone.utc)
         file_ids = {}
         for batch in _batches(list(lfs_now)):
             file_ids.update(
@@ -387,6 +406,7 @@ async def record_reset(
                 "size": e.get("size_bytes", 0),
                 "commit_id": commit_id,
                 "file": file_ids.get(path),
+                "created_at": merged_at[commit_id],
             }
             for commit_id, wanted in rounds
             for path, e in wanted.items()
