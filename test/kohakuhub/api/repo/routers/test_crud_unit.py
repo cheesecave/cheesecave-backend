@@ -534,6 +534,14 @@ async def test_move_repo_covers_validation_quota_and_metadata_only_success(monke
     assert exists.headers.get("x-error-code") == repo_crud.HFErrorCode.REPO_EXISTS
 
     monkeypatch.setattr(repo_crud, "get_repository", lambda repo_type, namespace, name: repo_row if (namespace, name) == ("owner", "from") else None)
+    # The target namespace must name an account
+    monkeypatch.setattr(repo_crud, "_namespace_owner", lambda namespace: None)
+    nowhere = await repo_crud.move_repo(
+        repo_crud.MoveRepoPayload(fromRepo="owner/from", toRepo="nobody/to", type="model"),
+        auth=(SimpleNamespace(username="owner"), False),
+    )
+    assert nowhere.status_code == 404
+    monkeypatch.setattr(repo_crud, "_namespace_owner", lambda namespace: SimpleNamespace(id=2, username=namespace))
     monkeypatch.setattr(repo_crud, "check_quota", lambda **kwargs: (False, "quota exceeded"))
     with pytest.raises(HTTPException) as quota_error:
         await repo_crud.move_repo(
@@ -553,6 +561,8 @@ async def test_move_repo_covers_validation_quota_and_metadata_only_success(monke
     # The row keeps pointing at the LakeFS repository that holds its data.
     assert update["to_lakefs_repo"] == "m-owner-from"
     assert (update["to_namespace"], update["to_name"], update["moving_namespace"]) == ("other", "to", True)
+    # It goes to the account the namespace names, with its usage
+    assert (update["to_owner"].username, update["repo_size"]) == ("other", 12)
 
 
 @pytest.mark.asyncio

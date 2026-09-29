@@ -126,15 +126,11 @@ of the moved one.
 
 **Process:**
 1. Validates source repository exists
-2. Checks permissions (source delete + target namespace)
-3. Validates quota for namespace changes
-4. Migrates LakeFS repository with LFS handling
-5. Updates database records
-6. Cleans up old storage
+2. Checks permissions (source delete + target namespace); the target namespace must be an existing user or organization
+3. Validates quota for namespace changes (skipped for an admin token)
+4. Renames the repository in one database transaction: its LakeFS repository, and so every commit, branch, tag and file, stays as it is
 
-**LFS Handling:**
-- LFS files: Linked to same global S3 address (no duplication)
-- Regular files: Downloaded and re-uploaded to new repo folder
+**Ownership:** a repository belongs to the user or organization its namespace names. Moving it to another namespace hands it over, with its files and commits: deleting the account it came from no longer deletes it. Its storage usage moves from one namespace to the other, also for an admin's move.
 
 **Response:**
 ```json
@@ -154,7 +150,7 @@ of the moved one.
 - `200 OK` - Repository moved
 - `400 Bad Request` - Invalid IDs, destination exists, or quota exceeded
 - `403 Forbidden` - No permission
-- `404 Not Found` - Source repository not found
+- `404 Not Found` - Source repository or target namespace not found
 
 ---
 

@@ -13,6 +13,7 @@ from pydantic import BaseModel
 from kohakuhub.config import cfg
 from kohakuhub.async_utils import run_in_s3_executor
 from kohakuhub.db import (
+    Commit,
     File,
     Repository,
     StagingUpload,
@@ -542,7 +543,9 @@ async def create_repo(
             full_id=full_id,
             defaults={
                 "private": resolved_private,
-                "owner": user,
+                # The account or organization the namespace names, not the
+                # creator: deleting a member must not take an org's repos
+                "owner": _namespace_owner(namespace) or user,
                 "lakefs_repo": lakefs_repo,
             },
         )
@@ -950,6 +953,11 @@ async def _migrate_lakefs_repository(
         )
 
 
+def _namespace_owner(namespace: str) -> User | None:
+    """The account or organization a namespace names."""
+    return User.get_or_none(User.username == namespace)
+
+
 def _update_repository_database_records(
     repo_row: Repository,
     from_id: str,
@@ -961,6 +969,7 @@ def _update_repository_database_records(
     repo_size: int,
     to_lakefs_repo: str,
     preserve_quota: bool = True,
+    to_owner: User | None = None,
 ) -> None:
     """Update database records for repository move (must be called within db.atomic()).
 
@@ -977,6 +986,9 @@ def _update_repository_database_records(
             the one a move keeps, or the one a squash migration created. It is
             stored explicitly because it need not derive back from `to_id`.
         preserve_quota: Whether to preserve repository quota settings (default: True)
+        to_owner: The account or organization the target namespace names. It
+            owns the repository, its files and its commits afterwards (a
+            deleted account takes what it owns along); ``None`` keeps them.
     """
     # Preserve current quota settings before update
     # NOTE: When moving to different namespace, reset quota to inherit from new namespace
@@ -999,9 +1011,12 @@ def _update_repository_database_records(
         used_bytes=current_used_bytes,
     ).where(Repository.id == repo_row.id).execute()
 
-    # NOTE: File and StagingUpload records don't need updating!
-    # They use ForeignKey to Repository.id (which doesn't change on move).
-    # Only Repository.namespace, Repository.name, Repository.full_id change.
+    # File and Commit rows follow the repository by its id; only the owner
+    # they carry (denormalized) changes with the namespace.
+    if to_owner is not None and to_owner.id != repo_row.owner_id:
+        Repository.update(owner=to_owner).where(Repository.id == repo_row.id).execute()
+        File.update(owner=to_owner).where(File.repository == repo_row).execute()
+        Commit.update(owner=to_owner).where(Commit.repository == repo_row).execute()
 
     # Update storage quotas if namespace changed
     if moving_namespace and repo_size > 0:
@@ -1081,6 +1096,12 @@ async def move_repo(
     # Check permissions (admin bypasses)
     check_repo_delete_permission(repo_row, user, is_admin=is_admin)
     check_namespace_permission(to_namespace, user, is_admin=is_admin)
+    # The repository goes to the account or organization the namespace names
+    to_owner = _namespace_owner(to_namespace)
+    if to_owner is None:
+        return hf_error_response(
+            404, HFErrorCode.INVALID_REPO_ID, f"Namespace not found: {to_namespace}"
+        )
 
     # Check if destination already exists. See `_repo_exists_response` for why the
     # response includes a JSON body as well as X-Error-* headers.
@@ -1106,14 +1127,15 @@ async def move_repo(
     repo_size = 0
     moving_namespace = from_namespace != to_namespace
 
+    if moving_namespace:
+        # Its usage moves along, whoever moves it
+        repo_storage = await calculate_repository_storage(repo_row)
+        repo_size = repo_storage["total_bytes"]
+
     if moving_namespace and not is_admin:
         logger.info(
             f"Checking storage quota for moving {from_id} to {to_namespace} namespace"
         )
-
-        # Calculate repository storage size
-        repo_storage = await calculate_repository_storage(repo_row)
-        repo_size = repo_storage["total_bytes"]
 
         # Check if target namespace is an organization
         target_org = get_organization(to_namespace)
@@ -1163,6 +1185,7 @@ async def move_repo(
                 moving_namespace=moving_namespace,
                 repo_size=repo_size,
                 to_lakefs_repo=lakefs_repo,
+                to_owner=to_owner,
             )
     except IntegrityError:
         # Lost a race for the target name to a concurrent create or move; the
