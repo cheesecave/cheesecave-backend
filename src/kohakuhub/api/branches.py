@@ -841,22 +841,22 @@ async def reset_branch(
     # checked, ``force`` only allows resetting main (#107).
     message = payload.message or f"Reset to commit {commit_id[:8]}"
     try:
-        head, changed, commits = await reset.reset_branch(
-            client, lakefs_repo, branch, commit_id, message
+        head, rounds = await reset.reset_branch(
+            client, repo_row, lakefs_repo, branch, commit_id, message
         )
     except reset.ResetRefused as e:
-        # Merged before giving up: those commits are on the branch
+        # Merged before giving up or failing: those commits are on the branch
         await reset.record_reset(
-            client, lakefs_repo, repo_row, branch, commit_id, e.changed, e.commits, user, message
+            client, lakefs_repo, repo_row, branch, commit_id, e.rounds, user, message
         )
         raise HTTPException(status_code=e.status, detail=e.detail)
     except Exception as e:
         logger.exception(f"Failed to reset branch: {e}", e)
         raise HTTPException(status_code=500, detail={"error": f"Reset failed: {e}"})
     await reset.record_reset(
-        client, lakefs_repo, repo_row, branch, commit_id, changed, commits, user, message
+        client, lakefs_repo, repo_row, branch, commit_id, rounds, user, message
     )
-    logger.success(f"Reset {repo_id}@{branch} to {commit_id[:8]}: {len(changed)} path(s)")
+    logger.success(f"Reset {repo_id}@{branch} to {commit_id[:8]} in {len(rounds)} merge(s)")
 
     return {
         "success": True,

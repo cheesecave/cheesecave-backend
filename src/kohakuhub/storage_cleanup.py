@@ -58,6 +58,8 @@ EXPIRE_RECENT_LFS_KIND = "storage.expire_recent_lfs"
 REVIEW_LFS_WINDOW_KIND = "storage.review_lfs_window"
 RECONCILE_LFS_KIND = "storage.reconcile_lfs_references"
 RECORD_BRANCH_KIND = "storage.record_branch_links"
+# A reset's working branch; it lives for the reset only, so it protects nothing
+SCRATCH_BRANCH_PREFIX = "kh-reset-"
 RETRY_GATE = timedelta(seconds=30)
 S3_DELETE_BATCH = 1000  # the S3 DeleteObjects maximum
 LFS_BATCH = 500
@@ -378,6 +380,8 @@ async def branch_head_references(lakefs_repo: str):
         )
     ]
     for branch in branches:
+        if branch["id"].startswith(SCRATCH_BRANCH_PREFIX):
+            continue
         counts["branches"] += 1
         commit_id = branch["commit_id"]
         if commit_id not in listed:  # branches at the same commit link the same objects

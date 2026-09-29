@@ -32,6 +32,12 @@ def m(prepared_backend_test_state, monkeypatch):
     ns.rest._singleton_client = None
 
 
+def collect(m, sha256):
+    """As garbage collection leaves an object: tombstoned and deleted."""
+    m.db.LfsObjectTombstone.create(sha256=sha256, state=m.gc.DELETED)
+    m.s3.delete_object(Bucket=m.cfg.s3.bucket, Key=m.gc.lfs_key(sha256))
+
+
 def sha(content):
     return hashlib.sha256(content).hexdigest()
 
@@ -166,10 +172,27 @@ async def test_big_resets_page_through_every_change(m, owner_client, monkeypatch
     assert all(files[f"many/f{i:03d}.txt"][2] for i in range(160))
     assert _head_refs(m, repo) == {("keep.bin", sha(b"keep"))}
 
+    # And back: 90 LFS objects to restore, claimed in slices
+    await repo.commit(_file("again.txt", "a"))
+    monkeypatch.setattr(m.reset, "CLAIM_YIELD", 10)
+    target = (
+        await _pages(
+            lambda after: m.client.log_commits(
+                repository=repo.lakefs_repo, ref="main", after=after, amount=1000
+            )
+        )
+    )[2][
+        "id"
+    ]  # the commit adding many/: before the reset and again.txt
+    response = await _reset(repo, target)
+    assert response.status_code == 200, response.text
+    assert await _differs(m, repo, await repo.head(), target) == []
+    assert len(_head_refs(m, repo)) == 91
+
 
 async def test_a_file_no_longer_stored_refuses_even_with_force(m, owner_client):
     repo, (initial, c1, c2, c3, c4, c5) = await _linear(m, owner_client, "reset-missing")
-    m.db.LfsObjectTombstone.create(sha256=sha(b"a v1"), state=m.gc.DELETED)
+    collect(m, sha(b"a v1"))
     response = await _reset(repo, c1, force=True)
     assert response.status_code == 400
     detail = response.json()["detail"]
@@ -179,6 +202,7 @@ async def test_a_file_no_longer_stored_refuses_even_with_force(m, owner_client):
 
     # Gone from the bucket without a tombstone counts too
     m.db.LfsObjectTombstone.delete().execute()
+    repo.put(b"a v1")
     m.s3.delete_object(Bucket=m.cfg.s3.bucket, Key=m.gc.lfs_key(sha(b"a v2")))
     response = await _reset(repo, c2)
     assert response.status_code == 400
@@ -189,11 +213,9 @@ async def test_a_file_no_longer_stored_refuses_even_with_force(m, owner_client):
     with_many = await repo.commit(*many)
     await repo.commit(*(_delete(f"w/{i}.bin") for i in range(7)))
     for i in range(7):
-        m.db.LfsObjectTombstone.create(sha256=sha(f"weights {i}".encode()), state=m.gc.DELETED)
+        collect(m, sha(f"weights {i}".encode()))
     detail = (await _reset(repo, with_many)).json()["detail"]
     assert len(detail["missing_files"]) == 7 and detail["error"].endswith("and 2 more")
-    m.db.LfsObjectTombstone.delete().execute()
-
     # Only what the target needs and the head lacks counts: b.bin is deleted
     m.s3.delete_object(Bucket=m.cfg.s3.bucket, Key=m.gc.lfs_key(sha(b"b v1")))
     assert (await _reset(repo, c1)).status_code == 200
@@ -327,7 +349,41 @@ async def test_an_upload_in_flight_is_waited_for(m, owner_client, monkeypatch):
     monkeypatch.setattr(m.rest.LakeFSRestClient, "merge_into_branch", refused)
     head = await repo.head()
     response = await _reset(repo, c2)
-    assert response.status_code == 500
+    assert response.status_code == 400
+    assert response.json()["detail"]["error"] == "LakeFS refused the merge: bad"
+    assert await repo.head() == head
+
+    async def broken(self, *args, **kwargs):
+        request = httpx.Request("POST", "http://lakefs")
+        raise httpx.HTTPStatusError(
+            "down", request=request, response=httpx.Response(503, request=request, text="down")
+        )
+
+    monkeypatch.setattr(m.rest.LakeFSRestClient, "merge_into_branch", broken)
+    assert (await _reset(repo, c2)).status_code == 500
+    assert await repo.head() == head
+
+
+async def test_a_branch_that_stays_dirty_is_named(m, owner_client, monkeypatch):
+    """Uncommitted changes that do not go away (a commit that failed while
+    uploading): the merge is tried again without rebuilding, then refused."""
+    repo, (initial, c1, *_rest) = await _linear(m, owner_client, "reset-stays-dirty")
+    await m.client.upload_object(
+        repository=repo.lakefs_repo, branch="main", path="stuck.txt", content=b"s"
+    )
+    builds = []
+    build = m.reset._build
+
+    async def counting_build(*args, **kwargs):
+        builds.append(1)
+        return await build(*args, **kwargs)
+
+    monkeypatch.setattr(m.reset, "_build", counting_build)
+    head = await repo.head()
+    response = await _reset(repo, c1)
+    assert response.status_code == 409
+    assert "uncommitted changes" in response.json()["detail"]["error"]
+    assert builds == [1]  # one tree, merged three times
     assert await repo.head() == head
 
 
@@ -378,6 +434,16 @@ async def test_collection_racing_the_reset_is_caught_when_claiming(m, owner_clie
     response = await _reset(repo, c1)
     assert response.status_code == 400
     assert await repo.head() == c5
+    # ... so its tombstone is back
+    assert m.gc.tombstone_state(sha(b"a v1")) == m.gc.DELETED
+
+
+async def test_an_object_uploaded_again_after_collection_is_revived(m, owner_client):
+    repo, (initial, c1, c2, c3, c4, c5) = await _linear(m, owner_client, "reset-revived")
+    m.db.LfsObjectTombstone.create(sha256=sha(b"a v1"), state=m.gc.DELETED)  # still stored
+    response = await _reset(repo, c1)
+    assert response.status_code == 200, response.text
+    assert m.gc.tombstone_state(sha(b"a v1")) is None
 
 
 async def test_files_stored_outside_the_lfs_prefix_are_copied(m, owner_client):
@@ -424,19 +490,36 @@ async def test_a_branch_that_came_to_equal_the_target_needs_nothing_more(
     target: the reset is done, with no commit of its own."""
     repo, (initial, c1, c2, c3, c4, c5) = await _linear(m, owner_client, "reset-meanwhile")
 
+    merge = m.rest.LakeFSRestClient.merge_into_branch
+    calls = []
+
     async def overtaken(self, *args, **kwargs):
-        await repo.commit(lfs("a.bin", b"a v1"), _file("r.txt", "r1"), _delete("b.bin"))
-        request = httpx.Request("POST", "http://lakefs")
-        response = httpx.Response(409, request=request, text="conflict")
-        raise httpx.HTTPStatusError("conflict", request=request, response=response)
+        calls.append(1)
+        if len(calls) == 1:
+            await repo.commit(lfs("a.bin", b"a v1"), _file("r.txt", "r1"), _delete("b.bin"))
+        return await merge(self, *args, **kwargs)
 
     monkeypatch.setattr(m.rest.LakeFSRestClient, "merge_into_branch", overtaken)
-    commits = m.db.Commit.select().count()
     response = await _reset(repo, c1)
     assert response.status_code == 200, response.text
     head = await repo.head()
     assert response.json()["commit_id"] == head and head != c5
     assert await _differs(m, repo, head, c1) == []
+
+    # Newer LakeFS refuses a merge with nothing to add: done as well
+    repo2, ids = await _linear(m, owner_client, "reset-meanwhile-2")
+
+    async def nothing_to_add(self, *args, **kwargs):
+        await repo2.commit(lfs("a.bin", b"a v1"), _file("r.txt", "r1"), _delete("b.bin"))
+        request = httpx.Request("POST", "http://lakefs")
+        response = httpx.Response(400, request=request, text='{"message":"no changes"}')
+        raise httpx.HTTPStatusError("no changes", request=request, response=response)
+
+    monkeypatch.setattr(m.rest.LakeFSRestClient, "merge_into_branch", nothing_to_add)
+    commits = m.db.Commit.select().count()
+    response = await _reset(repo2, ids[1])
+    assert response.status_code == 200, response.text
+    assert response.json()["commit_id"] == await repo2.head()
     assert m.db.Commit.select().count() == commits + 1  # the other commit only
 
 
@@ -453,3 +536,145 @@ async def test_versions_pushed_out_of_the_keep_window_go_to_collection(
     assert queued == [1]
     candidates = {c.sha256 for c in m.db.LfsGcCandidate.select()}
     assert sha(b"a v2") in candidates
+
+
+async def test_a_failure_after_a_merge_still_records_it(m, owner_client, monkeypatch):
+    """The first merge is on the branch; the second round fails. The reset
+    commit is recorded, and the answer names it (#117 review)."""
+    repo, (initial, c1, *_rest) = await _linear(m, owner_client, "reset-late-failure")
+    merge = m.rest.LakeFSRestClient.merge_into_branch
+    first = []
+
+    async def racing_merge(self, *args, **kwargs):
+        if not first:
+            first.append(1)
+            await repo.commit(_file("late.txt", "late"))  # merged alongside
+        return await merge(self, *args, **kwargs)
+
+    async def broken_delete(self, *args, **kwargs):
+        raise RuntimeError("object store unavailable")
+
+    monkeypatch.setattr(m.rest.LakeFSRestClient, "merge_into_branch", racing_merge)
+    monkeypatch.setattr(m.rest.LakeFSRestClient, "delete_objects", broken_delete)
+    # c1 has b.bin deleted: take the head's b.bin out first, so round 1 deletes nothing
+    await repo.commit(_delete("b.bin"))
+    response = await _reset(repo, c1)
+    assert response.status_code == 500
+    detail = response.json()["detail"]
+    assert "object store unavailable" in detail["error"] and len(detail["commits"]) == 1
+    assert _head_refs(m, repo) == {("a.bin", sha(b"a v1"))}
+    assert m.db.Commit.get_or_none(m.db.Commit.commit_id == detail["commits"][0]) is not None
+
+
+async def test_a_claim_refused_after_a_merge_still_records_it(m, owner_client, monkeypatch):
+    repo = await Repo(m, owner_client, "reset-late-claim").create()
+    target = await repo.commit(lfs("a.bin", b"a v1"), _file("x.txt", "x1"))
+    await repo.commit(_file("x.txt", "x2"))
+    merge = m.rest.LakeFSRestClient.merge_into_branch
+    first = []
+
+    async def racing_merge(self, *args, **kwargs):
+        if not first:
+            first.append(1)
+            await repo.commit(lfs("a.bin", b"a racing"))  # another path than round 1's
+        return await merge(self, *args, **kwargs)
+
+    def collected(sha256, exists_in_storage):
+        raise m.gc.LfsObjectUnavailable(sha256)
+
+    monkeypatch.setattr(m.rest.LakeFSRestClient, "merge_into_branch", racing_merge)
+    monkeypatch.setattr(m.reset, "claim_for_commit", collected)  # only round 2 claims
+    response = await _reset(repo, target)
+    assert response.status_code == 400
+    detail = response.json()["detail"]
+    assert detail["missing_files"] == ["a.bin"] and len(detail["commits"]) == 1
+    assert _files(m, repo)["x.txt"] == (blob_sha1("x1"), False, False)
+    # a.bin is the racing commit's, as the branch holds it
+    assert _head_refs(m, repo) == {("a.bin", sha(b"a racing"))}
+
+
+async def test_giving_up_records_what_the_branch_holds(m, owner_client, monkeypatch):
+    """A concurrent commit changes a path the reset already merged, then the
+    reset gives up: the records follow the branch, not the target (#117 review)."""
+    repo, (initial, c1, *_rest) = await _linear(m, owner_client, "reset-gives-up-holds")
+    merge = m.rest.LakeFSRestClient.merge_into_branch
+    counter = iter(range(100))
+
+    async def racing_merge(self, *args, **kwargs):
+        n = next(counter)
+        if n == 0:
+            await repo.commit(_file("late.txt", "late"))  # merged alongside
+        else:
+            await repo.commit(lfs("a.bin", f"a racing {n}".encode()))
+        return await merge(self, *args, **kwargs)
+
+    monkeypatch.setattr(m.rest.LakeFSRestClient, "merge_into_branch", racing_merge)
+    response = await _reset(repo, c1)
+    assert response.status_code == 409
+    commits = response.json()["detail"]["commits"]
+    assert commits
+    tree = await _tree(m, repo, await repo.head())
+    held = m.gc.lfs_oid(tree["a.bin"]["physical_address"])
+    assert held != sha(b"a v1")
+    assert _head_refs(m, repo) == {("a.bin", held)}
+    assert _files(m, repo)["a.bin"][0] == held
+    # The first round's version is attributed to the commit that merged it
+    H = m.db.LFSObjectHistory
+    first = H.get_or_none((H.commit_id == commits[0]) & (H.path_in_repo == "a.bin"))
+    assert first.sha256 == sha(b"a v1") and first.file is not None
+
+
+async def test_an_unreadable_regular_file_keeps_its_row(m, owner_client, monkeypatch):
+    repo, (initial, c1, *_rest) = await _linear(m, owner_client, "reset-unreadable")
+    before = _files(m, repo)["r.txt"]
+
+    async def unreadable(self, *args, **kwargs):
+        raise RuntimeError("read failed")
+
+    monkeypatch.setattr(m.rest.LakeFSRestClient, "get_object", unreadable)
+    response = await _reset(repo, c1)
+    assert response.status_code == 200, response.text
+    head = await repo.head()
+    assert _files(m, repo)["r.txt"] == before
+    assert _head_refs(m, repo) == {("a.bin", sha(b"a v1"))}
+    assert m.db.Commit.get_or_none(m.db.Commit.commit_id == head) is not None
+
+
+async def test_the_scratch_branch_protects_nothing(m, owner_client, monkeypatch):
+    """A reconciliation listing branches while a reset runs skips its scratch
+    branch, and nothing recorded under its name survives it."""
+    repo, (initial, c1, *_rest) = await _linear(m, owner_client, "reset-scratch")
+    cleanup = _live("kohakuhub.storage_cleanup")
+    seen = []
+    commit = m.rest.LakeFSRestClient.commit
+
+    async def listing_commit(self, repository, branch, *args, **kwargs):
+        if branch.startswith(cleanup.SCRATCH_BRANCH_PREFIX):
+            heads, *_ = await cleanup.branch_head_references(repository)
+            seen.append({b for b, _, _ in heads})
+            m.gc.add_head_refs(_row(m, repo), [(branch, "x.bin", "0" * 64)])
+        return await commit(self, repository, branch, *args, **kwargs)
+
+    monkeypatch.setattr(m.rest.LakeFSRestClient, "commit", listing_commit)
+    assert (await _reset(repo, c1)).status_code == 200
+    assert seen == [{"main"}]
+    R = m.db.LfsHeadRef
+    assert not R.select().where(R.branch.startswith(cleanup.SCRATCH_BRANCH_PREFIX)).exists()
+
+
+async def test_storage_usage_follows_and_its_failure_is_harmless(m, owner_client, monkeypatch):
+    repo, (initial, c1, c2, *_rest) = await _linear(m, owner_client, "reset-usage")
+    updated = []
+
+    async def update(repo_row):
+        updated.append(repo_row.full_id)
+
+    monkeypatch.setattr(m.reset, "update_repository_storage", update)
+    assert (await _reset(repo, c1)).status_code == 200
+    assert updated == [repo.id]
+
+    async def broken(repo_row):
+        raise RuntimeError("quota service down")
+
+    monkeypatch.setattr(m.reset, "update_repository_storage", broken)
+    assert (await _reset(repo, c2)).status_code == 200

@@ -31,7 +31,8 @@ class LakeFSConfig(BaseModel):
     secret_key: str = "test-secret-key"
     repo_namespace: str = "hf"
     # Concurrent LakeFS requests one branch operation (reset) makes. More does
-    # not go faster: LakeFS saturates around 8, and other readers slow down.
+    # not go faster: measured on LakeFS 1.87, linking saturates around 8, and
+    # other requests slow down past it (PR #117).
     operation_concurrency: int = Field(default=8, ge=1)
 
 
