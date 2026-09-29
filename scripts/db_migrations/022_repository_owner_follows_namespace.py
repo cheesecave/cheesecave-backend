@@ -3,87 +3,77 @@
 Migration 022: A repository belongs to the account its namespace names.
 
 Changes (data only, no schema change):
-- Repository.owner: the user or organization whose name is the repository's
-  namespace, where it was another account. Earlier versions set the owner to
-  the creator, also for an organization's repositories, and kept it when a
-  repository moved to another namespace (#107)
-- File.owner and Commit.owner of those repositories: the same account (both
-  denormalize the repository's owner)
-- The storage usage of every namespace involved, summed again from its
-  repositories' usage: an admin's move used to leave it behind
+- repository.owner_id: the user or organization whose name is the
+  repository's namespace, where it was another account. Earlier versions set
+  the owner to the creator, also for an organization's repositories, and kept
+  it when a repository moved to another namespace (#107)
+- file.owner_id and commit.owner_id of those repositories: the same account
+  (both denormalize the repository's owner)
 
 Why: deleting an account deletes every repository it owns, with its LakeFS
 repository and storage. A member who created a repository in an organization,
 or a user who moved one into an organization, took it along when their account
 was deleted.
 
-A repository whose namespace no account holds is reported and left alone.
+Storage usage is counted per namespace, not per owner, so it does not change
+here. Usage an admin's move left behind (it used to skip moving it) is
+recounted by the namespace's next commit, or by the admin quota recalculation.
+
+A repository whose namespace no account holds is reported and left alone; if
+an account with that name is created later, a later run hands it over, as its
+permissions already follow the namespace.
+
+Plain SQL, not the models: this must keep meaning what it means today.
 """
 
-import os
 import sys
+import os
 
 # Add src to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 # Add db_migrations to path (for _migration_utils)
 sys.path.insert(0, os.path.dirname(__file__))
 
-from peewee import fn
-
 from kohakuhub.config import cfg
-from kohakuhub.db import Commit, File, Repository, User, db
-from _migration_utils import should_skip_due_to_future_migrations
+from kohakuhub.db import db
+from _migration_utils import check_table_exists, should_skip_due_to_future_migrations
 
 MIGRATION_NUMBER = 22
 
-
-def _misowned():
-    """``(repository, the account its namespace names)`` where they differ."""
-    Namespace = User.alias()
-    return (
-        Repository.select(Repository, Namespace)
-        .join(Namespace, on=(Namespace.username == Repository.namespace), attr="account")
-        .where(Repository.owner != Namespace.id)
-    )
-
-
-def _orphans():
-    """Repositories whose namespace no account holds."""
-    return Repository.select().where(
-        Repository.namespace.not_in(User.select(User.username))
-    )
+MISOWNED = (
+    'SELECT r.id, r.repo_type, r.full_id, owner.username, account.id, account.username '
+    'FROM "repository" r '
+    'JOIN "user" account ON account.username = r.namespace '
+    'JOIN "user" owner ON owner.id = r.owner_id '
+    "WHERE r.owner_id <> account.id"
+)
+ORPHANS = (
+    'SELECT r.repo_type, r.full_id FROM "repository" r '
+    'WHERE r.namespace NOT IN (SELECT username FROM "user")'
+)
 
 
 def is_applied(db, cfg):
-    """Applied once every repository whose namespace an account holds is owned by it."""
-    return not _misowned().exists()
-
-
-def _usage(namespace: str, private: bool) -> int:
-    return (
-        Repository.select(fn.COALESCE(fn.SUM(Repository.used_bytes), 0))
-        .where((Repository.namespace == namespace) & (Repository.private == private))
-        .scalar()
-    )
+    """Applied once the schema before it is complete (so earlier migrations
+    never skip themselves on its account) and every repository whose namespace
+    an account holds is owned by it."""
+    if not check_table_exists(db, "lfs_gc_state"):
+        return False
+    return db.execute_sql(MISOWNED + " LIMIT 1").fetchone() is None
 
 
 def _repair():
-    """Hand every misowned repository to its namespace; returns the namespaces involved."""
-    involved = set()
-    for repo in _misowned():
-        account = repo.account
-        involved.update({repo.namespace, repo.owner.username})
-        Repository.update(owner=account).where(Repository.id == repo.id).execute()
-        File.update(owner=account).where(File.repository == repo.id).execute()
-        Commit.update(owner=account).where(Commit.repository == repo.id).execute()
-        print(f"  ✓ {repo.repo_type}:{repo.full_id}: owner {repo.owner.username} -> {account.username}")
-    for namespace in sorted(involved):
-        User.update(
-            private_used_bytes=_usage(namespace, True),
-            public_used_bytes=_usage(namespace, False),
-        ).where(User.username == namespace).execute()
-    print(f"  ✓ Storage usage summed again for {len(involved)} namespace(s)")
-    return involved
+    """Hand every misowned repository, its files and its commits to its namespace."""
+    p = db.param
+    rows = db.execute_sql(MISOWNED).fetchall()
+    for repo_id, repo_type, full_id, owner, account_id, account in rows:
+        db.execute_sql(f'UPDATE "repository" SET owner_id = {p} WHERE id = {p}', (account_id, repo_id))
+        db.execute_sql(f'UPDATE "file" SET owner_id = {p} WHERE repository_id = {p}', (account_id, repo_id))
+        db.execute_sql(
+            f'UPDATE "commit" SET owner_id = {p} WHERE repository_id = {p}', (account_id, repo_id)
+        )
+        print(f"  ✓ {repo_type}:{full_id}: owner {owner} -> {account}")
+    return len(rows)
 
 
 def run():
@@ -99,10 +89,10 @@ def run():
             print(f"Migration {MIGRATION_NUMBER}: Skipped (superseded by future migration)")
             return True
 
-        for repo in _orphans():
+        for repo_type, full_id in db.execute_sql(ORPHANS).fetchall():
             print(
-                f"Migration {MIGRATION_NUMBER}: {repo.repo_type}:{repo.full_id} has no "
-                "account for its namespace; left as it is"
+                f"Migration {MIGRATION_NUMBER}: {repo_type}:{full_id} has no account for its "
+                "namespace; left as it is"
             )
 
         if is_applied(db, cfg):
@@ -113,8 +103,8 @@ def run():
         print(f"Migration {MIGRATION_NUMBER}: Repositories belong to their namespace")
         print("=" * 70)
         with db.atomic():
-            _repair()
-        print(f"Migration {MIGRATION_NUMBER}: ✓ Completed Successfully")
+            repaired = _repair()
+        print(f"Migration {MIGRATION_NUMBER}: ✓ Completed Successfully ({repaired} repositories)")
         return True
 
     except Exception as e:

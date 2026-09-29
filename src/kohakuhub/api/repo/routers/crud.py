@@ -545,7 +545,7 @@ async def create_repo(
                 "private": resolved_private,
                 # The account or organization the namespace names, not the
                 # creator: deleting a member must not take an org's repos
-                "owner": _namespace_owner(namespace) or user,
+                "owner": _namespace_owner(namespace),
                 "lakefs_repo": lakefs_repo,
             },
         )
@@ -1028,13 +1028,15 @@ def _update_repository_database_records(
         target_org = get_organization(to_namespace)
         is_target_org = target_org is not None
 
-        # Decrement from source namespace
-        increment_storage(
-            namespace=from_namespace,
-            bytes_delta=-repo_size,
-            is_private=repo_row.private,
-            is_org=is_source_org,
-        )
+        # Decrement from source namespace, unless no account holds it any more
+        # (an admin moving an orphaned repository out of it)
+        if _namespace_owner(from_namespace) is not None:
+            increment_storage(
+                namespace=from_namespace,
+                bytes_delta=-repo_size,
+                is_private=repo_row.private,
+                is_org=is_source_org,
+            )
 
         # Increment to target namespace
         increment_storage(
