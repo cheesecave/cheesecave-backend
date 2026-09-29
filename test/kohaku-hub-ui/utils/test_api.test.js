@@ -196,9 +196,11 @@ describe("frontend API client", () => {
       "/api/models/alice/demo/branch/main/revert",
       { ref: "commit-1" },
     );
+    // A reset of a big repository takes longer than the default timeout
     expect(postSpy).toHaveBeenCalledWith(
       "/api/models/alice/demo/branch/main/reset",
       { ref: "commit-1", force: true },
+      { timeout: 300000 },
     );
     expect(getSpy).toHaveBeenCalledWith("/api/datasets", {
       params: { limit: 5, sort: "likes" },

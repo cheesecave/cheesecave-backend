@@ -524,6 +524,34 @@ class LakeFSRestClient:
         )
         self._check_response(response)
 
+    async def copy_object(
+        self, repository: str, branch: str, dest_path: str, src_ref: str, src_path: str
+    ) -> dict[str, Any]:
+        """Copy ``src_ref:src_path`` to ``dest_path`` on ``branch``, inside the
+        object store: no content passes through this service."""
+        url = f"{self.base_url}/repositories/{repository}/branches/{branch}/objects/copy"
+        client = self._httpx()
+        response = await client.post(
+            url,
+            params={"dest_path": dest_path},
+            json={"src_path": src_path, "src_ref": src_ref},
+            auth=self.auth,
+            timeout=None,
+        )
+        self._check_response(response)
+        return response.json()
+
+    async def delete_objects(self, repository: str, branch: str, paths: list[str]) -> None:
+        """Delete up to 1000 objects from ``branch`` in one request."""
+        url = f"{self.base_url}/repositories/{repository}/branches/{branch}/objects/delete"
+        client = self._httpx()
+        response = await client.post(url, json={"paths": paths}, auth=self.auth, timeout=None)
+        self._check_response(response)
+        # A partial failure still answers 200, listing what was not deleted
+        errors = response.json().get("errors") or []
+        if errors:
+            raise RuntimeError(f"LakeFS could not delete {len(errors)} object(s): {errors[:5]}")
+
     async def create_repository(
         self, name: str, storage_namespace: str, default_branch: str = "main"
     ) -> dict[str, Any]:

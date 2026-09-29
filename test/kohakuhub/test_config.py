@@ -71,6 +71,7 @@ def test_load_config_merges_file_and_environment(monkeypatch):
     monkeypatch.setenv("KOHAKU_HUB_LAKEFS_ACCESS_KEY", "lakefs-ak")
     monkeypatch.setenv("KOHAKU_HUB_LAKEFS_SECRET_KEY", "lakefs-sk")
     monkeypatch.setenv("KOHAKU_HUB_LAKEFS_REPO_NAMESPACE", "kh")
+    monkeypatch.setenv("KOHAKU_HUB_LAKEFS_OPERATION_CONCURRENCY", "4")
     monkeypatch.setenv("KOHAKU_HUB_SMTP_ENABLED", "true")
     monkeypatch.setenv("KOHAKU_HUB_SMTP_HOST", "smtp.example.com")
     monkeypatch.setenv("KOHAKU_HUB_SMTP_PORT", "2525")
@@ -129,6 +130,7 @@ def test_load_config_merges_file_and_environment(monkeypatch):
     assert cfg.s3.signature_version == "s3v4"
     assert cfg.lakefs.endpoint == "http://env-lakefs"
     assert cfg.lakefs.repo_namespace == "kh"
+    assert cfg.lakefs.operation_concurrency == 4
     assert cfg.smtp.enabled is True
     assert cfg.smtp.host == "smtp.example.com"
     assert cfg.smtp.port == 2525
@@ -289,3 +291,9 @@ def test_load_config_worker_defaults(monkeypatch):
     cfg = hub_config.load_config()
     assert cfg.worker == hub_config.WorkerConfig()
     hub_config.load_config.cache_clear()
+
+
+def test_lakefs_operation_concurrency_defaults_and_rejects_zero():
+    assert hub_config.LakeFSConfig().operation_concurrency == 8
+    with pytest.raises(ValueError):
+        hub_config.LakeFSConfig(operation_concurrency=0)

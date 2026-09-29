@@ -906,6 +906,7 @@ export const settingsAPI = {
     api.post(
       `/api/${repoType}s/${namespace}/${name}/branch/${branch}/reset`,
       data,
+      { timeout: 300000 }, // 5 minutes: a big repository's reset takes a while
     ),
 
   /**

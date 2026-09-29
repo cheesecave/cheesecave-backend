@@ -254,7 +254,7 @@ accepting the open issues in #99 and #107, and requires:
 
 **Authentication:** Required (write permission)
 
-**Purpose:** Reset branch to a specific commit (like `git reset --hard`)
+**Purpose:** Make the branch's content equal a commit's, with a new commit on top (history is kept, so a reset can itself be reset)
 
 **Request Body:**
 ```json
@@ -267,13 +267,8 @@ accepting the open issues in #99 and #107, and requires:
 
 **Fields:**
 - `ref`: Commit ID or ref to reset to (required)
-- `message`: Commit message (optional)
-- `force`: Skip LFS recoverability check
-
-**Safety Checks:**
-1. Main branch requires `force: true`
-2. LFS file availability checked (unless `force: true`)
-3. Creates new commit (preserves history)
+- `message`: Commit message (optional; default `Reset to commit <id>`)
+- `force`: Required to reset `main`. It no longer skips the LFS check.
 
 **Response:**
 ```json
@@ -284,34 +279,34 @@ accepting the open issues in #99 and #107, and requires:
 }
 ```
 
-**LFS Recoverability Check:**
-- Validates all LFS files from target commit still exist
-- Checks all commits between target and HEAD
-- If files garbage-collected: returns 400 error
+**LFS check:** every LFS object the target needs and the branch head lacks
+must still be stored: not garbage collected (tombstoned) and present in the
+bucket. Objects the head already has need nothing restored. Otherwise:
 
-**Error if LFS unavailable:**
 ```json
 {
-  "error": "Cannot reset to commit abc123: 5 LFS file(s) across 3 commit(s) have been garbage collected",
+  "error": "Cannot reset to commit abc123de: 2 LFS file(s) are no longer stored (garbage collected or missing): model.safetensors, data.bin",
   "missing_files": ["model.safetensors", "data.bin"],
-  "affected_commits": ["commit1", "commit2", "commit3"],
   "recoverable": false
 }
 ```
 
-**Use `force: true` to bypass check (may break LFS refs)**
-
 **Status Codes:**
 - `200 OK` - Reset successful
-- `503 Service Unavailable` - Reset operation is disabled by server policy
-- `400 Bad Request` - LFS files not recoverable or main branch without force
+- `400 Bad Request` - LFS files no longer stored, `main` without `force`, or the branch is already at the target state
 - `404 Not Found` - Commit not found
+- `409 Conflict` - The branch kept changing during the reset (concurrent commits), or it has uncommitted changes (an upload in progress); try again
+- `503 Service Unavailable` - Reset operation is disabled by server policy
 
-**Implementation Details:**
-- Uses diff-based approach (not destructive)
-- Restores files from target commit
-- Syncs File table after reset
-- Records reset commit in database
+**How it works:**
+- A two-dot diff between the head and the target, read to the end, gives every path to change.
+- No file content passes through the API: LFS files link their global `lfs/<sha256>` object again (same identity), regular files are copied inside the object store, removed files are deleted in batches. `lakefs.operation_concurrency` bounds the concurrent LakeFS requests.
+- The new tree is built on a scratch branch and squash-merged onto the branch in one step, so readers never see a half-done reset, and a failure before that merge leaves the branch as it was.
+- The result must equal the target. Where a concurrent commit changed the same paths, the merge takes the target's version; paths the reset did not touch, merged alongside, make it run again from the new head (at most three rounds). The concurrent commits stay in the history. If the branch came to equal the target on its own, `commit_id` is that head (LakeFS versions that refuse a merge with nothing to add make no reset commit then; older ones record an empty one).
+- An error after a reset commit was merged (giving up, a missing file, a failure) lists the commits made in `commits`; they are on the branch and recorded.
+- Before answering, the File table, LFS history, branch head references, commit record and storage usage are updated for the paths that changed, from what the branch holds. The versions replaced are left to garbage collection, which runs in the background.
+
+**Changed from earlier versions:** `force` no longer skips the LFS check, the 400 body has no `affected_commits`, a target equal to the head answers 400 (not 500), and 409 is new.
 
 ---
 
@@ -439,29 +434,23 @@ commits_resp = requests.get(
 commits = commits_resp.json()["commits"]
 target_commit = commits[3]["id"]  # 3 commits back
 
-# Reset (with LFS check)
+# Reset (main needs force; LFS objects are always checked)
 reset_resp = requests.post(
     f"{API_BASE}/models/username/repo/branch/main/reset",
     json={
         "ref": target_commit,
         "message": "Reset to stable version",
-        "force": False  # Check LFS availability
+        "force": True,
     },
     headers=HEADERS
 )
 
 if reset_resp.status_code == 400:
-    # LFS files not available
-    error = reset_resp.json()
+    # Already at the target, or LFS files no longer stored
+    error = reset_resp.json()["detail"]
     print(f"Cannot reset: {error['error']}")
-    print(f"Missing files: {error['missing_files']}")
-
-    # Force reset anyway (may break)
-    reset_resp = requests.post(
-        f"{API_BASE}/models/username/repo/branch/main/reset",
-        json={"ref": target_commit, "force": True},
-        headers=HEADERS
-    )
+    print(f"Missing files: {error.get('missing_files', [])}")
+    raise SystemExit(1)
 
 result = reset_resp.json()
 print(f"Reset to: {result['commit_id']}")

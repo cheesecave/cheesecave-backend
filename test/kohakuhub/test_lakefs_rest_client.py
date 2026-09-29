@@ -722,3 +722,35 @@ async def test_close_lakefs_rest_client_resets_singleton(monkeypatch):
     b = lakefs_rest.get_lakefs_rest_client()
     assert b is not a
     assert lakefs_rest._singleton_client is b
+
+
+@pytest.mark.asyncio
+async def test_copy_and_bulk_delete_objects(monkeypatch):
+    client = lakefs_rest.LakeFSRestClient("https://lakefs.example.com", "ak", "sk")
+    base = "https://lakefs.example.com/api/v1/repositories/repo/branches/scratch/objects"
+    factory = _AsyncClientFactory(
+        [
+            _response("POST", f"{base}/copy", status=201, json_data={"path": "b.txt"}),
+            _response("POST", f"{base}/delete", json_data={"errors": []}),
+            _response("POST", f"{base}/delete", json_data={}),
+            _response(
+                "POST",
+                f"{base}/delete",
+                json_data={"errors": [{"path": "c.txt", "status_code": 500, "message": "boom"}]},
+            ),
+        ]
+    )
+    monkeypatch.setattr(lakefs_rest.httpx, "AsyncClient", factory)
+
+    assert await client.copy_object("repo", "scratch", "b.txt", "commit-1", "a.txt") == {
+        "path": "b.txt"
+    }
+    await client.delete_objects("repo", "scratch", ["a.txt", "b.txt"])
+    await client.delete_objects("repo", "scratch", ["a.txt"])
+    # A partial failure comes back as 200 with the failed paths listed
+    with pytest.raises(RuntimeError, match="c.txt"):
+        await client.delete_objects("repo", "scratch", ["c.txt"])
+
+    assert factory.calls[0][2]["params"] == {"dest_path": "b.txt"}
+    assert factory.calls[0][2]["json"] == {"src_path": "a.txt", "src_ref": "commit-1"}
+    assert factory.calls[1][2]["json"] == {"paths": ["a.txt", "b.txt"]}

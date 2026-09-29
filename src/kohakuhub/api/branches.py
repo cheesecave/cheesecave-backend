@@ -8,7 +8,13 @@ from pydantic import BaseModel
 from kohakuhub.db import Repository, User
 from kohakuhub.db_operations import create_commit, get_repository
 from kohakuhub.logger import get_logger
-from kohakuhub.storage_cleanup import enqueue_branch_links, forget_branch, refresh_head_refs
+from kohakuhub.storage_cleanup import (
+    SCRATCH_BRANCH_PREFIX,
+    enqueue_branch_links,
+    enqueue_lfs_reconciliation,
+    forget_branch,
+    refresh_head_refs,
+)
 from kohakuhub.auth.dependencies import get_current_user, get_optional_user
 from kohakuhub.auth.permissions import (
     check_repo_delete_permission,
@@ -21,11 +27,9 @@ from kohakuhub.utils.lakefs import (
     resolve_revision,
 )
 from kohakuhub.api.repo.utils.gc import (
-    check_commit_range_recoverability,
-    check_lfs_recoverability,
-    sync_file_table_with_commit,
     track_commit_lfs_objects,
 )
+from kohakuhub.api.commit import reset
 from kohakuhub.api.repo.utils.hf import (
     HFErrorCode,
     hf_error_response,
@@ -86,6 +90,12 @@ async def create_branch(
 
     # Check if user has permission
     check_repo_delete_permission(repo_row, user)
+    if payload.branch.startswith(SCRATCH_BRANCH_PREFIX):  # a reset's working branch
+        return hf_error_response(
+            400,
+            HFErrorCode.BAD_REQUEST,
+            f"Branch names starting with '{SCRATCH_BRANCH_PREFIX}' are reserved",
+        )
 
     lakefs_repo = resolve_lakefs_repo(repo_row)
     client = get_lakefs_client()
@@ -838,198 +848,33 @@ async def reset_branch(
             detail={"error": f"Commit not found: {payload.ref}"},
         )
 
-    # Check LFS recoverability for ALL commits from target to HEAD unless force=True
-    if not payload.force:
-        logger.info(f"Checking LFS recoverability for commit range to {commit_id[:8]}")
-
-        all_recoverable, missing_files, affected_commits = (
-            await check_commit_range_recoverability(
-                lakefs_repo=lakefs_repo,
-                repo_type=repo_type,
-                namespace=namespace,
-                name=name,
-                target_commit=commit_id,
-                current_branch=branch,
-            )
-        )
-
-        if not all_recoverable:
-            error_msg = (
-                f"Cannot reset to commit {commit_id[:8]}: "
-                f"{len(missing_files)} LFS file(s) across {len(affected_commits)} commit(s) "
-                f"have been garbage collected and are no longer available. "
-                f"Missing files: {', '.join(list(set(missing_files))[:5])}"
-            )
-            if len(missing_files) > 5:
-                error_msg += f" and {len(set(missing_files)) - 5} more..."
-
-            error_msg += (
-                " Use force=true to reset anyway (may result in broken LFS references)."
-            )
-
-            logger.warning(error_msg)
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "error": error_msg,
-                    "missing_files": list(set(missing_files)),
-                    "affected_commits": affected_commits,
-                    "recoverable": False,
-                },
-            )
-
-    # Perform the reset by creating a new commit with the old state
-    # This preserves history instead of using destructive hard_reset
-    # Use diff-based approach to avoid issues with list_objects on commit IDs
+    # A new commit whose tree equals the target's: history is kept, and no
+    # file content passes through this service (#99). LFS objects are always
+    # checked, ``force`` only allows resetting main (#107).
+    message = payload.message or f"Reset to commit {commit_id[:8]}"
     try:
-        logger.info(
-            f"Resetting {branch} to commit {commit_id[:8]} (creating new commit)"
+        head, rounds = await reset.reset_branch(
+            client, repo_row, lakefs_repo, branch, commit_id, message
         )
-
-        # Get current branch head commit
-        branch_info = await client.get_branch(repository=lakefs_repo, branch=branch)
-        current_commit = branch_info["commit_id"]
-
-        logger.info(f"Current: {current_commit[:8]}, Target: {commit_id[:8]}")
-
-        # Get diff from target to current (what needs to be undone)
-        diff_result = await client.diff_refs(
-            repository=lakefs_repo,
-            left_ref=commit_id,  # Target (old state)
-            right_ref=current_commit,  # Current (new state)
+    except reset.ResetRefused as e:
+        # Merged before giving up or failing: those commits are on the branch
+        await reset.record_reset(
+            client, lakefs_repo, repo_row, branch, commit_id, e.rounds, user, message
         )
-
-        diff_items = diff_result.get("results", [])
-        logger.info(f"Found {len(diff_items)} difference(s) between commits")
-
-        files_changed = 0
-
-        # Process diff to restore old state
-        for item in diff_items:
-            path = item.get("path")
-            path_type = item.get("path_type")
-            diff_type = item.get("type")  # "added", "removed", "changed"
-
-            if path_type != "object":
-                continue
-
-            logger.debug(f"Processing {diff_type}: {path}")
-
-            if diff_type == "added":
-                # File was added after target → delete it
-                await client.delete_object(
-                    repository=lakefs_repo,
-                    branch=branch,
-                    path=path,
-                )
-                files_changed += 1
-                logger.debug(f"Removed file added after target: {path}")
-
-            elif diff_type == "removed":
-                # File was removed after target → restore it from target
-                # Copy the file content from target commit
-                file_content = await client.get_object(
-                    repository=lakefs_repo,
-                    ref=commit_id,
-                    path=path,
-                )
-
-                await client.upload_object(
-                    repository=lakefs_repo,
-                    branch=branch,
-                    path=path,
-                    content=file_content,
-                    force=True,
-                )
-                files_changed += 1
-                logger.debug(f"Restored file removed after target: {path}")
-
-            elif diff_type == "changed":
-                # File was changed after target → restore old version from target
-                # Copy the file content from target commit
-                file_content = await client.get_object(
-                    repository=lakefs_repo,
-                    ref=commit_id,
-                    path=path,
-                )
-
-                await client.upload_object(
-                    repository=lakefs_repo,
-                    branch=branch,
-                    path=path,
-                    content=file_content,
-                    force=True,
-                )
-                files_changed += 1
-                logger.debug(f"Restored old version of changed file: {path}")
-
-        # Step 4: Create commit
-        if files_changed == 0 and not payload.force:
-            logger.warning("No changes to commit for reset")
-            raise HTTPException(
-                status_code=400,
-                detail={"error": "Branch is already at the target state"},
-            )
-
-        commit_message = payload.message or f"Reset to commit {commit_id[:8]}"
-
-        commit_result = await client.commit(
-            repository=lakefs_repo,
-            branch=branch,
-            message=commit_message,
-            metadata={"reset_to": commit_id},
-        )
-
-        logger.success(f"Reset successful - created commit {commit_result['id'][:8]}")
-
-        try:
-            synced = await sync_file_table_with_commit(
-                lakefs_repo=lakefs_repo,
-                ref=branch,
-                repo_type=repo_type,
-                namespace=namespace,
-                name=name,
-            )
-            logger.info(f"Synced {synced} file(s) to File table")
-        except Exception as e:
-            logger.exception(f"Failed to sync File table: {e}", e)
-            logger.warning(f"Failed to sync File table: {e}")
-
-        await refresh_head_refs(repo_row, branch, exact=True)
-
-        # Record reset commit in database
-        try:
-            create_commit(
-                commit_id=commit_result["id"],
-                repository=repo_row,
-                repo_type=repo_type,
-                branch=branch,
-                author=user,
-                username=user.username,
-                message=commit_message,
-                description=f"Reset to {commit_id}",
-            )
-            logger.info(
-                f"Recorded reset commit {commit_result['id'][:8]} by {user.username}"
-            )
-        except Exception as e:
-            logger.exception(f"Failed to record reset commit in database: {e}", e)
-            logger.warning(f"Failed to record commit in database: {e}")
-
-    except HTTPException:
-        raise
+        raise HTTPException(status_code=e.status, detail=e.detail)
     except Exception as e:
         logger.exception(f"Failed to reset branch: {e}", e)
-        error_msg = str(e)
-        logger.error(f"Failed to reset branch: {error_msg}")
-
-        raise HTTPException(
-            status_code=500,
-            detail={"error": f"Reset failed: {error_msg}"},
-        )
+        # Whether a merge landed before the failure is unknown here: have the
+        # reconciliation record what the branch links (collection waits for it)
+        enqueue_lfs_reconciliation()
+        raise HTTPException(status_code=500, detail={"error": f"Reset failed: {e}"})
+    await reset.record_reset(
+        client, lakefs_repo, repo_row, branch, commit_id, rounds, user, message
+    )
+    logger.success(f"Reset {repo_id}@{branch} to {commit_id[:8]} in {len(rounds)} merge(s)")
 
     return {
         "success": True,
         "message": f"Successfully reset branch '{branch}' to commit {commit_id[:8]} (new commit created)",
-        "commit_id": commit_result["id"],
+        "commit_id": head,
     }

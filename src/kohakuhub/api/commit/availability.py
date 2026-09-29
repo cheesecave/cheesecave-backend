@@ -9,9 +9,8 @@ Decided from what LakeFS and the bucket really hold:
   paths it undoes; an initial commit has nothing to revert, and a revert
   that would change no file's content is pointless ("no_changes").
 - **Reset** of ``B`` to ``C`` restores every path whose content differs
-  (a two-dot diff), so it needs ``C``'s LFS objects of those paths. This is
-  what a reset must do; the reset endpoint still reads only its diff's
-  first page (see #99).
+  (a two-dot diff), so it needs ``C``'s LFS objects of those paths, as the
+  reset endpoint does (``kohakuhub.api.commit.reset``).
 
 An LFS object is missing when garbage collection tombstoned it or the
 bucket no longer holds it (the quick check only knows the tombstones).
