@@ -3,7 +3,7 @@
 import os
 from functools import lru_cache
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 try:
     import tomllib
@@ -30,6 +30,9 @@ class LakeFSConfig(BaseModel):
     access_key: str = "test-access-key"
     secret_key: str = "test-secret-key"
     repo_namespace: str = "hf"
+    # Concurrent LakeFS requests one branch operation (reset) makes. More does
+    # not go faster: LakeFS saturates around 8, and other readers slow down.
+    operation_concurrency: int = Field(default=8, ge=1)
 
 
 class SMTPConfig(BaseModel):
@@ -354,6 +357,10 @@ def load_config(path: str = None) -> Config:
         lakefs_env["secret_key"] = os.environ["KOHAKU_HUB_LAKEFS_SECRET_KEY"]
     if "KOHAKU_HUB_LAKEFS_REPO_NAMESPACE" in os.environ:
         lakefs_env["repo_namespace"] = os.environ["KOHAKU_HUB_LAKEFS_REPO_NAMESPACE"]
+    if "KOHAKU_HUB_LAKEFS_OPERATION_CONCURRENCY" in os.environ:
+        lakefs_env["operation_concurrency"] = int(
+            os.environ["KOHAKU_HUB_LAKEFS_OPERATION_CONCURRENCY"]
+        )
     if lakefs_env:
         config_from_env["lakefs"] = lakefs_env
 

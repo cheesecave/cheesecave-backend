@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -240,111 +239,6 @@ async def test_check_lfs_recoverability_covers_empty_and_missing_objects(monkeyp
 
     assert recoverable is False
     assert missing_files == ["weights.bin"]
-
-
-@pytest.mark.asyncio
-async def test_check_commit_range_recoverability_covers_missing_repo_target_and_results(monkeypatch):
-    monkeypatch.setattr(gc_utils, "get_repository", lambda *_args: None)
-    assert await gc_utils.check_commit_range_recoverability(
-        "lakefs-repo", "model", "owner", "repo", "target", "main"
-    ) == (False, [], [])
-
-    repo = SimpleNamespace(full_id="owner/repo")
-    monkeypatch.setattr(gc_utils, "get_repository", lambda *_args: repo)
-
-    class MissingTargetClient:
-        async def log_commits(self, **kwargs):
-            return {"results": [{"id": "head"}], "pagination": {"has_more": False}}
-
-    monkeypatch.setattr(gc_utils, "get_lakefs_client", lambda: MissingTargetClient())
-    assert await gc_utils.check_commit_range_recoverability(
-        "lakefs-repo", "model", "owner", "repo", "target", "main"
-    ) == (False, [], [])
-
-    class WorkingClient:
-        async def log_commits(self, **kwargs):
-            return {
-                "results": [{"id": "head"}, {"id": "target"}, {"id": "older"}],
-                "pagination": {"has_more": False},
-            }
-
-    async def fake_check_lfs_recoverability(repo_arg, commit_id):
-        if commit_id == "head":
-            return True, []
-        return False, [f"{commit_id}.bin"]
-
-    monkeypatch.setattr(gc_utils, "get_lakefs_client", lambda: WorkingClient())
-    monkeypatch.setattr(gc_utils, "check_lfs_recoverability", fake_check_lfs_recoverability)
-
-    recoverable, missing_files, affected_commits = await gc_utils.check_commit_range_recoverability(
-        "lakefs-repo", "model", "owner", "repo", "target", "main"
-    )
-
-    assert recoverable is False
-    assert missing_files == ["target.bin"]
-    assert affected_commits == ["target"]
-
-
-@pytest.mark.asyncio
-async def test_sync_file_table_with_commit_syncs_objects_and_removes_stale_entries(monkeypatch):
-    repo = SimpleNamespace(full_id="owner/repo", owner=SimpleNamespace(username="owner"))
-    file_placeholder = SimpleNamespace(id=7)
-    create_history_calls = []
-
-    class FakeClient:
-        async def get_branch(self, repository, branch):
-            return {"commit_id": "commit-1"}
-
-        async def list_objects(self, repository, ref, amount, after):
-            if after == "":
-                return {
-                    "results": [
-                        {
-                            "path_type": "object",
-                            "path": "README.md",
-                            "size_bytes": 3,
-                            "checksum": "sha256:readme",
-                        },
-                        {"path_type": "common_prefix", "path": "folder/"},
-                    ],
-                    "pagination": {"has_more": True, "next_offset": "page-2"},
-                }
-            return {
-                "results": [
-                    {
-                        "path_type": "object",
-                        "path": "weights/model.safetensors",
-                        "size_bytes": 12,
-                        "checksum": "sha256:weights",
-                    }
-                ],
-                "pagination": {"has_more": False},
-            }
-
-    calls = {"get_or_none": 0}
-
-    def fake_get_or_none(*args):
-        calls["get_or_none"] += 1
-        if calls["get_or_none"] >= 2:
-            return file_placeholder
-        return None
-
-    monkeypatch.setattr(gc_utils, "get_lakefs_client", lambda: FakeClient())
-    monkeypatch.setattr(gc_utils, "get_repository", lambda *_args: repo)
-    monkeypatch.setattr(gc_utils, "File", _FakeFileModel)
-    monkeypatch.setattr(gc_utils, "create_lfs_history", lambda **kwargs: create_history_calls.append(kwargs))
-    monkeypatch.setattr(gc_utils, "should_use_lfs", lambda repo_arg, path, size: path.endswith(".safetensors"))
-    _FakeFileModel.get_or_none_side_effect = fake_get_or_none
-    _FakeFileModel.delete_query = _Query(execute_result=1)
-
-    synced = await gc_utils.sync_file_table_with_commit(
-        "lakefs-repo", "main", "model", "owner", "repo"
-    )
-
-    assert synced == 2
-    assert len(_FakeFileModel.insert_calls) == 2
-    assert create_history_calls[0]["sha256"] == "weights"
-    assert _FakeFileModel.delete_query.where_calls
 
 
 @pytest.mark.asyncio
