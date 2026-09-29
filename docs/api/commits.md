@@ -243,27 +243,30 @@ known up front, for every reader.
 **Pattern:** `GET /api/{repo_type}s/{namespace}/{name}/commit/{commit_id}/unavailable-files?branch=main`
 
 Every LFS file of the commit's tree whose object was garbage collected:
-`{"commit", "branch", "files": [{"path", "sha256"}]}`. Only paths differing
-from the branch head can be affected (the head's objects are never
-collected), so this reads one diff and the tombstones, and never asks the
-bucket. `files` is `null` (`"reason": "too_large"`) when the commit differs
-from the branch in too many paths.
+`{"commit", "branch", "files": [{"path", "sha256"}]}`. Garbage collection
+never removes an object the branch head claimed, so this reads one diff
+(the paths differing from the head), the tombstones, and the objects the
+head links that are tombstoned anyway (a revert, merge or reset can link an
+object without claiming it). It never asks the bucket, and makes a bounded
+number of LakeFS calls: `files` is `null` (`"reason": "too_large"`) past
+that.
 
 ### The files a commit changed
 
 `GET .../commit/{commit_id}/diff` marks each LFS file with `lfs_status`
 (the commit's version) and `previous_lfs_status` (the version before it):
 `available`, `collected` (garbage collected), `missing` (gone from storage)
-or `unknown` (a large commit: the bucket is only asked about a bounded
-number of objects).
+or `unknown` (a large commit, where the bucket is only asked about a bounded
+number of objects, or the bucket could not be reached).
 
 ### A commit list page
 
 **Pattern:** `POST /api/{repo_type}s/{namespace}/{name}/commits/unavailable-files`
 
 Body: `{"commit_ids": [...]}`, at most 100. Returns
-`{"commits": {id: [paths]}}`: the files whose version each commit introduced
-that garbage collection removed. One database query, whatever the history's
+`{"commits": {id: [paths]}}`: the LFS files each commit committed (added,
+changed, restored, or re-committed unchanged) whose object garbage
+collection removed. One database query, whatever the history's
 length; files a commit only inherited are listed on its commit page.
 
 ## Usage Examples

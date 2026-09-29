@@ -163,7 +163,7 @@ async def commit_unavailable_files(
     """Every LFS file of the commit's tree that garbage collection removed.
 
     For every reader: tombstones only, no bucket requests. ``files`` is
-    ``None`` when the commit differs from the branch in too many paths.
+    ``None`` past a bounded number of LakeFS calls.
     """
     repo = get_repository(repo_type, namespace, name)
     if not repo:
@@ -175,7 +175,9 @@ async def commit_unavailable_files(
     commit = await _commit(client, lakefs_repo, commit_id)
     if commit is None:
         raise HTTPException(404, detail={"error": f"Commit not found: {commit_id}"})
-    files = await availability.unavailable_files(client, lakefs_repo, commit["id"], head)
+    files = await availability.unavailable_files(
+        client, lakefs_repo, repo, commit["id"], branch, head
+    )
     response = {"commit": commit["id"], "branch": branch, "files": files}
     if files is None:
         response["reason"] = "too_large"
@@ -190,8 +192,8 @@ async def commits_unavailable_files(
     payload: CommitIds,
     user: User | None = Depends(get_optional_user),
 ):
-    """For a commit list page: the files whose version each commit introduced
-    that garbage collection removed. One database query, for every reader."""
+    """For a commit list page: the LFS files each commit committed whose
+    object garbage collection removed. One database query, for every reader."""
     repo = get_repository(repo_type, namespace, name)
     if not repo:
         return hf_repo_not_found(f"{namespace}/{name}", repo_type)

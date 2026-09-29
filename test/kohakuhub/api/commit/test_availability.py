@@ -587,3 +587,62 @@ async def test_the_list_marks_commits_whose_own_versions_are_gone(m, owner_clien
         "/api/models/owner/avail-nope/commits/unavailable-files", json={"commit_ids": []}
     )
     assert response.status_code == 404
+
+
+async def test_the_commit_page_is_bounded_and_follows_the_branch(m, owner_client, monkeypatch):
+    repo, (initial, c1, c2, c3, c4, c5) = await _linear(m, owner_client, "avail-files-branch")
+    v1 = hashlib.sha256(b"a v1").hexdigest()
+    response = await owner_client.post(
+        f"/api/models/{repo.id}/branch", json={"branch": "dev", "revision": c2}
+    )
+    assert response.status_code == 200, response.text
+    m.db.LfsObjectTombstone.create(sha256=v1, state=m.gc.DELETED)
+    assert (await _unavailable(repo, c1, branch="dev")).json()["files"] == [
+        {"path": "a.bin", "sha256": v1}
+    ]
+    assert (await _unavailable(repo, c2, branch="dev")).json()["files"] == []
+
+    # An object brought back (its tombstone gone) is no longer reported
+    m.db.LfsObjectTombstone.delete().execute()
+    assert (await _unavailable(repo, c1)).json()["files"] == []
+
+    # Every reader may ask, so the LakeFS calls one request makes are bounded
+    monkeypatch.setattr(m.avail, "READER_BUDGET", 0)
+    body = (await _unavailable(repo, c1)).json()
+    assert body["files"] is None and body["reason"] == "too_large"
+
+
+async def test_objects_the_head_links_count_where_the_commit_shares_them(m, owner_client):
+    """A revert, merge or reset can link an object without claiming it, so
+    garbage collection may have removed an object the head still links."""
+    repo, (initial, c1, c2, c3, c4, c5) = await _linear(m, owner_client, "avail-files-head")
+    b1, v1 = hashlib.sha256(b"b v1").hexdigest(), hashlib.sha256(b"a v1").hexdigest()
+    db_repo = m.db.Repository.get(m.db.Repository.full_id == repo.id)
+    # A stale row for a path whose object at the commit is another one
+    m.db.LfsHeadRef.create(repository=db_repo, branch="main", path_in_repo="a.bin", sha256=v1)
+    m.db.LfsObjectTombstone.create(sha256=b1, state=m.gc.DELETED)
+    m.db.LfsObjectTombstone.create(sha256=v1, state=m.gc.DELETED)
+    for commit in (c3, c4, c5):  # b.bin is unchanged from c3 to the head
+        body = (await _unavailable(repo, commit)).json()
+        assert body["files"] == [{"path": "b.bin", "sha256": b1}]
+    assert (await _unavailable(repo, c2)).json()["files"] == []
+    assert (await _unavailable(repo, c1)).json()["files"] == [{"path": "a.bin", "sha256": v1}]
+
+
+async def test_the_diff_survives_the_bucket_failing(m, owner_client, monkeypatch):
+    from botocore.exceptions import EndpointConnectionError
+
+    repo, (initial, c1, c2, *_rest) = await _linear(m, owner_client, "avail-diff-s3")
+    m.db.LfsObjectTombstone.create(sha256=hashlib.sha256(b"a v1").hexdigest(), state=m.gc.DELETED)
+
+    def unreachable(s3, oid):
+        raise EndpointConnectionError(endpoint_url="http://s3.invalid")
+
+    monkeypatch.setattr(m.avail, "_stored", unreachable)
+    response = await owner_client.get(f"/api/models/{repo.id}/commit/{c2}/diff")
+    assert response.status_code == 200, response.text
+    files = {f["path"]: f for f in response.json()["files"]}
+    assert (files["a.bin"]["lfs_status"], files["a.bin"]["previous_lfs_status"]) == (
+        "unknown",
+        "collected",
+    )

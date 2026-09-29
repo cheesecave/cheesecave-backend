@@ -294,25 +294,27 @@ describe("commit page operation checks", () => {
       "2 file(s) of this commit are no longer stored",
     );
     expect(panel.text()).toContain("extra/old.bin");
-    const marks = wrapper
-      .findAll('[data-testid="file-unavailable-weights.bin"]')
-      .map((tag) => [
+    const mark = (testid) => {
+      const tag = wrapper.get(`[data-testid="${testid}-weights.bin"]`);
+      return [
         tag.text(),
         tag.element.parentElement.getAttribute("data-content"),
-      ]);
-    expect(marks).toEqual([
-      ["Unavailable", "This version is no longer stored: garbage collected."],
-      [
-        "Previous version unavailable",
-        "The version before this commit is no longer stored: missing from storage.",
-      ],
+      ];
+    };
+    expect(mark("file-unavailable")).toEqual([
+      "Unavailable",
+      "This version is no longer stored: garbage collected.",
+    ]);
+    expect(mark("file-previous-unavailable")).toEqual([
+      "Previous version unavailable",
+      "The version before this commit is no longer stored: missing from storage.",
     ]);
     expect(
       wrapper.find('[data-testid="file-unavailable-tokenizer.bin"]').exists(),
     ).toBe(false);
   });
 
-  it("shows no list when nothing is lost or it cannot be told", async () => {
+  it("says when there are too many files to check, and nothing on failure", async () => {
     mocks.repoAPI.getCommitOperations.mockResolvedValue(
       checks({ available: true, files: 1 }, { available: true, files: 1 }),
     );
@@ -324,6 +326,11 @@ describe("commit page operation checks", () => {
     expect(wrapper.find('[data-testid="unavailable-files"]').exists()).toBe(
       false,
     );
+    expect(
+      wrapper
+        .get('[data-testid="unavailable-files-unchecked"]')
+        .attributes("title"),
+    ).toContain("too many files to check");
 
     mocks.repoAPI.getCommitUnavailableFiles.mockRejectedValue(
       new Error("offline"),
@@ -333,5 +340,8 @@ describe("commit page operation checks", () => {
     expect(wrapper.find('[data-testid="unavailable-files"]').exists()).toBe(
       false,
     );
+    expect(
+      wrapper.find('[data-testid="unavailable-files-unchecked"]').exists(),
+    ).toBe(false);
   });
 });

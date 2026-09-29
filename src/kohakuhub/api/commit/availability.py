@@ -27,20 +27,24 @@ import asyncio
 from typing import Any
 
 import httpx
-from botocore.exceptions import ClientError
+from botocore.exceptions import BotoCoreError, ClientError
 
 from kohakuhub.api.operation_capabilities import get_repository_operation_capabilities
 from kohakuhub.async_utils import run_in_s3_executor
 from kohakuhub.config import cfg
-from kohakuhub.db import LFSObjectHistory, LfsObjectTombstone, Repository
+from kohakuhub.db import LFSObjectHistory, LfsHeadRef, LfsObjectTombstone, Repository
 from kohakuhub.lfs_gc import deleted_shas, lfs_key, lfs_oid
+from kohakuhub.logger import get_logger
 from kohakuhub.utils.s3 import get_s3_client
+
+logger = get_logger("AVAILABILITY")
 
 PAGE = 1000  # LakeFS listing maximum
 STAT_CONCURRENCY = 16
 LISTING_THRESHOLD = 200  # more paths than this: list the ref instead of one stat each
 EXACT_PATHS = 20_000  # changed paths an exact check reads before giving up
 STORAGE_CHECK_LIMIT = 400  # LFS objects a commit's diff asks the bucket about
+READER_BUDGET = 250  # LakeFS calls per unavailable-files request: 200 stats, or a listing
 QUICK_BUDGET = 400  # LakeFS calls one list page may spend proving LFS objects missing
 # (charged as made: a stat per path, or a page when a whole ref is listed)
 SHOWN_PATHS = 20
@@ -226,7 +230,7 @@ async def mark_lfs_statuses(files: list[dict]) -> None:
     that, anything not tombstoned is ``unknown``.
     """
     targets: dict[str, list[tuple[dict, str]]] = {}
-    for file in files:
+    for file in files:  # every file, so no private key reaches the response
         for key, field in (
             ("_address", "lfs_status"),
             ("_previous_address", "previous_lfs_status"),
@@ -234,24 +238,47 @@ async def mark_lfs_statuses(files: list[dict]) -> None:
             oid = lfs_oid(file.pop(key, None))
             if oid:
                 targets.setdefault(oid, []).append((file, field))
-    status = await lfs_statuses(targets, check_storage=len(targets) <= STORAGE_CHECK_LIMIT)
+    try:
+        status = await lfs_statuses(targets, check_storage=len(targets) <= STORAGE_CHECK_LIMIT)
+    except (ClientError, BotoCoreError) as e:
+        # The bucket failing must not take the diff down: tombstones only
+        logger.warning(f"Could not ask the bucket which LFS objects are stored: {e}")
+        status = await lfs_statuses(targets, check_storage=False)
     for oid, marks in targets.items():
         for file, field in marks:
             file[field] = status[oid]
 
 
-async def unavailable_files(client, lakefs_repo: str, commit_id: str, head: str) -> list | None:
+async def unavailable_files(
+    client, lakefs_repo: str, repo: Repository, commit_id: str, branch: str, head: str
+) -> list | None:
     """Every LFS file of ``commit_id``'s tree that garbage collection removed.
 
-    Only paths differing from the branch head can be: an object any branch
-    head links is never collected (``lfs_head_ref``). Tombstones only, so it
-    is cheap enough for every reader; ``None`` past ``EXACT_PATHS``.
+    Collection never deletes what a branch head links (``lfs_head_ref``), so
+    this is the tombstoned objects among the paths differing from ``branch``'s
+    head, plus any the head itself still links (a revert, merge or reset can
+    link an entry without claiming it): one diff, the tombstones, and never
+    the bucket. Cheap enough for every reader, and bounded by
+    ``READER_BUDGET`` LakeFS calls; ``None`` past that.
     """
+    R, T = LfsHeadRef, LfsObjectTombstone
+    budget = Budget(READER_BUDGET)
     try:
-        paths = await changed_paths(client, lakefs_repo, head, commit_id, limit=EXACT_PATHS)
+        paths = await changed_paths(client, lakefs_repo, head, commit_id, budget, limit=EXACT_PATHS)
+        # Where the commit matches the head, only an object the head links
+        # without having claimed it can be gone; confirm each at the commit.
+        differing = set(paths)
+        shared = {
+            path
+            for (path,) in R.select(R.path_in_repo)
+            .join(T, on=(R.sha256 == T.sha256))
+            .where((R.repository == repo) & (R.branch == branch))
+            .tuples()
+            if path not in differing
+        }
+        target = await entries(client, lakefs_repo, commit_id, paths + sorted(shared), budget)
     except OutOfBudget:
         return None
-    target = await entries(client, lakefs_repo, commit_id, paths)
     oids = {p: lfs_oid(e.get("physical_address")) for p, e in target.items() if e is not None}
     oids = {p: oid for p, oid in oids.items() if oid}
     collected = deleted_shas(oids.values())
@@ -259,7 +286,8 @@ async def unavailable_files(client, lakefs_repo: str, commit_id: str, head: str)
 
 
 def introduced_unavailable(repo: Repository, commit_ids: list[str]) -> dict[str, list[str]]:
-    """The paths whose version each commit introduced garbage collection removed.
+    """The LFS files each commit committed (added, changed, restored, or
+    re-committed unchanged) whose object garbage collection removed.
 
     One query over the LFS history, whatever the history's length.
     """

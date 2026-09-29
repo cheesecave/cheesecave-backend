@@ -1830,7 +1830,7 @@ function filesUnavailableMessage(commitId) {
   const paths = commitUnavailableFiles.value[commitId];
   const shown = paths.slice(0, SHOWN_FILES).join(", ");
   const more = paths.length > SHOWN_FILES ? ` and ${paths.length - SHOWN_FILES} more` : "";
-  return `Versions this commit added are no longer stored (garbage collected): ${shown}${more}.`;
+  return `Files this commit committed are no longer stored (garbage collected): ${shown}${more}.`;
 }
 
 async function loadUnavailableFiles(page) {

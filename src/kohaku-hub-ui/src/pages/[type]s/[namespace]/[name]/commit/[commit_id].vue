@@ -303,7 +303,7 @@
 
       <!-- Files of this commit that are no longer stored -->
       <el-alert
-        v-if="unavailableFiles.length"
+        v-if="unavailableFiles?.length"
         type="warning"
         :closable="false"
         show-icon
@@ -324,6 +324,15 @@
           </el-collapse-item>
         </el-collapse>
       </el-alert>
+      <el-alert
+        v-else-if="unavailableFiles === null"
+        type="info"
+        :closable="false"
+        show-icon
+        class="mb-4"
+        data-testid="unavailable-files-unchecked"
+        title="This commit differs from the branch in too many files to check which are still stored."
+      />
 
       <!-- Files Changed -->
       <div class="card">
@@ -381,7 +390,7 @@
                       type="danger"
                       size="small"
                       effect="plain"
-                      :data-testid="`file-unavailable-${file.path}`"
+                      :data-testid="`${mark.testid}-${file.path}`"
                       >{{ mark.label }}</el-tag
                     >
                   </el-tooltip>
@@ -701,7 +710,7 @@ function operationCheck(op) {
 
 const revertCheck = computed(() => operationCheck("revert"));
 
-// Which files of this commit are no longer stored
+// Which files of this commit are no longer stored; null: too many to check
 const unavailableFiles = ref([]);
 const VERSION_STATES = {
   collected: "garbage collected",
@@ -713,12 +722,14 @@ function versionMarks(file) {
   if (VERSION_STATES[file.lfs_status]) {
     marks.push({
       label: "Unavailable",
+      testid: "file-unavailable",
       reason: `This version is no longer stored: ${VERSION_STATES[file.lfs_status]}.`,
     });
   }
   if (VERSION_STATES[file.previous_lfs_status]) {
     marks.push({
       label: "Previous version unavailable",
+      testid: "file-previous-unavailable",
       reason: `The version before this commit is no longer stored: ${VERSION_STATES[file.previous_lfs_status]}.`,
     });
   }
@@ -734,7 +745,7 @@ async function loadUnavailableFiles() {
       commitId.value,
       selectedBranch.value,
     );
-    unavailableFiles.value = data.files || [];
+    unavailableFiles.value = data.files;
   } catch (err) {
     console.warn("Failed to check which files are still stored:", err);
   }

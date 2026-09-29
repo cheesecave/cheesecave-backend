@@ -242,7 +242,7 @@ describe("RepoViewer commit operation badges", () => {
       tag.element.parentElement.getAttribute("data-content"),
     );
     expect(tooltips[1]).toBe(
-      "Versions this commit added are no longer stored (garbage collected): weights.bin.",
+      "Files this commit committed are no longer stored (garbage collected): weights.bin.",
     );
     expect(tooltips[0]).toContain("w19.bin and 2 more.");
   });
