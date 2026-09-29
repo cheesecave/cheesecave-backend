@@ -143,6 +143,8 @@ describe("repository operation capability consumers", () => {
     await flushPromises();
 
     expect(wrapper.text()).toContain("Revert");
+    // LakeFS refuses a conflict with or without force: no such option
+    expect(wrapper.text()).not.toContain("Force revert");
     await wrapper
       .findAll("button")
       .find((button) => button.text() === "Revert")
@@ -154,7 +156,7 @@ describe("repository operation capability consumers", () => {
       "owner",
       "demo",
       "main",
-      expect.objectContaining({ ref: "commit-1" }),
+      { ref: "commit-1", parent_number: 1, allow_empty: false },
     );
     expect(mocks.settingsAPI.resetBranch).not.toHaveBeenCalled();
   });

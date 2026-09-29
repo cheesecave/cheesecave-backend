@@ -302,15 +302,30 @@ def introduced_unavailable(repo: Repository, commit_ids: list[str]) -> dict[str,
     return {commit_id: sorted(paths) for commit_id, paths in found.items()}
 
 
-async def revert_verdict(client, lakefs_repo: str, commit: dict, head: str) -> dict:
-    """Exactly what reverting ``commit`` on the branch at ``head`` would do."""
-    if not commit.get("parents"):
-        return verdict("initial_commit", "revert")
-    parent = commit["parents"][0]
+async def revert_plan(
+    client,
+    lakefs_repo: str,
+    commit: dict,
+    head: str,
+    parent_number: int = 1,
+    limit: int | None = None,
+) -> tuple[dict, dict, dict]:
+    """Exactly what reverting ``commit`` on the branch at ``head`` would do,
+    relative to its ``parent_number``-th parent.
+
+    Returns the verdict, the parent's entries of the paths the revert
+    restores, and the parent's entries of every path the commit changed
+    (what a concurrent change could make it restore too). ``limit`` bounds
+    the paths read (``None``: all, as the revert itself needs).
+    """
+    parents = commit.get("parents") or []
+    if not parents:
+        return verdict("initial_commit", "revert"), {}, {}
+    parent = parents[parent_number - 1]
     try:
-        paths = await changed_paths(client, lakefs_repo, parent, commit["id"], limit=EXACT_PATHS)
+        paths = await changed_paths(client, lakefs_repo, parent, commit["id"], limit=limit)
     except OutOfBudget:
-        return verdict("too_large", "revert")
+        return verdict("too_large", "revert"), {}, {}
     base, source, dest = await asyncio.gather(
         entries(client, lakefs_repo, commit["id"], paths),
         entries(client, lakefs_repo, parent, paths),
@@ -318,19 +333,27 @@ async def revert_verdict(client, lakefs_repo: str, commit: dict, head: str) -> d
     )
     undone = [p for p in paths if same(dest[p], base[p])]
     conflicts = [p for p in paths if not same(dest[p], base[p]) and not same(dest[p], source[p])]
+    restores = {p: source[p] for p in undone}
     # Collected versions first: the quick check can prove only that much,
     # and it holds for conflicting paths too (they differ from the branch)
     needed = {p: source[p] for p in undone + conflicts if source[p] is not None}
     missing = await missing_lfs(needed)
     if missing:
-        return verdict("lfs_missing", "revert", missing_lfs=missing, conflicts=conflicts)
-    if conflicts:
-        return verdict("conflict", "revert", conflicts=conflicts)
-    if not undone:
+        found = verdict("lfs_missing", "revert", missing_lfs=missing, conflicts=conflicts)
+    elif conflicts:
+        found = verdict("conflict", "revert", conflicts=conflicts)
+    elif not undone:
         # No file's content would change. LakeFS then refuses, or records an
         # empty commit where its internal layout differs: pointless either way.
-        return verdict("no_changes", "revert")
-    return verdict(None, files=len(undone))
+        found = verdict("no_changes", "revert")
+    else:
+        found = verdict(None, files=len(undone))
+    return found, restores, source
+
+
+async def revert_verdict(client, lakefs_repo: str, commit: dict, head: str) -> dict:
+    """Exactly what reverting ``commit`` on the branch at ``head`` would do."""
+    return (await revert_plan(client, lakefs_repo, commit, head, limit=EXACT_PATHS))[0]
 
 
 async def reset_verdict(client, lakefs_repo: str, commit: dict, head: str, branch: str) -> dict:

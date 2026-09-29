@@ -891,6 +891,7 @@ export const settingsAPI = {
     api.post(
       `/api/${repoType}s/${namespace}/${name}/branch/${branch}/revert`,
       data,
+      { timeout: 300000 }, // 5 minutes, as for a reset
     ),
 
   /**
