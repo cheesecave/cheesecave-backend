@@ -1020,9 +1020,7 @@ def _update_repository_database_records(
 
     # Update storage quotas if namespace changed
     if moving_namespace and repo_size > 0:
-        # Check if source namespace is an organization
-        source_org = get_organization(from_namespace)
-        is_source_org = source_org is not None
+        source = _namespace_owner(from_namespace)
 
         # Check if target namespace is an organization
         target_org = get_organization(to_namespace)
@@ -1030,12 +1028,12 @@ def _update_repository_database_records(
 
         # Decrement from source namespace, unless no account holds it any more
         # (an admin moving an orphaned repository out of it)
-        if _namespace_owner(from_namespace) is not None:
+        if source is not None:
             increment_storage(
                 namespace=from_namespace,
                 bytes_delta=-repo_size,
                 is_private=repo_row.private,
-                is_org=is_source_org,
+                is_org=source.is_org,
             )
 
         # Increment to target namespace

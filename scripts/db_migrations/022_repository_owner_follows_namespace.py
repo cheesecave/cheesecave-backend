@@ -20,14 +20,15 @@ here. Usage an admin's move left behind (it used to skip moving it) is
 recounted by the namespace's next commit, or by the admin quota recalculation.
 
 A repository whose namespace no account holds is reported and left alone; if
-an account with that name is created later, a later run hands it over, as its
-permissions already follow the namespace.
+an account with that name is created later, a later run of this migration
+(while it is the newest) hands it over, as its permissions already follow the
+namespace.
 
 Plain SQL, not the models: this must keep meaning what it means today.
 """
 
-import sys
 import os
+import sys
 
 # Add src to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
@@ -44,7 +45,8 @@ MISOWNED = (
     'SELECT r.id, r.repo_type, r.full_id, owner.username, account.id, account.username '
     'FROM "repository" r '
     'JOIN "user" account ON account.username = r.namespace '
-    'JOIN "user" owner ON owner.id = r.owner_id '
+    # LEFT: an owner row missing (an old SQLite database without foreign keys)
+    'LEFT JOIN "user" owner ON owner.id = r.owner_id '
     "WHERE r.owner_id <> account.id"
 )
 ORPHANS = (
@@ -72,7 +74,7 @@ def _repair():
         db.execute_sql(
             f'UPDATE "commit" SET owner_id = {p} WHERE repository_id = {p}', (account_id, repo_id)
         )
-        print(f"  ✓ {repo_type}:{full_id}: owner {owner} -> {account}")
+        print(f"  ✓ {repo_type}:{full_id}: owner {owner or 'missing'} -> {account}")
     return len(rows)
 
 

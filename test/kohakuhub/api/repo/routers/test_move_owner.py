@@ -241,6 +241,7 @@ def test_the_migration_never_makes_earlier_ones_skip(m):
     assert migration.run() is True
     assert migration.is_applied(D.db, None)  # complete schema, nothing misowned
     with D.db.atomic() as transaction:
+        D.db.execute_sql("SET LOCAL lock_timeout = '5s'")  # fail rather than hang on a lock
         D.db.execute_sql('DROP TABLE "lfs_gc_state"')
         assert not migration.is_applied(D.db, None)
         assert not utils.should_skip_due_to_future_migrations(21, D.db, None)
