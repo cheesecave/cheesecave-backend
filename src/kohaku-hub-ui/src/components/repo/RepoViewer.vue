@@ -729,7 +729,7 @@
                       >
                         <el-tag
                           size="small"
-                          type="info"
+                          :type="badge.type"
                           effect="plain"
                           :data-testid="`commit-${badge.op}-unavailable-${commit.id}`"
                           >{{ badge.label }}</el-tag
@@ -1816,14 +1816,23 @@ async function findReadmeViaPathsInfo() {
 
 function unavailableOperations(commitId) {
   const verdicts = commitOperationVerdicts.value[commitId] || {};
-  // Site-wide switches and access are not about the commit: no badge
+  // Site-wide switches and access are not about the commit, and the head
+  // needs no reset: no badge. Files garbage collected are red, like the
+  // "Files unavailable" mark; what cannot apply here is grey.
   return Object.entries(OPERATION_BADGES)
     .filter(
       ([op]) =>
         verdicts[op]?.available === false &&
-        !["disabled", "forbidden"].includes(verdicts[op].reason),
+        !["disabled", "forbidden", "already_current"].includes(
+          verdicts[op].reason,
+        ),
     )
-    .map(([op, label]) => ({ op, label, message: verdicts[op].message }));
+    .map(([op, label]) => ({
+      op,
+      label,
+      message: verdicts[op].message,
+      type: verdicts[op].reason === "lfs_missing" ? "danger" : "info",
+    }));
 }
 
 function filesUnavailableMessage(commitId) {

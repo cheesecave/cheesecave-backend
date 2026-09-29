@@ -136,6 +136,7 @@ describe("RepoViewer commit operation badges", () => {
     return wrapper.findAll('[data-testid^="commit-"]').map((tag) => ({
       id: tag.attributes("data-testid"),
       text: tag.text(),
+      type: tag.attributes("data-type"),
       tooltip: tag.element.parentElement.getAttribute("data-content"),
     }));
   }
@@ -157,7 +158,13 @@ describe("RepoViewer commit operation badges", () => {
             "The branch is already at this commit.",
           ),
         },
-        c2: { revert: { available: null }, reset: { available: null } },
+        c2: {
+          revert: { available: null },
+          reset: unavailable(
+            "lfs_missing",
+            "Files it needs are no longer stored (garbage collected): weights.bin.",
+          ),
+        },
         c1: {
           revert: unavailable(
             "initial_commit",
@@ -172,11 +179,14 @@ describe("RepoViewer commit operation badges", () => {
     await flushPromises();
 
     expect(posted).toEqual([["c3", "c2"]]);
+    // The head needs no reset: nothing to mark. Lost files are red.
     expect(badges(wrapper)).toEqual([
       {
-        id: "commit-reset-unavailable-c3",
+        id: "commit-reset-unavailable-c2",
         text: "Can't reset",
-        tooltip: "The branch is already at this commit.",
+        type: "danger",
+        tooltip:
+          "Files it needs are no longer stored (garbage collected): weights.bin.",
       },
     ]);
 
@@ -187,10 +197,11 @@ describe("RepoViewer commit operation badges", () => {
     await flushPromises();
     await flushPromises();
     expect(posted).toEqual([["c3", "c2"], ["c1"]]);
-    // A site-wide switch is not about the commit: no badge for it
-    expect(badges(wrapper).map((b) => b.id)).toEqual([
-      "commit-reset-unavailable-c3",
-      "commit-revert-unavailable-c1",
+    // A site-wide switch is not about the commit: no badge for it. What
+    // cannot apply here (an initial commit) stays grey.
+    expect(badges(wrapper).map((b) => [b.id, b.type])).toEqual([
+      ["commit-reset-unavailable-c2", "danger"],
+      ["commit-revert-unavailable-c1", "info"],
     ]);
   });
 
