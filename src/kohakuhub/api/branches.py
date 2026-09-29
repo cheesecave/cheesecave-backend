@@ -6,14 +6,13 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from kohakuhub.db import Repository, User
-from kohakuhub.db_operations import create_commit, get_repository
+from kohakuhub.db_operations import get_repository
 from kohakuhub.logger import get_logger
 from kohakuhub.storage_cleanup import (
     SCRATCH_BRANCH_PREFIX,
     enqueue_branch_links,
     enqueue_lfs_reconciliation,
     forget_branch,
-    refresh_head_refs,
 )
 from kohakuhub.auth.dependencies import get_current_user, get_optional_user
 from kohakuhub.auth.permissions import (
@@ -26,10 +25,7 @@ from kohakuhub.utils.lakefs import (
     resolve_lakefs_repo,
     resolve_revision,
 )
-from kohakuhub.api.repo.utils.gc import (
-    track_commit_lfs_objects,
-)
-from kohakuhub.api.commit import reset
+from kohakuhub.api.commit import records, reset, revert
 from kohakuhub.api.repo.utils.hf import (
     HFErrorCode,
     hf_error_response,
@@ -218,7 +214,7 @@ class RevertPayload(BaseModel):
     parent_number: int = 1  # For merge commits
     message: Optional[str] = None
     metadata: Optional[dict[str, str]] = None
-    force: bool = False
+    force: bool = False  # accepted and ignored: LakeFS refuses conflicts regardless
     allow_empty: bool = False
 
 
@@ -552,89 +548,34 @@ async def revert_branch(
             detail={"error": f"Commit not found: {payload.ref}"},
         )
 
-    # NOTE: For REVERT, we do NOT check LFS recoverability!
-    # Revert creates a new commit that undoes changes - LakeFS handles this.
-    # If revert succeeds (no conflict), it means files go from latest -> second-latest version.
-    # Both versions are within keep_versions, so LFS objects are safe.
-    # If there's a conflict, LakeFS will return 409.
-
-    # Perform the revert
+    # LakeFS reverts natively and atomically; what it restores is checked
+    # and claimed first, and the commit it makes recorded like a commit's
+    # (#99). ``force`` is accepted and ignored: LakeFS refuses a conflict or
+    # uncommitted changes with or without it.
+    message = payload.message or f"Revert commit {commit_id[:8]}"
     try:
-        await client.revert_branch(
-            repository=lakefs_repo,
-            branch=branch,
-            ref=payload.ref,
-            parent_number=payload.parent_number,
-            message=payload.message,
-            metadata=payload.metadata,
-            force=payload.force,
-            allow_empty=payload.allow_empty,
+        new_commit_id, rounds = await revert.revert_commit(
+            client,
+            lakefs_repo,
+            branch,
+            commit,
+            payload.parent_number,
+            message,
+            payload.metadata,
+            payload.allow_empty,
         )
-        logger.success(
-            f"Successfully reverted commit {commit_id[:8]} on branch {branch}"
-        )
+    except records.OperationRefused as e:
+        raise HTTPException(status_code=e.status, detail=e.detail)
     except Exception as e:
-        error_msg = str(e)
-        logger.error(f"Failed to revert commit: {error_msg}")
-
-        # Check if it's a conflict error (409)
-        if "409" in error_msg or "conflict" in error_msg.lower():
-            raise HTTPException(
-                status_code=409,
-                detail={
-                    "error": f"Revert conflict: {error_msg}. "
-                    f"The revert operation created conflicts with current branch state.",
-                },
-            )
-
-        raise HTTPException(
-            status_code=500,
-            detail={"error": f"Revert failed: {error_msg}"},
-        )
-
-    # Track LFS objects and record commit in database
-    try:
-        # Get the new commit ID (revert creates a new commit)
-        branch_info = await client.get_branch(repository=lakefs_repo, branch=branch)
-        new_commit_id = branch_info["commit_id"]
-
-        logger.info(f"Tracking LFS objects in revert commit {new_commit_id[:8]}")
-
-        tracked = await track_commit_lfs_objects(
-            lakefs_repo=lakefs_repo,
-            commit_id=new_commit_id,
-            repo_type=repo_type,
-            namespace=namespace,
-            name=name,
-        )
-
-        if tracked > 0:
-            logger.info(f"Tracked {tracked} LFS object(s) from revert")
-
-        # Record commit in database
-        commit_msg = payload.message or f"Revert commit {commit_id[:8]}"
-        try:
-            create_commit(
-                commit_id=new_commit_id,
-                repository=repo_row,
-                repo_type=repo_type,
-                branch=branch,
-                author=user,
-                username=user.username,
-                message=commit_msg,
-                description=f"Reverted {commit_id}",
-            )
-            logger.info(
-                f"Recorded revert commit {new_commit_id[:8]} by {user.username}"
-            )
-        except Exception as e:
-            logger.warning(f"Failed to record commit in database: {e}")
-
-    except Exception as e:
-        # Don't fail the revert if tracking fails
-        logger.warning(f"Failed to track LFS objects after revert: {e}")
-
-    await refresh_head_refs(repo_row, branch, exact=True)
+        logger.exception(f"Failed to revert commit: {e}", e)
+        # Whether the revert landed is unknown here: have the reconciliation
+        # record what the branch links (collection waits for it)
+        enqueue_lfs_reconciliation()
+        raise HTTPException(status_code=500, detail={"error": f"Revert failed: {e}"})
+    await records.record_commits(
+        client, lakefs_repo, repo_row, branch, rounds, user, message, f"Reverted {commit_id}"
+    )
+    logger.success(f"Reverted {commit_id[:8]} on {repo_id}@{branch}: {new_commit_id[:8]}")
 
     return {
         "success": True,
@@ -688,6 +629,10 @@ async def merge_branches(
 
     # Perform the merge
     try:
+        # What the merge commit changed is measured from here
+        base = (await client.get_branch(repository=lakefs_repo, branch=destination_branch))[
+            "commit_id"
+        ]
         merge_result = await client.merge_into_branch(
             repository=lakefs_repo,
             source_ref=source_ref,
@@ -722,53 +667,30 @@ async def merge_branches(
             detail={"error": f"Merge failed: {error_msg}"},
         )
 
-    # Track LFS objects and record merge commit in database
-    try:
-        # Get the merge commit ID from the result
-        # MergeResult has a "reference" field with the commit ID
-        merge_commit_id = merge_result.get("reference")
-
-        if merge_commit_id:
-            logger.info(f"Tracking LFS objects in merge commit {merge_commit_id[:8]}")
-
-            tracked = await track_commit_lfs_objects(
-                lakefs_repo=lakefs_repo,
-                commit_id=merge_commit_id,
-                repo_type=repo_type,
-                namespace=namespace,
-                name=name,
-            )
-
-            if tracked > 0:
-                logger.info(f"Tracked {tracked} LFS object(s) from merge")
-
-            # Record merge commit in database
-            merge_msg = (
-                payload.message or f"Merge {source_ref} into {destination_branch}"
-            )
-            try:
-                create_commit(
-                    commit_id=merge_commit_id,
-                    repository=repo_row,
-                    repo_type=repo_type,
-                    branch=destination_branch,
-                    author=user,
-                    username=user.username,
-                    message=merge_msg,
-                    description=f"Merged {source_ref}",
-                )
-                logger.info(
-                    f"Recorded merge commit {merge_commit_id[:8]} by {user.username}"
-                )
-            except Exception as e:
-                logger.warning(f"Failed to record commit in database: {e}")
-        else:
-            logger.warning("Merge result did not contain commit reference")
-    except Exception as e:
-        # Don't fail the merge if tracking fails
-        logger.warning(f"Failed to track LFS objects after merge: {e}")
-
-    await refresh_head_refs(repo_row, destination_branch, exact=True)
+    # Record the merge commit, and what it changed, like a commit's
+    merge_commit_id = merge_result.get("reference")
+    if merge_commit_id:
+        merge_msg = payload.message or f"Merge {source_ref} into {destination_branch}"
+        try:
+            rounds = [await records.commit_changes(client, lakefs_repo, merge_commit_id, base)]
+        except Exception as e:
+            # The merge happened: record its commit; the reconciliation
+            # records what the branch links
+            logger.warning(f"Could not read what merge {merge_commit_id[:8]} changed: {e}")
+            enqueue_lfs_reconciliation()
+            rounds = [(merge_commit_id, {})]
+        await records.record_commits(
+            client,
+            lakefs_repo,
+            repo_row,
+            destination_branch,
+            rounds,
+            user,
+            merge_msg,
+            f"Merged {source_ref}",
+        )
+    else:
+        logger.warning("Merge result did not contain commit reference")
 
     return {
         "success": True,
@@ -856,10 +778,10 @@ async def reset_branch(
         head, rounds = await reset.reset_branch(
             client, repo_row, lakefs_repo, branch, commit_id, message
         )
-    except reset.ResetRefused as e:
+    except records.OperationRefused as e:
         # Merged before giving up or failing: those commits are on the branch
-        await reset.record_reset(
-            client, lakefs_repo, repo_row, branch, commit_id, e.rounds, user, message
+        await records.record_commits(
+            client, lakefs_repo, repo_row, branch, e.rounds, user, message, f"Reset to {commit_id}"
         )
         raise HTTPException(status_code=e.status, detail=e.detail)
     except Exception as e:
@@ -868,8 +790,8 @@ async def reset_branch(
         # reconciliation record what the branch links (collection waits for it)
         enqueue_lfs_reconciliation()
         raise HTTPException(status_code=500, detail={"error": f"Reset failed: {e}"})
-    await reset.record_reset(
-        client, lakefs_repo, repo_row, branch, commit_id, rounds, user, message
+    await records.record_commits(
+        client, lakefs_repo, repo_row, branch, rounds, user, message, f"Reset to {commit_id}"
     )
     logger.success(f"Reset {repo_id}@{branch} to {commit_id[:8]} in {len(rounds)} merge(s)")
 

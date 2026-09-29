@@ -195,6 +195,7 @@ describe("frontend API client", () => {
     expect(postSpy).toHaveBeenCalledWith(
       "/api/models/alice/demo/branch/main/revert",
       { ref: "commit-1" },
+      { timeout: 300000 },
     );
     // A reset of a big repository takes longer than the default timeout
     expect(postSpy).toHaveBeenCalledWith(

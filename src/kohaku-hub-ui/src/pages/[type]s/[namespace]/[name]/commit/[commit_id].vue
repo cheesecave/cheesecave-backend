@@ -237,12 +237,6 @@
               <el-option value="main" label="main" />
             </el-select>
           </div>
-
-          <div>
-            <el-checkbox v-model="revertForce">
-              Force revert (ignore conflicts)
-            </el-checkbox>
-          </div>
         </div>
 
         <template #footer>
@@ -672,7 +666,6 @@ const resetEnabled = ref(false);
 // Revert state
 const revertDialogVisible = ref(false);
 const reverting = ref(false);
-const revertForce = ref(false);
 
 // Reset state
 const resetDialogVisible = ref(false);
@@ -806,7 +799,6 @@ async function loadOperationChecks() {
 function showRevertDialog() {
   if (!revertEnabled.value) return;
   selectedBranch.value = "main";
-  revertForce.value = false;
   revertDialogVisible.value = true;
 }
 
@@ -831,7 +823,6 @@ async function doRevert() {
       {
         ref: commitId.value,
         parent_number: 1,
-        force: revertForce.value,
         allow_empty: false,
       },
     );

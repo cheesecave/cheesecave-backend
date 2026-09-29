@@ -189,10 +189,7 @@ accepting the open issues in #99 and #107, and requires:
 - `409 Conflict` - Merge conflict (use strategy to resolve)
 - `500 Internal Server Error` - Merge failed
 
-**Auto-tracking:**
-- LFS objects tracked automatically
-- Commit recorded in database
-- User attribution preserved
+**Recorded like a commit:** before answering, the File table, LFS history, branch head references, commit record (with user attribution) and storage usage are updated for every path the merge changed, read to the end.
 
 ---
 
@@ -220,11 +217,11 @@ accepting the open issues in #99 and #107, and requires:
 
 **Fields:**
 - `ref`: Commit ID or ref to revert (required)
-- `parent_number`: For merge commits (default: 1)
-- `message`: Commit message (optional)
+- `parent_number`: The parent to revert against, for merge commits (default: 1, which undoes what the merge brought in)
+- `message`: Commit message (optional; default `Revert commit <id>`)
 - `metadata`: Additional metadata (optional)
-- `force`: Force revert even with conflicts
-- `allow_empty`: Allow empty revert
+- `force`: Accepted and ignored. LakeFS refuses a conflict or uncommitted changes either way.
+- `allow_empty`: Make an empty commit when there is nothing to revert, instead of answering 400
 
 **Response:**
 ```json
@@ -235,16 +232,30 @@ accepting the open issues in #99 and #107, and requires:
 }
 ```
 
-**Important Notes:**
-- Creates NEW commit (doesn't delete history)
-- LFS files automatically handled (no recoverability check needed)
-- If conflicts: returns 409 error
+**Rules**, per path the commit changed, against the branch head:
+- the head still has the commit's version: it goes back to the parent's version (undone);
+- the head already has the parent's version: left alone;
+- anything else is a **conflict**, and nothing is reverted.
+
+**Checked before reverting:**
+- conflicts: answered 409, with the files in `conflicts`;
+- the parent versions it restores: they must still be stored (not garbage collected, present in the bucket), or 400 with `missing_files`. There is no way around this.
+- something to revert: otherwise 400 "Nothing to revert", unless `allow_empty`;
+- the repository's first commit has no parent: 400.
+
+**How it works:**
+- LakeFS reverts natively: a three-way merge of metadata, committed atomically, with no file content through the API. It works on the branch head at that moment, so a concurrent commit needs no retry.
+- The versions it restores are claimed against garbage collection while it runs.
+- The new commit is found by a marker in its metadata (`kh_operation`), not by reading the head, which may already be someone else's commit.
+- Before answering, the File table, LFS history, branch head references, commit record and storage usage are updated for the paths it changed. The versions it replaced are left to garbage collection, which runs in the background.
+- An upload in flight on the branch is waited for; uncommitted changes that stay answer 409.
 
 **Status Codes:**
 - `200 OK` - Reverted successfully
-- `503 Service Unavailable` - Revert operation is disabled by server policy
+- `400 Bad Request` - Nothing to revert, versions no longer stored, the first commit, or an invalid `parent_number`
 - `404 Not Found` - Commit not found
-- `409 Conflict` - Revert caused conflicts
+- `409 Conflict` - Later commits changed the same files (listed), or the branch has uncommitted changes
+- `503 Service Unavailable` - Revert operation is disabled by server policy
 
 ---
 

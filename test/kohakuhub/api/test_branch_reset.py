@@ -21,12 +21,13 @@ def m(prepared_backend_test_state, monkeypatch):
     ns.gc = _live("kohakuhub.lfs_gc")
     ns.avail = _live("kohakuhub.api.commit.availability")
     ns.reset = _live("kohakuhub.api.commit.reset")
+    ns.records = _live("kohakuhub.api.commit.records")
     ns.s3 = _live("kohakuhub.utils.s3").get_s3_client()
     ns.lakefs = _live("kohakuhub.utils.lakefs")
     ns.rest = _live("kohakuhub.lakefs_rest_client")
     ns.rest._singleton_client = None
     ns.client = ns.lakefs.get_lakefs_client()
-    monkeypatch.setattr(ns.reset, "RETRY_DELAY", 0)
+    monkeypatch.setattr(ns.records, "RETRY_DELAY", 0)
     yield ns
     ns.db.LfsObjectTombstone.delete().execute()
     ns.rest._singleton_client = None
@@ -174,7 +175,7 @@ async def test_big_resets_page_through_every_change(m, owner_client, monkeypatch
 
     # And back: 90 LFS objects to restore, claimed in slices
     await repo.commit(_file("again.txt", "a"))
-    monkeypatch.setattr(m.reset, "CLAIM_YIELD", 10)
+    monkeypatch.setattr(m.records, "CLAIM_YIELD", 10)
     target = (
         await _pages(
             lambda after: m.client.log_commits(
@@ -415,7 +416,7 @@ async def test_a_failure_while_building_leaves_the_branch_alone(m, owner_client,
     # Failing to drop the scratch branch does not fail a reset that worked
     monkeypatch.undo()
     monkeypatch.setattr(m.cfg.app, "repository_reset_enabled", True)
-    monkeypatch.setattr(m.reset, "RETRY_DELAY", 0)
+    monkeypatch.setattr(m.records, "RETRY_DELAY", 0)
 
     async def stuck(self, *args, **kwargs):
         raise RuntimeError("cannot delete")
@@ -432,7 +433,7 @@ async def test_collection_racing_the_reset_is_caught_when_claiming(m, owner_clie
     def collected(sha256, exists_in_storage):
         raise m.gc.LfsObjectUnavailable(sha256)
 
-    monkeypatch.setattr(m.reset, "claim_for_commit", collected)
+    monkeypatch.setattr(m.records, "claim_for_commit", collected)
     response = await _reset(repo, c1)
     assert response.status_code == 400
     assert response.json()["detail"]["missing_files"] == ["a.bin"]
@@ -442,7 +443,7 @@ async def test_collection_racing_the_reset_is_caught_when_claiming(m, owner_clie
         m.s3.delete_object(Bucket=m.cfg.s3.bucket, Key=m.gc.lfs_key(sha256))
         return True
 
-    monkeypatch.setattr(m.reset, "claim_for_commit", revived)
+    monkeypatch.setattr(m.records, "claim_for_commit", revived)
     response = await _reset(repo, c1)
     assert response.status_code == 400
     assert await repo.head() == c5
@@ -487,8 +488,8 @@ async def test_bookkeeping_failures_do_not_fail_a_reset_that_happened(m, owner_c
     def broken(*args, **kwargs):
         raise RuntimeError("database hiccup")
 
-    monkeypatch.setattr(m.reset, "record_evicted_versions", broken)
-    monkeypatch.setattr(m.reset, "enqueue_lfs_reconciliation", lambda: queued.append(1))
+    monkeypatch.setattr(m.records, "record_evicted_versions", broken)
+    monkeypatch.setattr(m.records, "enqueue_lfs_reconciliation", lambda: queued.append(1))
     response = await _reset(repo, c1)
     assert response.status_code == 200, response.text
     assert await _differs(m, repo, await repo.head(), c1) == []
@@ -542,7 +543,7 @@ async def test_versions_pushed_out_of_the_keep_window_go_to_collection(
     monkeypatch.setattr(m.cfg.app, "lfs_auto_gc", True)
     monkeypatch.setattr(m.cfg.app, "lfs_keep_versions", 1)
     queued = []
-    monkeypatch.setattr(m.reset, "enqueue_lfs_collection", lambda: queued.append(1))
+    monkeypatch.setattr(m.records, "enqueue_lfs_collection", lambda: queued.append(1))
     assert (await _reset(repo, c1)).status_code == 200
     # a.bin's newest version is v1 again: v3 and v2 fall out of a window of one
     assert queued == [1]
@@ -595,7 +596,7 @@ async def test_a_claim_refused_after_a_merge_still_records_it(m, owner_client, m
         raise m.gc.LfsObjectUnavailable(sha256)
 
     monkeypatch.setattr(m.rest.LakeFSRestClient, "merge_into_branch", racing_merge)
-    monkeypatch.setattr(m.reset, "claim_for_commit", collected)  # only round 2 claims
+    monkeypatch.setattr(m.records, "claim_for_commit", collected)  # only round 2 claims
     response = await _reset(repo, target)
     assert response.status_code == 400
     detail = response.json()["detail"]
@@ -684,14 +685,14 @@ async def test_storage_usage_follows_and_its_failure_is_harmless(m, owner_client
     async def update(repo_row):
         updated.append(repo_row.full_id)
 
-    monkeypatch.setattr(m.reset, "update_repository_storage", update)
+    monkeypatch.setattr(m.records, "update_repository_storage", update)
     assert (await _reset(repo, c1)).status_code == 200
     assert updated == [repo.id]
 
     async def broken(repo_row):
         raise RuntimeError("quota service down")
 
-    monkeypatch.setattr(m.reset, "update_repository_storage", broken)
+    monkeypatch.setattr(m.records, "update_repository_storage", broken)
     assert (await _reset(repo, c2)).status_code == 200
 
 
@@ -731,7 +732,7 @@ async def test_the_commits_are_recorded_even_if_reading_the_branch_fails(
     queued = []
     monkeypatch.setattr(m.rest.LakeFSRestClient, "merge_into_branch", tracking_merge)
     monkeypatch.setattr(m.rest.LakeFSRestClient, "get_branch", failing_after_merge)
-    monkeypatch.setattr(m.reset, "enqueue_lfs_reconciliation", lambda: queued.append(1))
+    monkeypatch.setattr(m.records, "enqueue_lfs_reconciliation", lambda: queued.append(1))
     response = await _reset(repo, c1)
     assert response.status_code == 200, response.text
     assert m.db.Commit.get_or_none(m.db.Commit.commit_id == merged[0]) is not None
@@ -740,12 +741,12 @@ async def test_the_commits_are_recorded_even_if_reading_the_branch_fails(
     # And a commit row that cannot be written does not stop the rest
     monkeypatch.undo()
     monkeypatch.setattr(m.cfg.app, "repository_reset_enabled", True)
-    monkeypatch.setattr(m.reset, "RETRY_DELAY", 0)
+    monkeypatch.setattr(m.records, "RETRY_DELAY", 0)
 
     def no_commit_rows(**kwargs):
         raise RuntimeError("database hiccup")
 
-    monkeypatch.setattr(m.reset, "create_commit", no_commit_rows)
+    monkeypatch.setattr(m.records, "create_commit", no_commit_rows)
     ids = await _pages(
         lambda after: m.client.log_commits(
             repository=repo.lakefs_repo, ref="main", after=after, amount=1000

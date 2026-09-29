@@ -1,18 +1,15 @@
 """Garbage collection utilities for LFS objects."""
 
 import asyncio
-from datetime import datetime, timezone
 
 from kohakuhub.config import cfg
 from kohakuhub.db import File, LFSObjectHistory, Repository
 from kohakuhub.db_operations import (
     create_lfs_history,
     get_repository,
-    should_use_lfs,
 )
-from kohakuhub.lfs_gc import deleted_shas, lfs_oid
+from kohakuhub.lfs_gc import deleted_shas
 from kohakuhub.logger import get_logger
-from kohakuhub.utils.lakefs import get_lakefs_client
 from kohakuhub.utils.s3 import delete_objects_with_prefix, object_exists
 
 logger = get_logger("GC")
@@ -157,161 +154,3 @@ async def cleanup_repository_storage(
         f"({repo_type}/{namespace}/{name})"
     )
     return {"repo_objects_deleted": repo_objects_deleted}
-
-
-async def track_commit_lfs_objects(
-    lakefs_repo: str,
-    commit_id: str,
-    repo_type: str,
-    namespace: str,
-    name: str,
-) -> int:
-    """Track all LFS objects in a commit (after revert/merge).
-
-    This function is called after a revert or merge operation to ensure
-    all LFS objects in the new commit are tracked in history and won't
-    be accidentally garbage collected.
-
-    Args:
-        lakefs_repo: LakeFS repository name
-        commit_id: The new commit ID (from revert/merge)
-        repo_type: Repository type (model/dataset/space)
-        namespace: Repository namespace
-        name: Repository name
-
-    Returns:
-        Number of LFS objects tracked
-    """
-    client = get_lakefs_client()
-
-    # Get repository FK object
-    repo = get_repository(repo_type, namespace, name)
-    if not repo:
-        logger.error(f"Repository not found: {repo_type}/{namespace}/{name}")
-        return 0
-
-    # Get commit details to find parent
-    try:
-        commit = await client.get_commit(repository=lakefs_repo, commit_id=commit_id)
-        parents = commit.get("parents", [])
-
-        if not parents:
-            logger.warning(f"Commit {commit_id[:8]} has no parents, cannot track diff")
-            return 0
-
-        parent_commit = parents[0]
-        logger.info(
-            f"Tracking LFS objects in commit {commit_id[:8]} (diff from {parent_commit[:8]})"
-        )
-
-        # Get diff between parent and new commit
-        diff_result = await client.diff_refs(
-            repository=lakefs_repo,
-            left_ref=parent_commit,
-            right_ref=commit_id,
-        )
-
-        tracked_count = 0
-        files_to_remove = []
-
-        for result in diff_result.get("results", []):
-            path = result.get("path")
-            path_type = result.get("path_type")
-            diff_type = result.get("type")  # "added", "removed", "changed"
-
-            # Skip if not an object
-            if path_type != "object":
-                continue
-
-            # Handle removed files
-            if diff_type == "removed":
-                files_to_remove.append(path)
-                logger.debug(f"File removed: {path}")
-                continue
-
-            # Get object metadata to check if it's LFS
-            try:
-                obj_stat = await client.stat_object(
-                    repository=lakefs_repo,
-                    ref=commit_id,
-                    path=path,
-                )
-
-                size_bytes = obj_stat.get("size_bytes", 0)
-
-                # Extract SHA256 from checksum (format: "sha256:hash")
-                checksum = obj_stat.get("checksum", "")
-                if ":" in checksum:
-                    sha256 = checksum.split(":", 1)[1]
-                else:
-                    sha256 = checksum
-
-                # A global LFS address is the identity; otherwise
-                # repo-specific LFS rules (size + suffix)
-                oid = lfs_oid(obj_stat.get("physical_address"))
-                sha256 = oid or sha256
-                is_lfs = oid is not None or should_use_lfs(repo, path, size_bytes)
-
-                # Get File FK if exists for LFS history tracking
-                file_fk = File.get_or_none(
-                    (File.repository == repo) & (File.path_in_repo == path)
-                )
-
-                # Track LFS objects in history
-                if is_lfs:
-                    create_lfs_history(
-                        repository=repo,
-                        path_in_repo=path,
-                        sha256=sha256,
-                        size=size_bytes,
-                        commit_id=commit_id,
-                        file=file_fk,
-                    )
-                    tracked_count += 1
-                    logger.debug(f"Tracked LFS object: {path} ({sha256[:8]})")
-
-                # Update File table for BOTH LFS and regular files using repository FK
-                File.insert(
-                    repository=repo,
-                    path_in_repo=path,
-                    size=size_bytes,
-                    sha256=sha256,
-                    lfs=is_lfs,
-                    is_deleted=False,
-                    owner=repo.owner,  # Denormalized owner
-                ).on_conflict(
-                    conflict_target=(File.repository, File.path_in_repo),
-                    update={
-                        File.sha256: sha256,
-                        File.size: size_bytes,
-                        File.lfs: is_lfs,
-                        File.is_deleted: False,  # File is active
-                        File.updated_at: datetime.now(timezone.utc),
-                    },
-                ).execute()
-
-            except Exception as e:
-                logger.warning(f"Failed to stat object {path}: {e}")
-                continue
-
-        # Remove deleted files from File table using repository FK
-        if files_to_remove:
-            removed_count = (
-                File.delete()
-                .where(
-                    (File.repository == repo) & (File.path_in_repo.in_(files_to_remove))
-                )
-                .execute()
-            )
-            logger.info(f"Removed {removed_count} deleted file(s) from File table")
-
-        if tracked_count > 0:
-            logger.success(
-                f"Tracked {tracked_count} LFS object(s) in commit {commit_id[:8]}"
-            )
-
-        return tracked_count
-
-    except Exception as e:
-        logger.exception(f"Failed to track commit LFS objects", e)
-        return 0

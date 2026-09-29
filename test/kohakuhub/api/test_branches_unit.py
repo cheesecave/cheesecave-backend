@@ -287,108 +287,6 @@ async def test_reference_helpers_and_list_repo_refs_cover_pagination_and_fallbac
 
 
 @pytest.mark.asyncio
-async def test_revert_branch_covers_not_found_conflict_success_and_tracking_failure(monkeypatch):
-    monkeypatch.setattr(
-        operation_capabilities.cfg.app, "repository_revert_enabled", True
-    )
-    repo = SimpleNamespace(repo_type="model", full_id="owner/repo")
-    user = SimpleNamespace(username="owner")
-    client = _FakeClient()
-    created_commits = []
-
-    monkeypatch.setattr(branches_api, "get_repository", lambda *_args: repo)
-    monkeypatch.setattr(branches_api, "check_repo_write_permission", lambda repo_arg, user_arg: None)
-    monkeypatch.setattr(branches_api, "resolve_lakefs_repo", lambda repo: f"{repo.repo_type}:{repo.full_id}")
-    monkeypatch.setattr(branches_api, "get_lakefs_client", lambda: client)
-    monkeypatch.setattr(branches_api, "track_commit_lfs_objects", lambda **kwargs: _async_return(2))
-    monkeypatch.setattr(branches_api, "create_commit", lambda **kwargs: created_commits.append(kwargs))
-
-    monkeypatch.setattr(branches_api, "get_repository", lambda *_args: None)
-    not_found = await branches_api.revert_branch(
-        "model",
-        "owner",
-        "repo",
-        "main",
-        branches_api.RevertPayload(ref="abc"),
-        user=user,
-    )
-    assert not_found.status_code == 404
-
-    monkeypatch.setattr(branches_api, "get_repository", lambda *_args: repo)
-    client.raise_on["get_commit"] = RuntimeError("missing")
-    with pytest.raises(HTTPException) as missing_commit:
-        await branches_api.revert_branch(
-            "model",
-            "owner",
-            "repo",
-            "main",
-            branches_api.RevertPayload(ref="abc"),
-            user=user,
-        )
-    assert missing_commit.value.status_code == 404
-
-    client.raise_on.pop("get_commit", None)
-    client.raise_on["revert_branch"] = RuntimeError("409 conflict")
-    with pytest.raises(HTTPException) as conflict_error:
-        await branches_api.revert_branch(
-            "model",
-            "owner",
-            "repo",
-            "main",
-            branches_api.RevertPayload(ref="abc"),
-            user=user,
-        )
-    assert conflict_error.value.status_code == 409
-
-    client.raise_on["revert_branch"] = RuntimeError("boom")
-    with pytest.raises(HTTPException) as generic_error:
-        await branches_api.revert_branch(
-            "model",
-            "owner",
-            "repo",
-            "main",
-            branches_api.RevertPayload(ref="abc"),
-            user=user,
-        )
-    assert generic_error.value.status_code == 500
-
-    client.raise_on.pop("revert_branch", None)
-    client.branch_data = {"commit_id": "revert-commit"}
-    result = await branches_api.revert_branch(
-        "model",
-        "owner",
-        "repo",
-        "main",
-        branches_api.RevertPayload(ref="abc", message="revert it"),
-        user=user,
-    )
-    assert result["success"] is True
-    assert result["new_commit_id"] == "revert-commit"
-    assert created_commits[-1]["commit_id"] == "revert-commit"
-
-    async def broken_track(**kwargs):
-        raise RuntimeError("tracking broke")
-
-    monkeypatch.setattr(branches_api, "track_commit_lfs_objects", broken_track)
-    result = await branches_api.revert_branch(
-        "model",
-        "owner",
-        "repo",
-        "main",
-        branches_api.RevertPayload(ref="abc"),
-        user=user,
-    )
-    assert result["success"] is True
-
-
-def _async_return(value):
-    async def _inner(*args, **kwargs):
-        return value
-
-    return _inner()
-
-
-@pytest.mark.asyncio
 async def test_merge_branches_covers_not_found_conflict_success_and_tracking_paths(monkeypatch):
     repo = SimpleNamespace(repo_type="model", full_id="owner/repo")
     user = SimpleNamespace(username="owner")
@@ -399,8 +297,17 @@ async def test_merge_branches_covers_not_found_conflict_success_and_tracking_pat
     monkeypatch.setattr(branches_api, "check_repo_write_permission", lambda repo_arg, user_arg: None)
     monkeypatch.setattr(branches_api, "resolve_lakefs_repo", lambda repo: f"{repo.repo_type}:{repo.full_id}")
     monkeypatch.setattr(branches_api, "get_lakefs_client", lambda: client)
-    monkeypatch.setattr(branches_api, "track_commit_lfs_objects", lambda **kwargs: _async_return(1))
-    monkeypatch.setattr(branches_api, "create_commit", lambda **kwargs: created_commits.append(kwargs))
+    queued = []
+
+    async def changes(client_arg, lakefs_repo, commit_id, base=None):
+        return commit_id, {"a.bin": None}
+
+    async def record(client_arg, lakefs_repo, repo_arg, branch, rounds, user_arg, message, description):
+        created_commits.append((rounds, message, description))
+
+    monkeypatch.setattr(branches_api.records, "commit_changes", changes)
+    monkeypatch.setattr(branches_api.records, "record_commits", record)
+    monkeypatch.setattr(branches_api, "enqueue_lfs_reconciliation", lambda: queued.append(1))
 
     monkeypatch.setattr(branches_api, "get_repository", lambda *_args: None)
     not_found = await branches_api.merge_branches(
@@ -429,7 +336,11 @@ async def test_merge_branches_covers_not_found_conflict_success_and_tracking_pat
         "model", "owner", "repo", "feature", "main", branches_api.MergePayload(message="merge it"), user=user
     )
     assert result["result"]["reference"] == "merge-commit"
-    assert created_commits[-1]["commit_id"] == "merge-commit"
+    assert created_commits[-1] == (
+        [("merge-commit", {"a.bin": None})],
+        "merge it",
+        "Merged feature",
+    )
 
     client.merge_result = {"status": "ok"}
     result = await branches_api.merge_branches(
@@ -437,15 +348,18 @@ async def test_merge_branches_covers_not_found_conflict_success_and_tracking_pat
     )
     assert result["success"] is True
 
-    async def broken_track(**kwargs):
+    async def broken_changes(*args, **kwargs):
         raise RuntimeError("tracking broke")
 
-    monkeypatch.setattr(branches_api, "track_commit_lfs_objects", broken_track)
+    # What it changed cannot be read: its commit is still recorded, and the
+    # reconciliation records what the branch links
+    monkeypatch.setattr(branches_api.records, "commit_changes", broken_changes)
     client.merge_result = {"reference": "merge-commit-2"}
     result = await branches_api.merge_branches(
         "model", "owner", "repo", "feature", "main", branches_api.MergePayload(), user=user
     )
     assert result["success"] is True
+    assert created_commits[-1][0] == [("merge-commit-2", {})] and queued == [1]
 
 
 @pytest.mark.asyncio
