@@ -239,7 +239,7 @@ describe("commit page operation checks", () => {
     expect(wrapper.find('[data-testid="revert-action"]').exists()).toBe(false);
   });
 
-  it("lists every file of the commit that is no longer stored", async () => {
+  it("says how many files of the commit are no longer stored, and which changed ones", async () => {
     mocks.repoAPI.getCommitOperations.mockResolvedValue(
       checks({ available: true, files: 1 }, { available: true, files: 1 }),
     );
@@ -289,11 +289,13 @@ describe("commit page operation checks", () => {
       "commit-1",
       "main",
     );
-    const panel = wrapper.get('[data-testid="unavailable-files"]');
-    expect(panel.text()).toContain(
+    // One badge by the commit id; the files themselves are marked below
+    const badge = wrapper.get('[data-testid="unavailable-files"]');
+    expect(badge.text()).toBe("2 file(s) unavailable");
+    expect(badge.element.parentElement.getAttribute("data-content")).toContain(
       "2 file(s) of this commit are no longer stored",
     );
-    expect(panel.text()).toContain("extra/old.bin");
+    expect(wrapper.text()).not.toContain("extra/old.bin");
     const mark = (testid) => {
       const tag = wrapper.get(`[data-testid="${testid}-weights.bin"]`);
       return [
@@ -326,10 +328,12 @@ describe("commit page operation checks", () => {
     expect(wrapper.find('[data-testid="unavailable-files"]').exists()).toBe(
       false,
     );
+    const unchecked = wrapper.get(
+      '[data-testid="unavailable-files-unchecked"]',
+    );
+    expect(unchecked.text()).toBe("Storage not checked");
     expect(
-      wrapper
-        .get('[data-testid="unavailable-files-unchecked"]')
-        .attributes("title"),
+      unchecked.element.parentElement.getAttribute("data-content"),
     ).toContain("too many files to check");
 
     mocks.repoAPI.getCommitUnavailableFiles.mockRejectedValue(

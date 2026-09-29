@@ -96,6 +96,31 @@
                 >
                   {{ commitData.commit_id?.substring(0, 8) }}
                 </code>
+                <!-- Files of this commit's tree that are no longer stored -->
+                <el-tooltip
+                  v-if="unavailableFiles?.length"
+                  :content="`${unavailableFiles.length} file(s) of this commit are no longer stored (garbage collected). Changed files are marked Unavailable below.`"
+                  placement="top"
+                >
+                  <el-tag
+                    type="warning"
+                    size="small"
+                    data-testid="unavailable-files"
+                    >{{ unavailableFiles.length }} file(s) unavailable</el-tag
+                  >
+                </el-tooltip>
+                <el-tooltip
+                  v-else-if="unavailableFiles === null"
+                  content="This commit differs from the branch in too many files to check which are still stored."
+                  placement="top"
+                >
+                  <el-tag
+                    type="info"
+                    size="small"
+                    data-testid="unavailable-files-unchecked"
+                    >Storage not checked</el-tag
+                  >
+                </el-tooltip>
               </div>
             </div>
             <div
@@ -300,39 +325,6 @@
           </el-button>
         </template>
       </el-dialog>
-
-      <!-- Files of this commit that are no longer stored -->
-      <el-alert
-        v-if="unavailableFiles?.length"
-        type="warning"
-        :closable="false"
-        show-icon
-        class="mb-4"
-        data-testid="unavailable-files"
-      >
-        <template #title>
-          {{ unavailableFiles.length }} file(s) of this commit are no longer
-          stored (garbage collected)
-        </template>
-        <el-collapse>
-          <el-collapse-item title="Show the files" name="files">
-            <ul class="font-mono text-xs max-h-64 overflow-y-auto">
-              <li v-for="file in unavailableFiles" :key="file.path">
-                {{ file.path }}
-              </li>
-            </ul>
-          </el-collapse-item>
-        </el-collapse>
-      </el-alert>
-      <el-alert
-        v-else-if="unavailableFiles === null"
-        type="info"
-        :closable="false"
-        show-icon
-        class="mb-4"
-        data-testid="unavailable-files-unchecked"
-        title="This commit differs from the branch in too many files to check which are still stored."
-      />
 
       <!-- Files Changed -->
       <div class="card">
