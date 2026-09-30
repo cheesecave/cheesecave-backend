@@ -237,7 +237,7 @@ async def test_the_new_commit_is_found_by_its_marker(m, owner_client, monkeypatc
 
     monkeypatch.setattr(m.rest.LakeFSRestClient, "revert_branch", unmarked)
     queued = []
-    monkeypatch.setattr(m.branches, "enqueue_lfs_reconciliation", lambda: queued.append(1))
+    monkeypatch.setattr(m.records, "enqueue_lfs_reconciliation", lambda: queued.append(1))
     response = await _revert(repo, c4)  # the whole log searched
     assert response.status_code == 500 and queued == [1]
     assert "may have been applied" in response.json()["detail"]["error"]
@@ -315,7 +315,7 @@ async def test_other_refusals_keep_their_status(m, owner_client, monkeypatch):
 
     queued = []
     monkeypatch.setattr(m.rest.LakeFSRestClient, "revert_branch", down)
-    monkeypatch.setattr(m.branches, "enqueue_lfs_reconciliation", lambda: queued.append(1))
+    monkeypatch.setattr(m.records, "enqueue_lfs_reconciliation", lambda: queued.append(1))
     assert (await _revert(repo, c3)).status_code == 500
     assert queued == [1]
 

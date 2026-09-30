@@ -552,6 +552,7 @@ async def test_squash_repo_covers_validation_success_and_recovery(monkeypatch):
     # Step 2 reloads the row under the temporary name and resolves its LakeFS id
     # from it, so the temp row carries its own identity too.
     temp_repo = SimpleNamespace(
+        id=6,
         private=False,
         repo_type="model",
         full_id="owner/demo-squash-abc12345",
@@ -615,6 +616,7 @@ async def test_squash_repo_covers_validation_success_and_recovery(monkeypatch):
             auth=(SimpleNamespace(username="owner"), False),
         )
     assert squash_error.value.status_code == 500
+    assert recounts[-1] == temp_repo.id  # the row points at the temp copy again: recounted
 
 
 @pytest.mark.asyncio

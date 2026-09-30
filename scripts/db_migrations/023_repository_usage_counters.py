@@ -45,7 +45,7 @@ STORED_LFS = (
     "SELECT d.repository_id, SUM(d.size) AS total FROM ("
     "SELECT DISTINCT h.repository_id, h.sha256, h.size FROM lfsobjecthistory h "
     "WHERE LENGTH(h.sha256) = 64 "
-    'AND h.sha256 NOT IN (SELECT sha256 FROM "lfs_object_tombstone")'
+    'AND NOT EXISTS (SELECT 1 FROM "lfs_object_tombstone" t WHERE t.sha256 = h.sha256)'
     ") d GROUP BY d.repository_id"
 )
 
@@ -73,10 +73,12 @@ def _migrate(greatest: str):
         'ON "repository" ("namespace", "private")'
     )
     print("Filling them from the stored usage...")
-    cursor.execute(
-        'UPDATE "repository" SET lfs_bytes = s.total '
-        f'FROM ({STORED_LFS}) s WHERE s.repository_id = "repository".id'
-    )
+    # One UPDATE per repository: UPDATE ... FROM needs SQLite 3.33
+    p = db.param
+    for repo_id, total in db.execute_sql(STORED_LFS).fetchall():
+        cursor.execute(
+            f'UPDATE "repository" SET lfs_bytes = {p} WHERE id = {p}', (total, repo_id)
+        )
     cursor.execute(
         f'UPDATE "repository" SET main_regular_bytes = {greatest}(used_bytes - lfs_bytes, 0)'
     )

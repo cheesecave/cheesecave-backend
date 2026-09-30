@@ -147,12 +147,14 @@ def _add(repo_ids, regular: int = 0, lfs: int = 0) -> None:
     ).where(R.id.in_(repo_ids)).execute()
 
 
-def _hold(repo_id: int) -> None:
-    """Lock a repository's row until the transaction ends (SQLite serializes
-    writers already). A change to its LFS count takes it before reading what
-    the history links, so it sees every earlier change's history rows."""
-    held = Repository.select(Repository.id).where(Repository.id == repo_id)
-    if Repository._meta.database.for_update:
+def _hold(repo_ids) -> None:
+    """Lock repository rows until the transaction ends, in id order (so two
+    transactions holding several cannot deadlock); SQLite serializes writers
+    already. A change to a repository's LFS count takes its row before reading
+    what the history links, so it sees every earlier change's history rows."""
+    R = Repository
+    held = R.select(R.id).where(R.id.in_(repo_ids)).order_by(R.id)
+    if R._meta.database.for_update:
         held = held.for_update()
     held.execute()
 
@@ -165,7 +167,7 @@ def lfs_linked(repo_id: int, objects: dict[str, int]) -> None:
     objects = {sha: size for sha, size in objects.items() if _sha256(sha)}
     if not objects:
         return
-    _hold(repo_id)
+    _hold([repo_id])
     H, T = LFSObjectHistory, LfsObjectTombstone
     shas = sorted(objects)
     known, gone = set(), set()
@@ -192,12 +194,20 @@ def _object_moved(sha256: str, sign: int) -> None:
     size = H.select(fn.MAX(H.size)).where(H.sha256 == sha256).scalar()
     if size is None:
         return  # no repository's history has it
-    holders = H.select(H.repository).where(H.sha256 == sha256).distinct()
+    holders = [
+        r
+        for (r,) in H.select(H.repository).where(H.sha256 == sha256).distinct().tuples()
+    ]
+    _hold(holders)
     _add(holders, lfs=sign * size)
 
 
 def object_gone(sha256: str) -> None:
-    """Garbage collection tombstoned an object: no repository counts it any more."""
+    """Garbage collection tombstoned an object: no repository counts it any more.
+
+    History rows being inserted meanwhile are not seen; the claim protocol
+    (``lfs_gc``) keeps garbage collection away from an object a commit links.
+    """
     _object_moved(sha256, -1)
 
 
@@ -266,7 +276,7 @@ def _stored_lfs(repo_id: int):
         .where(
             (H.repository == repo_id)
             & (fn.LENGTH(H.sha256) == 64)
-            & H.sha256.not_in(T.select(T.sha256))
+            & ~fn.EXISTS(T.select().where(T.sha256 == H.sha256))
         )
         .distinct()
         .alias("stored")
@@ -321,7 +331,7 @@ async def recount_repository(repo_id: int) -> dict[str, Any] | None:
     with R._meta.database.atomic():
         # Hold the row first, so the LFS sum below sees every change already
         # applied to it, and the ones after it wait for this write
-        _hold(repo_id)
+        _hold([repo_id])
         lfs = fn.COALESCE(_stored_lfs(repo_id), 0)
         applied = (
             R.update(
@@ -385,18 +395,24 @@ async def recount(payload: dict[str, Any], ctx: tasks.TaskContext) -> None:
         if ctx.cancel_requested:
             raise tasks.TaskCancelled()
         ctx.stage(f"recounting {repo_type}:{full_id}")
-        result = await recount_repository(repo_id)
         stats["repositories"] += 1
-        if result is None:
-            stats["busy"] += 1  # recounted again on its own, later
-        elif result["after"] != result["before"]:
-            stats["drifted"] += 1
-            stats["drift_bytes"] += abs(result["after"] - result["before"])
-            drift = sorted(
-                drift + [result],
-                key=lambda r: abs(r["after"] - r["before"]),
-                reverse=True,
-            )[:DRIFT_SHOWN]
+        try:
+            result = await recount_repository(repo_id)
+        except Exception as e:  # one repository must not stop the others
+            logger.warning(f"Could not recount {repo_type}:{full_id}: {e}")
+            enqueue_repository_recount(repo_id, RECOUNT_RETRY)
+            stats["failed"] += 1
+        else:
+            if result is None:
+                stats["busy"] += 1  # recounted again on its own, later
+            elif result["after"] != result["before"]:
+                stats["drifted"] += 1
+                stats["drift_bytes"] += abs(result["after"] - result["before"])
+                drift = sorted(
+                    drift + [result],
+                    key=lambda r: abs(r["after"] - r["before"]),
+                    reverse=True,
+                )[:DRIFT_SHOWN]
         done += 1
         ctx.checkpoint({"after": repo_id, "stats": dict(stats), "drift": drift})
         ctx.progress(done, max(total, done))
@@ -404,16 +420,20 @@ async def recount(payload: dict[str, Any], ctx: tasks.TaskContext) -> None:
     ctx.log(
         "INFO",
         f"Recounted {stats['repositories']} repositories: {stats['drifted']} drifted by "
-        f"{stats['drift_bytes']} bytes in all, {stats['busy']} busy",
+        f"{stats['drift_bytes']} bytes in all, {stats['busy']} busy, {stats['failed']} failed",
     )
 
 
 def recount_status() -> dict[str, Any]:
-    """The newest site-wide recount and its report, for the admin panel."""
+    """The newest site-wide recount and its report, for the admin panel.
+
+    A periodic recount's next occurrence, queued for later, is not it.
+    """
     T = BackgroundTask
+    due = (T.status != tasks.QUEUED) | (T.run_after <= utcnow())
     task = (
         T.select()
-        .where((T.kind == RECOUNT_KIND) & (T.payload == "{}"))
+        .where((T.kind == RECOUNT_KIND) & (T.payload == "{}") & due)
         .order_by(T.id.desc())
         .first()
     )

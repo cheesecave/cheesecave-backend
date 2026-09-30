@@ -25,7 +25,7 @@ async def recalculate_storage(payload: dict) -> None:
     repo = Repository.get_or_none(Repository.id == payload["repo_id"])
     if repo is None:
         raise PermanentTaskError("repository no longer exists")  # no retries
-    await update_repository_storage(repo)
+    await usage.recount_repository(repo.id)
 
 
 with db.atomic():

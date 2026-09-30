@@ -18,7 +18,6 @@ from kohakuhub.db_operations import (
     delete_file,
     get_effective_lfs_threshold,
     get_file,
-    get_organization,
     should_use_lfs,
     update_file,
 )

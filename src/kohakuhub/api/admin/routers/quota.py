@@ -330,7 +330,10 @@ async def get_usage_recount(_admin: bool = Depends(verify_admin_token)):
 
 @router.post("/usage/recount")
 async def start_usage_recount(_admin: bool = Depends(verify_admin_token)):
-    """Recount every repository's storage usage and report the drift. One runs at a time."""
+    """Recount every repository's storage usage and report the drift.
+
+    ``already_pending`` when one is scheduled and has not started yet.
+    """
     task_id = usage.enqueue_recount()
     logger.info("Admin started the usage recount")
     return {"task_id": task_id, "already_pending": task_id is None}

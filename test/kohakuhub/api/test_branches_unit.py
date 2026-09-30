@@ -288,7 +288,7 @@ async def test_reference_helpers_and_list_repo_refs_cover_pagination_and_fallbac
 
 @pytest.mark.asyncio
 async def test_merge_branches_covers_not_found_conflict_success_and_tracking_paths(monkeypatch):
-    repo = SimpleNamespace(repo_type="model", full_id="owner/repo")
+    repo = SimpleNamespace(id=9, repo_type="model", full_id="owner/repo")
     user = SimpleNamespace(username="owner")
     client = _FakeClient()
     created_commits = []
@@ -311,6 +311,9 @@ async def test_merge_branches_covers_not_found_conflict_success_and_tracking_pat
     monkeypatch.setattr(branches_api.records, "commit_changes", changes)
     monkeypatch.setattr(branches_api.records, "record_commits", record)
     monkeypatch.setattr(branches_api, "enqueue_lfs_reconciliation", lambda: queued.append(1))
+    monkeypatch.setattr(branches_api.records, "enqueue_lfs_reconciliation", lambda: queued.append(1))
+    recounts = []
+    monkeypatch.setattr(branches_api.records.usage, "enqueue_repository_recount", recounts.append)
 
     monkeypatch.setattr(branches_api, "get_repository", lambda *_args: None)
     not_found = await branches_api.merge_branches(
@@ -360,6 +363,7 @@ async def test_merge_branches_covers_not_found_conflict_success_and_tracking_pat
     )
     assert result["success"] is True
     assert queued == [1]  # no commit id: the reconciliation records what it did
+    assert recounts == [repo.id]  # and main's usage is recounted
     queued.clear()
 
     async def broken_changes(*args, **kwargs):

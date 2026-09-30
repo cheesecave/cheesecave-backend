@@ -165,6 +165,9 @@ onBeforeUnmount(() => clearTimeout(timer));
           <div v-if="stats.busy">
             Changing meanwhile (recounted later): <b>{{ stats.busy }}</b>
           </div>
+          <div v-if="stats.failed">
+            Could not be read (retried later): <b>{{ stats.failed }}</b>
+          </div>
         </div>
         <el-table
           v-if="drift.length"

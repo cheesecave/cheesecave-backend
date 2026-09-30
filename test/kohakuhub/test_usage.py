@@ -9,12 +9,14 @@ import asyncio
 import importlib.util
 import json
 import random
+from datetime import timedelta
 from pathlib import Path
 
 import httpx
 import pytest
 from peewee import fn
 
+from test.kohakuhub.api.helpers import encode_ndjson
 from test.kohakuhub.api.commit.test_availability import Repo, _delete, _file, _live, lfs
 
 MIGRATION = (
@@ -560,8 +562,8 @@ async def test_recount_endpoints(u, owner_client, admin_client):
 
 
 async def test_random_changes_leave_no_drift(u, owner_client):
-    """Random commits, branch operations and collections across repositories,
-    then a full recount: nothing had drifted."""
+    """Random commits across repositories (adds, overwrites, deletes, LFS
+    objects shared between them), then a full recount: nothing had drifted."""
     rng = random.Random(23)
     repos = [await _new(u, owner_client, f"usage-random-{i}") for i in range(3)]
     blobs = [f"blob {i} ".encode() * rng.randint(5, 50) for i in range(12)]
@@ -701,3 +703,92 @@ async def test_recount_edges(u, owner_client, monkeypatch):
     await u.usage.recount({"namespace": "owner"}, ctx)
     stats = ctx.checkpoint_state["stats"]
     assert stats["busy"] == stats["repositories"] > 0
+
+
+async def test_a_commit_stands_whatever_counting_it_does(u, owner_client, monkeypatch):
+    repo = await _new(u, owner_client, "usage-commit-stands")
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("database hiccup")
+
+    monkeypatch.setattr(u.records.usage, "main_moved", broken)
+    await repo.commit(_file("a.txt", "a"))  # answered 200
+    row = _row(u, repo.id)
+    assert _pending(u, u.usage.RECOUNT_REPOSITORY_KIND) == [{"repo_id": row.id}]
+    monkeypatch.setattr(u.records.usage, "enqueue_repository_recount", broken)
+    await repo.commit(_file("b.txt", "b"))  # still answered 200
+
+    # An operation whose outcome is unknown recounts main, not another branch
+    monkeypatch.undo()
+    u.db.BackgroundTask.delete().where(u.db.BackgroundTask.kind.startswith("usage.")).execute()
+    u.records.outcome_unknown(row, "dev")
+    assert not _pending(u, u.usage.RECOUNT_REPOSITORY_KIND)
+    u.records.outcome_unknown(row, "main")
+    assert _pending(u, u.usage.RECOUNT_REPOSITORY_KIND) == [{"repo_id": row.id}]
+
+
+async def test_concurrent_commits_to_main(u, owner_client):
+    """Commits racing on main (LakeFS refuses some: "predicate failed")."""
+    repo = await _new(u, owner_client, "usage-concurrent")
+
+    async def attempt(i):
+        op = lfs(f"c{i}.bin", f"blob {i}".encode() * 9)
+        repo.put(op["value"].pop("_content"))
+        lines = [
+            {"key": "header", "value": {"summary": "race"}},
+            _file(f"c{i}.txt", "c" * (i + 1)),
+            op,
+        ]
+        response = await owner_client.post(
+            f"/api/models/{repo.id}/commit/main",
+            content=encode_ndjson(lines),
+            headers={"Content-Type": "application/x-ndjson"},
+        )
+        return response.status_code
+
+    statuses = await asyncio.gather(*(attempt(i) for i in range(8)))
+    assert 200 in statuses
+    # A count that arrived out of order was left to a recount of the repository
+    for payload in _pending(u, u.usage.RECOUNT_REPOSITORY_KIND):
+        await u.usage.recount_repository_task(payload)
+    await _assert_exact(u, repo.id)
+
+
+async def test_a_recount_goes_on_past_a_repository_it_cannot_read(
+    u, owner_client, monkeypatch
+):
+    repo = await _new(u, owner_client, "usage-unreadable")
+    await repo.commit(_file("a.txt", "a" * 3))
+    broken_id = _row(u, repo.id).id
+    recount = u.usage.recount_repository
+
+    async def flaky(repo_id):
+        if repo_id == broken_id:
+            raise RuntimeError("LakeFS 503")
+        return await recount(repo_id)
+
+    monkeypatch.setattr(u.usage, "recount_repository", flaky)
+    ctx = _live("kohakuhub.task_testing").RecordingContext(kind=u.usage.RECOUNT_KIND)
+    await u.usage.recount({"namespace": "owner"}, ctx)
+    stats = ctx.checkpoint_state["stats"]
+    assert stats["failed"] == 1 and stats["repositories"] > 1
+    task = u.db.BackgroundTask.get(
+        u.db.BackgroundTask.kind == u.usage.RECOUNT_REPOSITORY_KIND
+    )
+    assert (
+        json.loads(task.payload) == {"repo_id": broken_id}
+        and task.run_after > u.db.utcnow()
+    )
+
+
+def test_the_status_is_not_the_next_periodic_recount(u):
+    T = u.db.BackgroundTask
+    started = u.usage.enqueue_recount()
+    T.update(status=u.tasks.SUCCEEDED, dedupe_key=None).where(T.id == started).execute()
+    # A periodic recount queues its next occurrence when it starts
+    u.tasks.enqueue(
+        u.usage.RECOUNT_KIND,
+        dedupe_key=u.tasks.periodic_key(u.usage.RECOUNT_KIND),
+        run_after=u.db.utcnow() + timedelta(hours=6),
+    )
+    assert u.usage.recount_status()["task"]["id"] == started

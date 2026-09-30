@@ -511,8 +511,7 @@ def get_repo_file_sha256_map(repo: Repository) -> dict[str, str]:
 
     Only the two columns anyone needs are selected. Materialising full ORM rows
     instead costs ~1063 B per row versus ~243 B — ~106 MB against ~24 MB on a
-    100k-file repo, allocated per request. `calculate_repository_storage`
-    already uses this same projected shape.
+    100k-file repo, allocated per request.
 
     The `(repository, path_in_repo)` unique index is index-served here, and it
     is unique irrespective of `is_deleted`, so at most one row exists per path

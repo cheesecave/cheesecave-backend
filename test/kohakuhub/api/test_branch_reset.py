@@ -369,12 +369,14 @@ async def test_an_upload_in_flight_is_waited_for(m, owner_client, monkeypatch):
 
     monkeypatch.setattr(m.rest.LakeFSRestClient, "merge_into_branch", broken)
     queued = []
-    monkeypatch.setattr(
-        _live("kohakuhub.api.branches"), "enqueue_lfs_reconciliation", lambda: queued.append(1)
-    )
+    records = _live("kohakuhub.api.commit.records")
+    monkeypatch.setattr(records, "enqueue_lfs_reconciliation", lambda: queued.append(1))
+    recounts = []
+    monkeypatch.setattr(records.usage, "enqueue_repository_recount", recounts.append)
     assert (await _reset(repo, c2)).status_code == 500
     assert await repo.head() == head
-    assert queued == [1]  # a merge may have landed: the reconciliation records it
+    # A merge may have landed: the reconciliation records it, main is recounted
+    assert queued == [1] and recounts == [_row(m, repo).id]
 
 
 async def test_a_branch_that_stays_dirty_is_named(m, owner_client, monkeypatch):

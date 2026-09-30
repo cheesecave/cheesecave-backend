@@ -1288,6 +1288,7 @@ async def squash_repo(
                         moving_namespace=False,
                         to_lakefs_repo=resolve_lakefs_repo(temp_repo),
                     )
+                usage.enqueue_repository_recount(temp_repo.id)  # its main may be the new one
                 logger.info("Recovery attempt completed")
         except Exception as recovery_error:
             logger.exception(f"Recovery failed: {recovery_error}")
