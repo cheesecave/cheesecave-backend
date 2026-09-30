@@ -115,6 +115,18 @@ onBeforeUnmount(() => clearTimeout(timer));
     </template>
 
     <div v-if="status" class="flex flex-col gap-3">
+      <el-alert
+        v-if="status.workers_online === 0"
+        type="warning"
+        :closable="false"
+        show-icon
+        data-testid="usage-recount-no-worker"
+        title="No background worker is online: recounts wait in the queue until one runs."
+      >
+        Start a worker (khub-worker). Until one runs, a repository not counted
+        yet since the upgrade does not follow changes to the regular files on
+        its main branch; its LFS usage is kept either way.
+      </el-alert>
       <div class="text-sm">
         Periodic recount:
         <el-tag

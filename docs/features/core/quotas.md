@@ -174,6 +174,9 @@ curl -X POST "http://localhost:28080/admin/api/quota/username/recalculate" -H "X
 curl -X POST http://localhost:28080/api/quota/repo/model/username/repo/recalculate
 ```
 
+The recount runs on a background worker (`khub-worker`); the card warns
+when none is online, since recounts then wait in the queue.
+
 `KOHAKU_HUB_USAGE_RECOUNT_INTERVAL_HOURS` repeats the site-wide recount
 periodically as a safety net (off by default).
 

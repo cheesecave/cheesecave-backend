@@ -847,3 +847,33 @@ async def test_changes_during_a_recount_are_not_drift(u, owner_client, monkeypat
     assert f"model:{repo.id}" not in {
         d["repository"] for d in ctx.checkpoint_state["drift"]
     }
+
+
+def test_the_status_says_whether_a_worker_can_run_it(u):
+    W = u.db.BackgroundWorker
+    W.delete().execute()
+    assert u.usage.recount_status()["workers_online"] == 0
+    now = u.db.utcnow()
+
+    def worker(worker_id, queues="[]", state="running", heartbeat=now):
+        W.create(
+            id=worker_id,
+            name=worker_id,
+            hostname="h",
+            pid=1,
+            queues=queues,
+            concurrency=1,
+            state=state,
+            started_at=now,
+            last_heartbeat_at=heartbeat,
+        )
+
+    worker("stale", heartbeat=now - timedelta(minutes=5))
+    worker("stopped", state="stopped")
+    worker("draining", state="draining")
+    worker("elsewhere", queues='["gpu"]')
+    assert u.usage.recount_status()["workers_online"] == 0
+    worker("every-queue")
+    worker("default-queue", queues='["default"]')
+    assert u.usage.recount_status()["workers_online"] == 2
+    W.delete().execute()

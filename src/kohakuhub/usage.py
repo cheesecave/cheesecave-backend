@@ -42,6 +42,7 @@ from kohakuhub import tasks
 from kohakuhub.config import cfg
 from kohakuhub.db import (
     BackgroundTask,
+    BackgroundWorker,
     LFSObjectHistory,
     LfsObjectTombstone,
     Repository,
@@ -436,6 +437,21 @@ async def recount(payload: dict[str, Any], ctx: tasks.TaskContext) -> None:
     )
 
 
+def workers_online() -> int:
+    """Workers that can run a recount now: online (``tasks.worker_status``)
+    and serving the recount's queue."""
+    W = BackgroundWorker
+    queue = tasks.get_spec(RECOUNT_KIND).queue
+    fresh = W.last_heartbeat_at > utcnow() - tasks.WORKER_LOST_AFTER
+    return sum(
+        1
+        for (queues,) in W.select(W.queues)
+        .where((W.state == "running") & fresh)
+        .tuples()
+        if not json.loads(queues) or queue in json.loads(queues)
+    )
+
+
 def recount_status() -> dict[str, Any]:
     """The newest site-wide recount and its report, for the admin panel.
 
@@ -459,6 +475,7 @@ def recount_status() -> dict[str, Any]:
 
     return {
         "interval_hours": cfg.app.usage_recount_interval_hours,
+        "workers_online": workers_online(),
         "task": task
         and {
             "id": task.id,

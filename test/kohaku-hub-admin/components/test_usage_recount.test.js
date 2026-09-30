@@ -198,6 +198,31 @@ describe("UsageRecount", () => {
     wrapper.unmount();
   });
 
+  it("warns when no worker is online to run it", async () => {
+    api.getUsageRecount
+      .mockResolvedValueOnce({
+        interval_hours: 0,
+        workers_online: 0,
+        task: null,
+      })
+      .mockResolvedValueOnce({
+        interval_hours: 0,
+        workers_online: 2,
+        task: null,
+      });
+    const wrapper = mountPanel();
+    await flushPromises();
+    expect(
+      wrapper.get('[data-testid="usage-recount-no-worker"]').text(),
+    ).toContain("khub-worker");
+
+    await wrapper.get('[data-testid="usage-recount-refresh"]').trigger("click");
+    await flushPromises();
+    expect(
+      wrapper.find('[data-testid="usage-recount-no-worker"]').exists(),
+    ).toBe(false);
+  });
+
   it("reports failures to the page", async () => {
     const failure = new Error("boom");
     api.getUsageRecount.mockRejectedValue(failure);
