@@ -676,6 +676,14 @@ def test_the_migration_adds_the_lock(s):
         assert migration.is_applied(D.db, s.cfg)
         assert migration.run() is True  # applied: nothing again
         transaction.rollback()
+    # A database with some of it already gets the rest
+    with D.db.atomic() as transaction:
+        D.db.execute_sql('ALTER TABLE "repository" DROP COLUMN "history_root"')
+        D.db.execute_sql('DROP TABLE "repository_write"')
+        assert not migration.is_applied(D.db, s.cfg)
+        assert migration.run() is True
+        assert migration.is_applied(D.db, s.cfg)
+        transaction.rollback()
     # Never applied on a schema missing what came before
     with D.db.atomic() as transaction:
         D.db.execute_sql('ALTER TABLE "repository" DROP COLUMN "main_counted_commit"')

@@ -51,11 +51,14 @@ def is_applied(db, cfg):
 def _migrate(timestamp_type: str, serial: str):
     cursor = db.cursor()
     print("Adding the operation lock to repository...")
-    cursor.execute('ALTER TABLE "repository" ADD COLUMN "operation" VARCHAR(64)')
-    cursor.execute(
-        f'ALTER TABLE "repository" ADD COLUMN "operation_until" {timestamp_type}'
-    )
-    cursor.execute('ALTER TABLE "repository" ADD COLUMN "history_root" VARCHAR(64)')
+    # Each part only if missing: a database may have some of them already
+    for column, sql_type in (
+        ("operation", "VARCHAR(64)"),
+        ("operation_until", timestamp_type),
+        ("history_root", "VARCHAR(64)"),
+    ):
+        if not check_column_exists(db, cfg, "repository", column):
+            cursor.execute(f'ALTER TABLE "repository" ADD COLUMN "{column}" {sql_type}')
     cursor.execute(
         'CREATE TABLE IF NOT EXISTS "repository_write" ('
         f'"id" {serial} NOT NULL PRIMARY KEY, '
