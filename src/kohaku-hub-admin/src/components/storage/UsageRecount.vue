@@ -162,6 +162,10 @@ onBeforeUnmount(() => clearTimeout(timer));
             }}
             in all)
           </div>
+          <div v-if="stats.main_moved">
+            Main moved meanwhile (caught up, not drift):
+            <b>{{ stats.main_moved }}</b>
+          </div>
           <div v-if="stats.busy">
             Changing meanwhile (recounted later): <b>{{ stats.busy }}</b>
           </div>

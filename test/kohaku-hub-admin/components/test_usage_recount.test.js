@@ -89,6 +89,7 @@ describe("UsageRecount", () => {
             drift_bytes: 300,
             busy: 1,
             failed: 1,
+            main_moved: 3,
           },
           drift: [
             { repository: "model:owner/a", before: 500, after: 300 },
@@ -123,6 +124,7 @@ describe("UsageRecount", () => {
     expect(stats).toContain("300 B in all");
     expect(stats).toContain("recounted later): 1");
     expect(stats).toContain("retried later): 1");
+    expect(stats).toContain("not drift): 3");
     const drift = wrapper.get('[data-testid="usage-recount-drift"]').text();
     expect(drift).toContain("model:owner/a");
     expect(drift).toContain("-200 B");
@@ -154,6 +156,7 @@ describe("UsageRecount", () => {
     expect(stats).toContain("Drifted: 0");
     expect(stats).not.toContain("recounted later");
     expect(stats).not.toContain("retried later");
+    expect(stats).not.toContain("not drift");
     expect(wrapper.find('[data-testid="usage-recount-drift"]').exists()).toBe(
       false,
     );

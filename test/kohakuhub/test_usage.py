@@ -802,3 +802,48 @@ def test_the_status_is_not_the_next_periodic_recount(u):
     ).where(T.id == started).execute()
     shown = u.usage.recount_status()["task"]
     assert (shown["id"], shown["status"]) == (started, "queued")
+
+
+async def test_changes_during_a_recount_are_not_drift(u, owner_client, monkeypatch):
+    """Under load the recount absorbs changes that land while it lists: they
+    must not be reported as drift."""
+    repo = await _new(u, owner_client, "usage-not-drift")
+    counted = await repo.commit(_file("a.txt", "a" * 10))
+    row = _row(u, repo.id)
+    listed = u.usage._main_regular_bytes
+
+    async def lfs_meanwhile(repository):
+        result = await listed(repository)
+        # an LFS object linked on another branch while main is listed
+        response = await owner_client.post(
+            f"/api/models/{repo.id}/branch", json={"branch": "side", "revision": "main"}
+        )
+        assert response.status_code == 200, response.text
+        await repo.commit(lfs("side.bin", b"side " * 20), branch="side")
+        return result
+
+    monkeypatch.setattr(u.usage, "_main_regular_bytes", lfs_meanwhile)
+    result = await u.usage.recount_repository(row.id)
+    assert result["before"] == result["after"] and not result["main_moved"]
+    monkeypatch.setattr(u.usage, "_main_regular_bytes", listed)
+    await _assert_exact(u, repo.id)
+
+    # Main moved past the counted commit without being counted (a commit whose
+    # count is still on its way, or a move outside KohakuHub): caught up with
+    await repo.commit(_file("b.txt", "b" * 5))
+    R = u.db.Repository
+    R.update(
+        main_counted_commit=counted, main_regular_bytes=10, used_bytes=R.lfs_bytes + 10
+    ).where(R.id == row.id).execute()
+    result = await u.usage.recount_repository(row.id)
+    assert result["main_moved"] and result["after"] - result["before"] == 5
+    await _assert_exact(u, repo.id)
+    R.update(
+        main_counted_commit=counted, main_regular_bytes=10, used_bytes=R.lfs_bytes + 10
+    ).where(R.id == row.id).execute()
+    ctx = _live("kohakuhub.task_testing").RecordingContext(kind=u.usage.RECOUNT_KIND)
+    await u.usage.recount({"namespace": "owner"}, ctx)
+    assert ctx.checkpoint_state["stats"]["main_moved"] >= 1
+    assert f"model:{repo.id}" not in {
+        d["repository"] for d in ctx.checkpoint_state["drift"]
+    }

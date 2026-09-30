@@ -316,12 +316,19 @@ async def _main_regular_bytes(repo: Repository) -> tuple[str | None, int]:
 
 
 async def recount_repository(repo_id: int) -> dict[str, Any] | None:
-    """Set a repository's exact usage; its drift, or ``None`` when it could
-    not be set (gone, or it changed meanwhile: recounted again later)."""
+    """Set a repository's exact usage, or ``None`` when it could not be set
+    (gone, or it changed meanwhile: recounted again later).
+
+    Returns the usage the counters held and the exact one. ``main_moved``
+    says main had moved past the commit the counter counted (commits landing
+    meanwhile, or a move outside KohakuHub): the exact value then includes
+    changes the counters had not been given yet, so the difference is not
+    drift.
+    """
     repo = Repository.get_or_none(Repository.id == repo_id)
     if repo is None:
         return None
-    counted, before = repo.main_counted_commit, repo.used_bytes
+    counted = repo.main_counted_commit
     head, regular = await _main_regular_bytes(repo)
     R = Repository
     unchanged = (
@@ -330,9 +337,10 @@ async def recount_repository(repo_id: int) -> dict[str, Any] | None:
         else R.main_counted_commit == counted
     )
     with R._meta.database.atomic():
-        # Hold the row first, so the LFS sum below sees every change already
-        # applied to it, and the ones after it wait for this write
+        # Hold the row first, so what it holds and the LFS sum below include
+        # every change already applied to it, and later ones wait for this write
         _hold([repo_id])
+        before = R.get_by_id(repo_id).used_bytes
         lfs = fn.COALESCE(_stored_lfs(repo_id), 0)
         applied = (
             R.update(
@@ -348,11 +356,11 @@ async def recount_repository(repo_id: int) -> dict[str, Any] | None:
         # A change was applied meanwhile, on the counters the recount replaces
         enqueue_repository_recount(repo_id, RECOUNT_RETRY)
         return None
-    after = R.get_by_id(repo_id).used_bytes
     return {
         "repository": f"{repo.repo_type}:{repo.full_id}",
         "before": before,
-        "after": after,
+        "after": R.get_by_id(repo_id).used_bytes,
+        "main_moved": counted is not None and head != counted,
     }
 
 
@@ -406,6 +414,8 @@ async def recount(payload: dict[str, Any], ctx: tasks.TaskContext) -> None:
         else:
             if result is None:
                 stats["busy"] += 1  # recounted again on its own, later
+            elif result["main_moved"]:
+                stats["main_moved"] += 1  # caught up with it: not drift
             elif result["after"] != result["before"]:
                 stats["drifted"] += 1
                 stats["drift_bytes"] += abs(result["after"] - result["before"])
@@ -421,7 +431,8 @@ async def recount(payload: dict[str, Any], ctx: tasks.TaskContext) -> None:
     ctx.log(
         "INFO",
         f"Recounted {stats['repositories']} repositories: {stats['drifted']} drifted by "
-        f"{stats['drift_bytes']} bytes in all, {stats['busy']} busy, {stats['failed']} failed",
+        f"{stats['drift_bytes']} bytes in all, {stats['main_moved']} caught up with main, "
+        f"{stats['busy']} busy, {stats['failed']} failed",
     )
 
 
