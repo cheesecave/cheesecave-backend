@@ -25,7 +25,8 @@ from kohakuhub.utils.lakefs import (
     resolve_lakefs_repo,
     resolve_revision,
 )
-from kohakuhub.api.commit import records, reset, revert
+from kohakuhub.api.commit import records, reset, revert, squash
+from kohakuhub.api.repo.utils import operation_lock
 from kohakuhub.api.repo.utils.hf import (
     HFErrorCode,
     hf_error_response,
@@ -36,6 +37,7 @@ from kohakuhub.api.operation_capabilities import (
     ensure_repository_operation_enabled,
     require_repository_reset_enabled,
     require_repository_revert_enabled,
+    require_repository_squash_enabled,
 )
 
 logger = get_logger("BRANCHES")
@@ -86,6 +88,7 @@ async def create_branch(
 
     # Check if user has permission
     check_repo_delete_permission(repo_row, user)
+    operation_lock.ensure_free(repo_row)
     if payload.branch.startswith(SCRATCH_BRANCH_PREFIX):  # a reset's working branch
         return hf_error_response(
             400,
@@ -186,6 +189,7 @@ async def delete_branch(
 
     # Check if user has permission
     check_repo_delete_permission(repo_row, user)
+    operation_lock.ensure_free(repo_row)
 
     # Prevent deletion of main branch
     if branch == "main":
@@ -237,6 +241,12 @@ class ResetPayload(BaseModel):
     force: bool = False
 
 
+class SuperSquashPayload(BaseModel):
+    """Payload of Hugging Face's ``super_squash_history``."""
+
+    message: Optional[str] = None
+
+
 class CreateTagPayload(BaseModel):
     """Payload for tag creation."""
 
@@ -282,6 +292,7 @@ async def create_tag(
 
     # Check if user has permission
     check_repo_delete_permission(repo_row, user)
+    operation_lock.ensure_free(repo_row)
 
     lakefs_repo = resolve_lakefs_repo(repo_row)
     client = get_lakefs_client()
@@ -362,6 +373,7 @@ async def delete_tag(
 
     # Check if user has permission
     check_repo_delete_permission(repo_row, user)
+    operation_lock.ensure_free(repo_row)
 
     lakefs_repo = resolve_lakefs_repo(repo_row)
     client = get_lakefs_client()
@@ -533,6 +545,7 @@ async def revert_branch(
 
     # Check if user has write permission
     check_repo_write_permission(repo_row, user)
+    operation_lock.ensure_free(repo_row)
 
     lakefs_repo = resolve_lakefs_repo(repo_row)
     client = get_lakefs_client()
@@ -623,6 +636,7 @@ async def merge_branches(
 
     # Check if user has write permission
     check_repo_write_permission(repo_row, user)
+    operation_lock.ensure_free(repo_row)
 
     lakefs_repo = resolve_lakefs_repo(repo_row)
     client = get_lakefs_client()
@@ -750,6 +764,7 @@ async def reset_branch(
 
     # Check if user has write permission
     check_repo_write_permission(repo_row, user)
+    operation_lock.ensure_free(repo_row)
 
     # Prevent resetting main branch without force (safety measure)
     if branch == "main" and not payload.force:
@@ -806,3 +821,39 @@ async def reset_branch(
         "message": f"Successfully reset branch '{branch}' to commit {commit_id[:8]} (new commit created)",
         "commit_id": head,
     }
+
+
+@router.post(
+    "/{repo_type}s/{namespace}/{name}/super-squash/{branch}",
+    dependencies=[Depends(require_repository_squash_enabled)],
+)
+async def super_squash_branch(
+    repo_type: str,
+    namespace: str,
+    name: str,
+    branch: str,
+    payload: SuperSquashPayload | None = None,
+    user: User = Depends(get_current_user),
+):
+    """Squash one branch's history into a single commit (Hugging Face's
+    ``super_squash_history``). Other branches and tags are kept; squashing
+    a whole repository is ``POST /api/repos/squash``."""
+    repo_id = f"{namespace}/{name}"
+    repo_row = get_repository(repo_type, namespace, name)
+    if not repo_row:
+        return hf_repo_not_found(repo_id, repo_type)
+    check_repo_delete_permission(repo_row, user)
+    message = (payload and payload.message) or f"Super-squash branch '{branch}'"
+    try:
+        commit_id = await squash.squash(
+            get_lakefs_client(),
+            repo_row,
+            resolve_lakefs_repo(repo_row),
+            branch,
+            user,
+            message,
+            whole_repository=False,
+        )
+    except records.OperationRefused as e:
+        raise HTTPException(status_code=e.status, detail=e.detail)
+    return {"commitOid": commit_id}

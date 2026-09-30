@@ -180,6 +180,10 @@ class Repository(BaseModel):
     lfs_bytes = BigIntegerField(default=0)  # stored LFS objects its history links, once each
     # The main commit main_regular_bytes counts up to; NULL = not aligned yet
     main_counted_commit = CharField(max_length=64, null=True)
+    # A history operation holding the repository (see
+    # api/repo/utils/operation_lock), and until when; writes wait or retry
+    operation = CharField(max_length=64, null=True)
+    operation_until = DateTimeField(null=True)
 
     # LFS settings (NULL = use server defaults from config)
     lfs_threshold_bytes = IntegerField(

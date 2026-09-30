@@ -14,6 +14,19 @@ from fastapi import HTTPException
 import kohakuhub.api.commit.routers.operations as commit_ops
 
 
+
+async def _async_none(*args, **kwargs):
+    return None
+
+
+@pytest.fixture(autouse=True)
+def _repository_not_held(monkeypatch):
+    """No history operation holds the fake repositories (the lock itself is
+    tested against the real database in test_super_squash.py)."""
+    monkeypatch.setattr(commit_ops.operation_lock, "ensure_free", lambda repo: None)
+    monkeypatch.setattr(commit_ops.operation_lock, "wait_until_free", _async_none)
+
+
 class _Expr:
     def __init__(self, value):
         self.value = value

@@ -11,6 +11,19 @@ import kohakuhub.api.branches as branches_api
 import kohakuhub.api.operation_capabilities as operation_capabilities
 
 
+
+async def _async_none(*args, **kwargs):
+    return None
+
+
+@pytest.fixture(autouse=True)
+def _repository_not_held(monkeypatch):
+    """No history operation holds the fake repositories (the lock itself is
+    tested against the real database in test_super_squash.py)."""
+    monkeypatch.setattr(branches_api.operation_lock, "ensure_free", lambda repo: None)
+    monkeypatch.setattr(branches_api.operation_lock, "wait_until_free", _async_none)
+
+
 class _FakeClient:
     def __init__(self):
         self.calls = []

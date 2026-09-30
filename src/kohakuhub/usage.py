@@ -218,6 +218,17 @@ def object_back(sha256: str) -> None:
     _object_moved(sha256, +1)
 
 
+def lfs_recounted(repo_id: int) -> None:
+    """Set a repository's LFS bytes from its history, after rows left it."""
+    R = Repository
+    with R._meta.database.atomic():
+        _hold([repo_id])
+        lfs = fn.COALESCE(_stored_lfs(repo_id), 0)
+        R.update(lfs_bytes=lfs, used_bytes=R.main_regular_bytes + lfs).where(
+            R.id == repo_id
+        ).execute()
+
+
 def main_started(repo_id: int, commit: str) -> None:
     """A new repository's main is at ``commit``, with no regular files."""
     Repository.update(main_regular_bytes=0, main_counted_commit=commit).where(

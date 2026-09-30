@@ -28,12 +28,12 @@ register the handlers (see docs/development/background-tasks.md).
 
 import json
 from collections import Counter
-from datetime import timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import httpx
 
-from kohakuhub import lfs_gc, tasks
+from kohakuhub import lfs_gc, tasks, usage
 from kohakuhub.async_utils import run_in_s3_executor
 from kohakuhub.config import cfg
 from kohakuhub.db import (
@@ -58,6 +58,7 @@ EXPIRE_RECENT_LFS_KIND = "storage.expire_recent_lfs"
 REVIEW_LFS_WINDOW_KIND = "storage.review_lfs_window"
 RECONCILE_LFS_KIND = "storage.reconcile_lfs_references"
 RECORD_BRANCH_KIND = "storage.record_branch_links"
+FORGET_SQUASHED_KIND = "storage.forget_squashed_history"
 # A reset's working branch; it lives for the reset only, so it protects nothing
 SCRATCH_BRANCH_PREFIX = "kh-reset-"
 RETRY_GATE = timedelta(seconds=30)
@@ -511,6 +512,77 @@ async def reconcile_lfs_references(payload: dict[str, Any], ctx: tasks.TaskConte
         + ", ".join(f"{key} {value}" for key, value in sorted(stats.items()))
     )
     enqueue_lfs_collection()
+
+
+@tasks.task(FORGET_SQUASHED_KIND, timeout=6 * 3600, max_attempts=10)
+async def forget_squashed_history(payload: dict[str, Any]) -> None:
+    """Forget what a repository squash made unreachable.
+
+    The squash commit (``payload["commit"]``) is listed. Of the rows written
+    before the squash, the ones it no longer has go:
+
+    - history rows (``id <= through``) for an LFS version it does not link
+      are deleted, and their objects become collection candidates;
+    - file rows (updated no later than ``at``) for a path it does not have
+      are marked deleted: rows are per repository, not per branch, so the
+      dropped branches' files were still there.
+
+    Rows written after the squash are left alone. The repository's LFS
+    usage is then set from the history left. Re-runnable: a rerun finds
+    nothing more to change.
+    """
+    repo = Repository.get_or_none(Repository.id == payload["repo_id"])
+    if repo is None:
+        return
+    client = get_lakefs_client()
+    lakefs_repo = resolve_lakefs_repo(repo)
+    paths, linked, after = set(), set(), ""
+    while True:
+        page = await client.list_objects(
+            repository=lakefs_repo, ref=payload["commit"], after=after, amount=LAKEFS_LIST_PAGE
+        )
+        for obj in page["results"]:
+            paths.add(obj["path"])
+            oid = lfs_gc.lfs_oid(obj.get("physical_address"))
+            if oid:
+                linked.add((obj["path"], oid))
+        if not page["pagination"]["has_more"]:
+            break
+        after = page["pagination"]["next_offset"]
+    H = LFSObjectHistory
+    gone, shas = [], set()
+    for row_id, path, sha in (
+        H.select(H.id, H.path_in_repo, H.sha256)
+        .where((H.repository == repo) & (H.id <= payload["through"]))
+        .tuples()
+    ):
+        if (path, sha) not in linked:
+            gone.append(row_id)
+            shas.add(sha)
+    at = datetime.fromisoformat(payload["at"])
+    stale = [
+        file_id
+        for file_id, path in File.select(File.id, File.path_in_repo)
+        .where((File.repository == repo) & (File.is_deleted == False) & (File.updated_at <= at))
+        .tuples()
+        if path not in paths
+    ]
+    with Repository._meta.database.atomic():
+        for start in range(0, len(gone), LFS_BATCH):
+            H.delete().where(H.id.in_(gone[start : start + LFS_BATCH])).execute()
+        for start in range(0, len(stale), LFS_BATCH):
+            File.update(is_deleted=True, updated_at=datetime.now(timezone.utc)).where(
+                File.id.in_(stale[start : start + LFS_BATCH])
+            ).execute()
+        usage.lfs_recounted(repo.id)
+        candidates = record_candidates(sha for sha in shas if len(sha) == 64)
+    if candidates:
+        enqueue_lfs_collection()
+    logger.info(
+        f"Forgot what a squash of {repo.repo_type}:{repo.full_id} made unreachable: "
+        f"{len(gone)} history row(s), {len(stale)} file row(s); "
+        f"{candidates} object(s) left to the collection"
+    )
 
 
 def _iso(value) -> str:

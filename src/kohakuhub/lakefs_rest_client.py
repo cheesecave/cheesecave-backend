@@ -341,6 +341,43 @@ class LakeFSRestClient:
         self._check_response(response)
         return response.json()
 
+    async def create_commit_record(
+        self,
+        repository: str,
+        commit_id: str,
+        committer: str,
+        message: str,
+        metarange_id: str,
+        creation_date: int,
+        parents: list[str],
+        metadata: dict[str, str],
+        generation: int,
+    ) -> None:
+        """Store a commit made of an existing metarange (LakeFS internal API).
+
+        ``commit_id`` must be the commit's content address, which LakeFS
+        checks (``kohakuhub.api.commit.squash.commit_address``). A record
+        that already exists is not an error: the same content is the same
+        commit.
+        """
+        url = f"{self.base_url}/repositories/{repository}/commits"
+        body = {
+            "commit_id": commit_id,
+            "version": 1,
+            "committer": committer,
+            "message": message,
+            "metarange_id": metarange_id,
+            "creation_date": creation_date,
+            "parents": parents,
+            "metadata": metadata,
+            "generation": generation,
+        }
+        client = self._httpx()
+        response = await client.post(url, json=body, auth=self.auth, timeout=None)
+        if response.status_code == 409:
+            return
+        self._check_response(response)
+
     async def get_commit(self, repository: str, commit_id: str) -> dict[str, Any]:
         """Get commit details.
 

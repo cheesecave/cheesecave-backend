@@ -2,7 +2,6 @@
 
 import asyncio
 import json
-import uuid
 from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -23,10 +22,8 @@ from kohakuhub.db import (
 )
 from kohakuhub.db_operations import (
     delete_repository,
-    get_file,
     get_organization,
     get_repository,
-    should_use_lfs,
 )
 from kohakuhub.logger import get_logger
 from kohakuhub.auth.dependencies import get_current_user, get_current_user_or_admin
@@ -40,17 +37,17 @@ from kohakuhub.utils.lakefs import (
     resolve_lakefs_repo,
 )
 from kohakuhub.utils.s3 import copy_s3_folder, delete_objects_with_prefix, get_s3_client
-from kohakuhub.lakefs_rest_client import StagingLocation, StagingMetadata
 from kohakuhub.api.repo.utils.hf import (
     HFErrorCode,
     hf_error_response,
     hf_repo_not_found,
     hf_server_error,
-    is_lakefs_not_found_error,
 )
 from kohakuhub import usage
+from kohakuhub.api.commit import squash
+from kohakuhub.api.commit.records import OperationRefused
+from kohakuhub.api.repo.utils import operation_lock
 from kohakuhub.api.quota.util import check_quota
-from kohakuhub.storage_cleanup import refresh_head_refs
 from kohakuhub.api.fallback.cache import get_cache as get_fallback_cache
 from kohakuhub.api.validation import normalize_name
 from kohakuhub.api.operation_capabilities import (
@@ -156,12 +153,6 @@ LAKEFS_CONFLICT_RETRY_MESSAGE = (
 # briefly is the only way to pace it without changing the client.
 LAKEFS_RECYCLING_HOLD_SECONDS = 2.0
 
-# Bound for waiting out an asynchronous LakeFS repository deletion. LakeFS acks
-# DELETE /repositories/{id} before the record is actually gone, and the cleanup
-# scales with how much metadata the repository had, so this cannot be unbounded:
-# the wait happens inside a request.
-LAKEFS_DELETION_WAIT_MAX_ATTEMPTS = 20
-LAKEFS_DELETION_WAIT_INTERVAL_SECONDS = 0.5
 
 
 def _is_lakefs_repo_id_taken_error(error: Exception) -> bool:
@@ -299,35 +290,6 @@ async def _drop_unclaimed_lakefs_repository(client, lakefs_repo: str) -> None:
         await client.delete_repository(repository=lakefs_repo, force=True)
     except Exception as e:
         logger.warning(f"Failed to remove unclaimed LakeFS repository {lakefs_repo}: {e}")
-
-
-async def _wait_for_lakefs_repo_deletion(client, lakefs_repo: str) -> bool:
-    """Wait, bounded, for LakeFS to finish deleting `lakefs_repo`.
-
-    Returns True if the repository is gone, False if it was still present when
-    the bound was reached. Callers treat False as non-fatal: the id simply stays
-    unusable a little longer, which `_is_lakefs_repo_id_taken_error` turns into a
-    retryable response for clients.
-    """
-    for attempt in range(LAKEFS_DELETION_WAIT_MAX_ATTEMPTS):
-        try:
-            if not await client.repository_exists(lakefs_repo):
-                return True
-        except Exception as e:
-            # Never let a probe failure fail the move: the data has already been
-            # migrated by this point.
-            logger.debug(f"repository_exists check failed for {lakefs_repo}: {e}")
-            return False
-
-        if attempt + 1 < LAKEFS_DELETION_WAIT_MAX_ATTEMPTS:
-            await asyncio.sleep(LAKEFS_DELETION_WAIT_INTERVAL_SECONDS)
-
-    logger.warning(
-        f"LakeFS repository {lakefs_repo} still present after "
-        f"{LAKEFS_DELETION_WAIT_MAX_ATTEMPTS} checks; its id stays reserved until "
-        f"LakeFS finishes deleting it"
-    )
-    return False
 
 
 def _has_only_internal_lakefs_markers(
@@ -628,6 +590,7 @@ async def delete_repo(
 
     # 2. Check if user has permission to delete this repository (admin bypasses)
     check_repo_delete_permission(repo_row, user, is_admin=is_admin)
+    operation_lock.ensure_free(repo_row)
 
     # 3. Delete the row; its LakeFS repository and storage are purged in the
     # background (a task scheduled in the same transaction), so the answer
@@ -666,254 +629,7 @@ class SquashRepoPayload(BaseModel):
 
     repo: str  # format: "namespace/repo-name"
     type: str = "model"
-
-
-async def _migrate_lakefs_repository(
-    repo_type: str,
-    from_id: str,
-    to_id: str,
-    *,
-    from_lakefs_repo: str,
-) -> str:
-    """Migrate LakeFS repository with proper LFS handling using File table.
-
-    Strategy:
-    1. Get list of all objects with metadata from old repo
-    2. Query File table to determine LFS status (source of truth)
-    3. Create new LakeFS repo
-    4. For each object:
-       - LFS files (File.lfs=True): Link to SAME global lfs/ address (no duplication)
-       - Regular files (File.lfs=False): Download and re-upload to new repo
-    5. Commit all staged/uploaded objects
-    6. Delete old LakeFS repo and old S3 folder
-
-    This prevents LFS duplication and handles dynamic LFS rules correctly.
-
-    Args:
-        repo_type: Repository type (model/dataset/space)
-        from_id: Source repository ID (namespace/name)
-        to_id: Target repository ID (namespace/name)
-        from_lakefs_repo: LakeFS repository currently backing `from_id`, resolved
-            by the caller from the DB row (never re-derived here - a row created
-            at generation > 0 does not derive back to its own id).
-
-    Returns:
-        The LakeFS repository created for `to_id`. It is allocated here through
-        `_create_lakefs_repository`, so it never collides with an id LakeFS still
-        holds; the caller must persist it on the row.
-
-    Raises:
-        HTTPException: If migration fails
-    """
-    # Get source repository object for File table queries
-    from_parts = from_id.split("/", 1)
-    from_namespace, from_name = from_parts
-    from_repo = get_repository(repo_type, from_namespace, from_name)
-
-    if not from_repo:
-        raise HTTPException(
-            status_code=404,
-            detail={"error": f"Source repository {from_id} not found"},
-        )
-
-    client = get_lakefs_client()
-    from_s3_prefix = f"{from_lakefs_repo}/"
-    to_lakefs_repo = None
-
-    try:
-        # 1. Get list of all objects with metadata from old repo
-        logger.info(f"Listing objects in {from_lakefs_repo}")
-        objects_to_migrate = []
-        after = ""
-        has_more = True
-
-        while has_more:
-            result = await client.list_objects(
-                repository=from_lakefs_repo,
-                ref="main",
-                delimiter="",
-                amount=1000,
-                after=after,
-            )
-
-            for obj in result["results"]:
-                if obj["path_type"] == "object":
-                    objects_to_migrate.append(
-                        {
-                            "path": obj["path"],
-                            "size_bytes": obj.get("size_bytes", 0),
-                            "checksum": obj.get("checksum", ""),
-                            "physical_address": obj.get("physical_address", ""),
-                        }
-                    )
-
-            if result.get("pagination") and result["pagination"].get("has_more"):
-                after = result["pagination"]["next_offset"]
-                has_more = True
-            else:
-                has_more = False
-
-        logger.info(f"Found {len(objects_to_migrate)} object(s) to migrate")
-
-        # 2. Create new LakeFS repository under a fresh id
-        to_lakefs_repo = await _create_lakefs_repository(client, repo_type, to_id)
-        if to_lakefs_repo is None:
-            raise RuntimeError(f"No usable LakeFS repository id for {to_id}")
-        logger.info(f"Created new LakeFS repository: {to_lakefs_repo}")
-
-        # 3. Process each object using File table to determine LFS status
-        lfs_count = 0
-        regular_count = 0
-        failed_paths: list[str] = []
-
-        for obj in objects_to_migrate:
-            obj_path = obj["path"]
-            size_bytes = obj["size_bytes"]
-
-            # Query File table to get LFS status (source of truth)
-            # This handles dynamic LFS rules and ensures consistency
-            file_record = get_file(from_repo, obj_path)
-
-            # Determine if file is LFS:
-            # - Primary: Use File table record if exists (handles dynamic rules)
-            # - Fallback: Use repo-specific LFS rules (size + suffix)
-            if file_record:
-                is_lfs = file_record.lfs
-                logger.debug(
-                    f"File {obj_path}: LFS={is_lfs} from File table "
-                    f"(size={size_bytes}, db_lfs={file_record.lfs})"
-                )
-            else:
-                # Fallback to repo-specific LFS rules if File record doesn't exist
-                is_lfs = should_use_lfs(from_repo, obj_path, size_bytes)
-                logger.warning(
-                    f"File {obj_path}: No File record, using repo LFS rules "
-                    f"(size={size_bytes}, is_lfs={is_lfs})"
-                )
-
-            try:
-                if is_lfs:
-                    # LFS file: Link to SAME global lfs/ address (no copy/upload)
-                    # LFS files are stored at: s3://bucket/lfs/{sha[:2]}/{sha[2:4]}/{sha}
-                    # They are shared across ALL repositories
-                    staging_metadata = StagingMetadata(
-                        staging=StagingLocation(
-                            physical_address=obj["physical_address"]
-                        ),
-                        checksum=obj["checksum"],
-                        size_bytes=size_bytes,
-                    )
-
-                    await client.link_physical_address(
-                        repository=to_lakefs_repo,
-                        branch="main",
-                        path=obj_path,
-                        staging_metadata=staging_metadata,
-                    )
-                    lfs_count += 1
-                    logger.debug(f"Linked LFS file: {obj_path} ({size_bytes} bytes)")
-
-                else:
-                    # Regular file: Download and re-upload to new repo's data folder
-                    # Each repo has its own copy in: s3://bucket/{repo}/data/...
-                    content = await client.get_object(
-                        repository=from_lakefs_repo,
-                        ref="main",
-                        path=obj_path,
-                    )
-
-                    await client.upload_object(
-                        repository=to_lakefs_repo,
-                        branch="main",
-                        path=obj_path,
-                        content=content,
-                        force=True,
-                    )
-                    regular_count += 1
-                    logger.debug(
-                        f"Uploaded regular file: {obj_path} ({size_bytes} bytes)"
-                    )
-
-                if (lfs_count + regular_count) % 10 == 0:
-                    logger.info(
-                        f"Migrated {lfs_count + regular_count}/{len(objects_to_migrate)} objects "
-                        f"({lfs_count} LFS, {regular_count} regular)..."
-                    )
-
-            except Exception as e:
-                logger.warning(f"Failed to migrate object {obj_path}: {e}")
-                failed_paths.append(obj_path)
-
-        # Never commit a partial copy: the steps below delete the source
-        # repository and its S3 prefix, which would lose these objects (#107).
-        # Raising lands in the handler that removes the half-built target.
-        if failed_paths:
-            shown = ", ".join(failed_paths[:5])
-            more = f" and {len(failed_paths) - 5} more" if len(failed_paths) > 5 else ""
-            raise RuntimeError(
-                f"{len(failed_paths)} object(s) failed to migrate: {shown}{more}"
-            )
-
-        logger.success(
-            f"Migrated {lfs_count + regular_count} object(s): "
-            f"{lfs_count} LFS linked, {regular_count} regular uploaded"
-        )
-
-        # 4. Commit all staged/uploaded objects
-        if lfs_count + regular_count > 0:
-            await client.commit(
-                repository=to_lakefs_repo,
-                branch="main",
-                message=f"Repository moved from {from_id} to {to_id}",
-            )
-            logger.success("Committed all objects to new repository")
-
-        # 5. Delete old LakeFS repository
-        deleted = False
-        try:
-            await client.delete_repository(repository=from_lakefs_repo, force=True)
-            logger.info(f"Deleted old LakeFS repository: {from_lakefs_repo}")
-            deleted = True
-        except Exception as e:
-            if not is_lakefs_not_found_error(e):
-                logger.warning(f"Failed to delete old LakeFS repo: {e}")
-
-        # 5b. LakeFS acks the DELETE before the repository record is gone, and
-        # until it is, the id cannot be reused - which is what made a rename
-        # followed by recreating the old name fail (issue #93). Waiting here,
-        # bounded, means the common case never surfaces a conflict at all.
-        # Timing out is not an error: the move itself already succeeded, and a
-        # later create against the same id degrades to a retryable 409.
-        if deleted:
-            await _wait_for_lakefs_repo_deletion(client, from_lakefs_repo)
-
-        # 6. Delete old S3 folder to free up the name
-        deleted_count = await delete_objects_with_prefix(cfg.s3.bucket, from_s3_prefix)
-        logger.success(f"Deleted {deleted_count} object(s) from old S3 prefix")
-
-        logger.success(
-            f"Successfully migrated repository from {from_lakefs_repo} to {to_lakefs_repo}"
-        )
-        return to_lakefs_repo
-
-    except Exception as e:
-        # Clean up on failure
-        logger.exception(f"LakeFS repository migration failed: {e}")
-
-        # Try to delete new LakeFS repo if it was created
-        if to_lakefs_repo is not None:
-            try:
-                await client.delete_repository(repository=to_lakefs_repo, force=True)
-                logger.info(f"Cleaned up new LakeFS repo: {to_lakefs_repo}")
-            except Exception:
-                pass
-
-        raise HTTPException(
-            status_code=500,
-            detail={
-                "error": f"Failed to migrate repository: {str(e)}",
-            },
-        )
+    message: Optional[str] = None  # the squash commit's message
 
 
 def _namespace_owner(namespace: str) -> User | None:
@@ -1020,6 +736,7 @@ async def move_repo(
     # Check permissions (admin bypasses)
     check_repo_delete_permission(repo_row, user, is_admin=is_admin)
     check_namespace_permission(to_namespace, user, is_admin=is_admin)
+    operation_lock.ensure_free(repo_row)
     # The repository goes to the account or organization the namespace names
     to_owner = _namespace_owner(to_namespace)
     if to_owner is None:
@@ -1135,24 +852,15 @@ async def squash_repo(
     payload: SquashRepoPayload,
     auth: tuple[User | None, bool] = Depends(get_current_user_or_admin),
 ):
-    """Squash repository to clear all commit history and compress storage.
+    """Squash a repository's history into one commit; only the current state stays.
 
-    This operation:
-    1. Moves repository to temporary name
-    2. Moves back to original name
-    3. Result: All commit history cleared, only current state preserved
+    Main becomes a single commit with its current tree, in place (see
+    ``kohakuhub.api.commit.squash``), and the other branches and tags are
+    deleted. It takes about a second whatever the repository's size; the
+    versions that became unreachable are forgotten and collected in the
+    background.
 
     Accepts both user authentication and admin token (X-Admin-Token header).
-
-    Args:
-        payload: Squash parameters
-        auth: Tuple of (user, is_admin) from authentication
-
-    Returns:
-        Success message
-
-    Raises:
-        HTTPException: If operation fails
     """
     ensure_repository_operation_enabled("squash")
 
@@ -1160,142 +868,33 @@ async def squash_repo(
     repo_id = payload.repo
     repo_type = payload.type
 
-    # Parse repository ID
     parts = repo_id.split("/", 1)
     if len(parts) != 2:
         return hf_error_response(
             400, HFErrorCode.INVALID_REPO_ID, "Invalid repository ID"
         )
-
     namespace, name = parts
 
-    # Check if repository exists
     repo_row = get_repository(repo_type, namespace, name)
     if not repo_row:
         return hf_repo_not_found(repo_id, repo_type)
 
-    # Check if user has permission (admin bypasses)
     check_repo_delete_permission(repo_row, user, is_admin=is_admin)
 
-    # Generate temporary repository name
-    temp_suffix = uuid.uuid4().hex[:8]
-    temp_name = f"{name}-squash-{temp_suffix}"
-    temp_id = f"{namespace}/{temp_name}"
-
-    logger.info(f"Squashing repository {repo_id} via temporary name {temp_id}")
-
     try:
-        # Step 1: Move to temporary name
-        logger.info(f"Step 1: Moving {repo_id} to temporary {temp_id}")
-
-        # Use internal move logic
-        from_lakefs_repo = resolve_lakefs_repo(repo_row)
-
-        # Migrate LakeFS FIRST (before updating DB)
-        temp_lakefs_repo = await _migrate_lakefs_repository(
-            repo_type=repo_type,
-            from_id=repo_id,
-            to_id=temp_id,
-            from_lakefs_repo=from_lakefs_repo,
+        await squash.squash(
+            get_lakefs_client(),
+            repo_row,
+            resolve_lakefs_repo(repo_row),
+            "main",
+            user or repo_row.owner,  # an admin squashes on the owner's behalf
+            payload.message or squash.SQUASH_MESSAGE,
+            whole_repository=True,
         )
+    except OperationRefused as e:
+        raise HTTPException(status_code=e.status, detail=e.detail)
 
-        # Update DB AFTER successful migration
-        with db.atomic():
-            _update_repository_database_records(
-                repo_row=repo_row,
-                from_id=repo_id,
-                to_id=temp_id,
-                from_namespace=namespace,
-                to_namespace=namespace,
-                to_name=temp_name,
-                moving_namespace=False,  # Same namespace
-                to_lakefs_repo=temp_lakefs_repo,
-            )
-
-        # The old S3 prefix is left in place: an LFS path written by Reset can
-        # live there and the migration links it rather than copying it.
-
-        logger.success(f"Moved to temporary repository: {temp_id}")
-
-        # `_migrate_lakefs_repository` already waited for the old repository's
-        # asynchronous deletion, so the original id is usually free again. If it
-        # is not, the migration allocates another id instead of colliding.
-
-        # Step 2: Move back to original name
-        logger.info(f"Step 2: Moving {temp_id} back to {repo_id}")
-
-        # Reload repo row (it was updated to temp name)
-        repo_row = get_repository(repo_type, namespace, temp_name)
-
-        # Migrate LakeFS FIRST (before updating DB)
-        final_lakefs_repo = await _migrate_lakefs_repository(
-            repo_type=repo_type,
-            from_id=temp_id,
-            to_id=repo_id,
-            from_lakefs_repo=resolve_lakefs_repo(repo_row),
-        )
-
-        # Update DB AFTER successful migration
-        with db.atomic():
-            _update_repository_database_records(
-                repo_row=repo_row,
-                from_id=temp_id,
-                to_id=repo_id,
-                from_namespace=namespace,
-                to_namespace=namespace,
-                to_name=name,
-                moving_namespace=False,  # Same namespace
-                to_lakefs_repo=final_lakefs_repo,
-            )
-
-        # The temp id is never reused, so its deletion only needs to be observed
-        # for logging; `_migrate_lakefs_repository` already waited for it.
-
-        # Step 3: Bring the records of the squashed repository up to date
-        final_repo = get_repository(repo_type, namespace, name)
-        if final_repo:
-            # Its main is new: the usage is recounted in the background
-            usage.enqueue_repository_recount(final_repo.id)
-            # The squashed repository has only main left
-            await refresh_head_refs(final_repo, "main", exact=True, whole_repository=True)
-
-        logger.success(f"Repository squashed successfully: {repo_id}")
-
-        return {
-            "success": True,
-            "message": f"Repository {repo_id} squashed successfully. All commit history has been cleared.",
-        }
-
-    except Exception as e:
-        logger.exception(f"Repository squash failed for {repo_id}: {e}")
-
-        # Try to recover by moving back from temp if it exists
-        try:
-            temp_repo = get_repository(repo_type, namespace, temp_name)
-            if temp_repo:
-                logger.info(f"Attempting to recover from temp repository: {temp_id}")
-                # Move back from temp. Only the DB row is renamed here - the data
-                # still lives in the temp LakeFS repository, so the row must keep
-                # pointing at it rather than at the original id's derived name.
-                with db.atomic():
-                    _update_repository_database_records(
-                        repo_row=temp_repo,
-                        from_id=temp_id,
-                        to_id=repo_id,
-                        from_namespace=namespace,
-                        to_namespace=namespace,
-                        to_name=name,
-                        moving_namespace=False,
-                        to_lakefs_repo=resolve_lakefs_repo(temp_repo),
-                    )
-                usage.enqueue_repository_recount(temp_repo.id)  # its main may be the new one
-                logger.info("Recovery attempt completed")
-        except Exception as recovery_error:
-            logger.exception(f"Recovery failed: {recovery_error}")
-
-        raise HTTPException(
-            status_code=500,
-            detail={
-                "error": f"Failed to squash repository: {str(e)}",
-            },
-        )
+    return {
+        "success": True,
+        "message": f"Repository {repo_id} squashed successfully. All commit history has been cleared.",
+    }

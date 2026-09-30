@@ -324,6 +324,27 @@ bucket. Objects the head already has need nothing restored. Otherwise:
 
 ---
 
+### Super Squash a Branch
+
+**Pattern:** `POST /api/{repo_type}s/{namespace}/{name}/super-squash/{branch}`
+
+Hugging Face's `super_squash_history`: the branch becomes a single commit with its current tree, in place, in about a second whatever the repository's size. Other branches and tags are kept, and so is the history they still reach. Squashing a whole repository (which also deletes the other branches and tags) is `POST /api/repos/squash`.
+
+**Request Body (optional):**
+```json
+{"message": "Super-squash branch 'main'"}
+```
+
+**Response:** `{"commitOid": "<the squash commit>"}`
+
+**Status Codes:** `200`; `404` for a missing repository or branch (a tag cannot be squashed); `409` while another operation holds the repository; `503` when Squash is disabled.
+
+```python
+from huggingface_hub import HfApi
+
+HfApi(endpoint="https://hub.example.com").super_squash_history("my-org/my-model", branch="dev")
+```
+
 ## Tags
 
 ### Create Tag

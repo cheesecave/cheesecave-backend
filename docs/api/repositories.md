@@ -166,19 +166,21 @@ of the moved one.
 ```json
 {
   "repo": "username/my-model",
-  "type": "model"
+  "type": "model",
+  "message": "Squash history"
 }
 ```
 
-**Process:**
-1. Move repo to temporary name
-2. Move back to original name
-3. Result: All history cleared, single commit remains
+`message` is optional (default `Squash history`).
 
-**Benefits:**
-- Reduces storage (clears old versions)
-- Faster clone/fetch (no history)
-- Clean slate for large repos
+**What it does:**
+1. `main` becomes a single commit with its current tree and no parent. It is made in place with LakeFS metadata operations, so nothing is copied and the repository keeps its name and data throughout. It takes about a second whatever the repository's size.
+2. The other branches and tags are deleted: only the current state is kept.
+3. In the background (`storage.forget_squashed_history`), the history and file rows of what is no longer reachable are forgotten. LFS garbage collection then removes the objects no repository relies on any more, and the repository's usage drops with them.
+
+While it runs, other writes to the repository wait or answer `409` with `Retry-After`; a commit that was already uploading lands on top of the squash commit.
+
+To squash one branch and keep the others, use Hugging Face's `super_squash_history` (`POST /api/{repo_type}s/{namespace}/{name}/super-squash/{branch}`, see [Branch API](branches.md)).
 
 **Response:**
 ```json
@@ -190,16 +192,15 @@ of the moved one.
 
 **Important Notes:**
 - **IRREVERSIBLE** - All history deleted
-- LFS objects garbage-collected automatically
+- Old LFS versions are collected in the background; objects other repositories link are kept
 - Repository quota preserved
-- Recalculates storage after squashing
 
 **Status Codes:**
 - `200 OK` - Repository squashed
 - `503 Service Unavailable` - Squash operation is disabled by server policy
 - `403 Forbidden` - No permission
 - `404 Not Found` - Repository not found
-- `500 Internal Server Error` - Operation failed (attempts recovery)
+- `409 Conflict` - Another operation holds the repository, or `main` kept changing; retry
 
 **Operation gate:** The server exposes the current `revert`, `reset`, and
 `squash` capabilities without authentication through `GET /api/site-config`.

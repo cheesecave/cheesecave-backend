@@ -26,6 +26,7 @@ from kohakuhub.auth.dependencies import get_current_user
 from kohakuhub.auth.permissions import check_repo_write_permission
 from kohakuhub.utils.lakefs import get_lakefs_client, resolve_lakefs_repo
 from kohakuhub.utils.s3 import get_object_metadata, object_exists
+from kohakuhub.api.repo.utils import operation_lock
 from kohakuhub.api.repo.utils.gc import track_lfs_object
 from kohakuhub.lfs_gc import (
     LfsObjectUnavailable,
@@ -808,6 +809,7 @@ async def commit(
         raise HTTPException(404, detail={"error": "Repository not found"})
 
     check_repo_write_permission(repo_row, user)
+    operation_lock.ensure_free(repo_row)
 
     lakefs_repo = resolve_lakefs_repo(repo_row)
     client = get_lakefs_client()
@@ -941,6 +943,10 @@ async def commit(
             "commitOid": commit_id,
             "pullRequestUrl": None,
         }
+
+    # A history operation holding the repository goes first; the staged
+    # changes then land on top of what it left
+    await operation_lock.wait_until_free(repo_row)
 
     # Create commit in LakeFS
     commit_msg = header.get("summary", "Commit via API")
