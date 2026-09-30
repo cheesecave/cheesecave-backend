@@ -778,7 +778,7 @@ async def test_the_history_a_squash_removed_is_gone(
     ).status_code in (200, 302, 307)
     # huggingface_hub sees the old revision as missing
     from huggingface_hub import hf_hub_download
-    from huggingface_hub.errors import RevisionNotFoundError
+    from huggingface_hub.utils import RevisionNotFoundError
 
     with pytest.raises(RevisionNotFoundError):
         await _hf(
