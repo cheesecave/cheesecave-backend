@@ -583,6 +583,8 @@ async def revert_branch(
     message = payload.message or f"Revert commit {commit_id[:8]}"
     try:
         async with operation_lock.writing(repo_row):
+            # Again once registered: a squash waited for may have moved the history
+            await ensure_revision_in_history(client, repo_row, lakefs_repo, payload.ref)
             new_commit_id, rounds = await revert.revert_commit(
                 client,
                 lakefs_repo,
@@ -662,6 +664,8 @@ async def merge_branches(
     # Perform the merge
     try:
         async with operation_lock.writing(repo_row):
+            # Again once registered: a squash waited for may have moved the history
+            await ensure_revision_in_history(client, repo_row, lakefs_repo, source_ref)
             # What the merge commit changed is measured from here
             base = (await client.get_branch(repository=lakefs_repo, branch=destination_branch))[
                 "commit_id"
@@ -830,6 +834,8 @@ async def reset_branch(
     message = payload.message or f"Reset to commit {commit_id[:8]}"
     try:
         async with operation_lock.writing(repo_row):
+            # Again once registered: a squash waited for may have moved the history
+            await ensure_revision_in_history(client, repo_row, lakefs_repo, payload.ref)
             head, rounds = await reset.reset_branch(
                 client, repo_row, lakefs_repo, branch, commit_id, message
             )

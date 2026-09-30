@@ -197,7 +197,7 @@ To squash one branch and keep the others, use Hugging Face's `super_squash_histo
 
 **Important Notes:**
 - **IRREVERSIBLE** - All history deleted
-- Old LFS versions are collected in the background; objects other repositories link are kept
+- Old LFS versions are collected in the background; objects other repositories link are kept. Until the collection removes one, it stays downloadable by its LFS oid (LFS objects are content-addressed and shared across repositories)
 - Repository quota preserved
 
 **Status Codes:**

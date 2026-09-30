@@ -808,8 +808,12 @@ async def test_what_decides_the_history(s, owner_client, monkeypatch):
     monkeypatch.setattr(s.client, "find_merge_base", counted)
     lakefs._descends.clear()
     assert not await lakefs.in_history(s.client, row, repo.lakefs_repo, old)
+    asked = len(calls)  # the root, then every branch and tag
+    assert asked == 2
     assert not await lakefs.in_history(s.client, row, repo.lakefs_repo, old)
-    assert len(calls) == 1
+    assert len(calls) == asked
+    # An expression is not a branch; it is resolved like a commit
+    assert await lakefs.ref_in_history(s.client, row, repo.lakefs_repo, "main~0")
     monkeypatch.setattr(lakefs, "DESCENDS_KEPT", 1)  # full: forgotten, asked again
     after = await repo.commit(_file("c.txt", "c"))
     assert await lakefs.in_history(s.client, row, repo.lakefs_repo, after)
@@ -1074,3 +1078,183 @@ async def test_a_branch_squashed_alone_cannot_be_merged_back(s, owner_client):
         response.status_code == 409
         and "share no history" in response.json()["detail"]["error"]
     )
+
+
+async def test_the_purge_keeps_whatever_the_history_left_links(s, owner_client):
+    """Objects of the squash commit a later commit replaced, a tag on it, and
+    a version made after the squash and replaced since all stay."""
+    repo = await _new(s, owner_client, "squash-keeps")
+    await repo.commit(_file("a.txt", "a1"), _file("b.txt", "b1"))
+    await repo.commit(_file("a.txt", "a2"))
+    old_a = (
+        await s.client.stat_object(
+            repository=repo.lakefs_repo,
+            ref=(await _log(s, repo))[1]["id"],
+            path="a.txt",
+        )
+    )["physical_address"]
+    assert (await _squash(owner_client, repo)).status_code == 200
+    (payload,) = _pending(s, s.cleanup.FORGET_SQUASHED_KIND)
+    root = payload["commit"]
+
+    async def address(ref, path):
+        return (
+            await s.client.stat_object(repository=repo.lakefs_repo, ref=ref, path=path)
+        )["physical_address"]
+
+    in_root = {p: await address(root, p) for p in ("a.txt", "b.txt")}
+    response = await owner_client.post(
+        f"/api/models/{repo.id}/tag", json={"tag": "v1", "revision": root}
+    )
+    assert response.status_code == 200, response.text
+    await repo.commit(
+        _file("a.txt", "a3"), _delete("b.txt")
+    )  # replaces what the root had
+    between = await repo.commit(_file("c.txt", "c1"))
+    c1 = await address(between, "c.txt")
+    await repo.commit(_file("c.txt", "c2"))  # replaces a version made after the squash
+    await s.cleanup.forget_squashed_history(payload)
+
+    def stored(address):
+        bucket, _, key = address.removeprefix("s3://").partition("/")
+        try:
+            s.s3.head_object(Bucket=bucket, Key=key)
+            return True
+        except Exception:
+            return False
+
+    assert all(stored(a) for a in in_root.values()) and stored(c1)
+    assert not stored(old_a)  # only the old history had it
+    for ref in (root, "v1"):
+        r = await owner_client.get(f"/models/{repo.id}/resolve/{ref}/b.txt")
+        assert r.status_code in (200, 302, 307), (ref, r.status_code)
+    assert (
+        await owner_client.get(f"/models/{repo.id}/resolve/{between}/c.txt")
+    ).status_code in (200, 302, 307)
+
+
+async def test_a_branch_squashed_alone_after_a_repository_squash_is_readable(
+    s, owner_client, monkeypatch
+):
+    repo, old, root = await _squashed_with_history(
+        s, owner_client, "squash-then-branch"
+    )
+    await repo.commit(_file("b.txt", "b"))
+    response = await owner_client.post(
+        f"/api/models/{repo.id}/branch", json={"branch": "side", "revision": "main"}
+    )
+    assert response.status_code == 200, response.text
+    monkeypatch.setattr(
+        _live("kohakuhub.utils.lakefs"), "HEADS_PAGE", 1
+    )  # refs page by page
+    response = await owner_client.post(
+        f"/api/models/{repo.id}/super-squash/main", json={}
+    )
+    assert response.status_code == 200, response.text
+    head = await repo.head()
+    assert head != root and _row(s, repo.id).history_root == root
+    r = await owner_client.get(f"/models/{repo.id}/resolve/{head}/b.txt")
+    assert r.status_code in (200, 302, 307), r.status_code
+    assert (
+        await owner_client.get(f"/api/models/{repo.id}/commit/{head}")
+    ).status_code == 200
+    assert (
+        await owner_client.get(f"/api/models/{repo.id}/commit/{old}")
+    ).status_code == 404
+
+
+async def test_a_write_waiting_for_a_squash_sees_the_history_it_left(
+    s, owner_client, monkeypatch
+):
+    """A branch asked from an old commit while a squash runs is refused once
+    the squash is done, not created on the history it removed."""
+    repo = await _new(s, owner_client, "squash-waiter")
+    old = await repo.commit(_file("a.txt", "a1"))
+    await repo.commit(_file("a.txt", "a2"))
+    row = _row(s, repo.id)
+    monkeypatch.setattr(s.lock, "ensure_free", lambda repo: None)  # checked just before
+    token = s.lock.acquire(row.id, "squash")
+
+    async def squash_meanwhile():
+        await asyncio.sleep(0.4)  # the branch request waits at LakeFS's door
+        commit, head = await s.squash._move(
+            s.client, repo.lakefs_repo, "main", "owner", "sq"
+        )
+        s.db.Repository.update(history_root=commit).where(
+            s.db.Repository.id == row.id
+        ).execute()
+        s.lock.release(row.id, token)
+
+    base = f"/api/models/{repo.id}"
+    requests = [
+        owner_client.post(f"{base}/branch", json={"branch": "back", "revision": old}),
+        owner_client.post(f"{base}/tag", json={"tag": "back", "revision": old}),
+        owner_client.post(
+            f"{base}/branch/main/reset", json={"ref": old, "force": True}
+        ),
+    ]
+    *answers, _ = await asyncio.gather(*requests, squash_meanwhile())
+    assert [a.status_code for a in answers] == [404, 404, 404]
+    assert await _refs(s, repo) == (["main"], [])
+
+
+async def test_copying_out_of_removed_history_is_refused(s, owner_client):
+    repo, old, root = await _squashed_with_history(s, owner_client, "squash-copy")
+    lines = [
+        {"key": "header", "value": {"summary": "copy"}},
+        {
+            "key": "copyFile",
+            "value": {"path": "revived.txt", "srcPath": "a.txt", "srcRevision": old},
+        },
+    ]
+    response = await owner_client.post(
+        f"/api/models/{repo.id}/commit/main",
+        content=encode_ndjson(lines),
+        headers={"Content-Type": "application/x-ndjson"},
+    )
+    assert (
+        response.status_code == 404
+        and response.headers["x-error-code"] == "RevisionNotFound"
+    )
+    # What the squash left is fine (an LFS file: LakeFS links it by address)
+    lines[1]["value"].update(srcRevision=root, srcPath="w.bin", path="revived.bin")
+    response = await owner_client.post(
+        f"/api/models/{repo.id}/commit/main",
+        content=encode_ndjson(lines),
+        headers={"Content-Type": "application/x-ndjson"},
+    )
+    assert response.status_code == 200, response.text
+
+
+async def test_the_registration_lives_as_long_as_the_write(
+    s, owner_client, monkeypatch
+):
+    repo = await _new(s, owner_client, "squash-registration")
+    row = _row(s, repo.id)
+    W = s.db.RepositoryWrite
+    monkeypatch.setattr(s.lock, "WRITE_SECONDS", 0.3)
+    async with s.lock.writing(row):
+        (registration,) = W.select().where(W.repository == row.id)
+        await asyncio.sleep(0.5)  # longer than it was registered for
+        assert W.get_by_id(registration.id).until > s.db.utcnow()
+    assert not W.select().where(W.repository == row.id).exists()
+    # A lapsed registration is cleared when a squash looks
+    W.create(repository=row.id, until=s.db.utcnow() - timedelta(seconds=1))
+    await s.lock.drain(row, "squash")
+    assert not W.select().where(W.repository == row.id).exists()
+
+
+async def test_a_squash_that_loses_its_lock_stops(s, owner_client, monkeypatch):
+    repo = await _new(s, owner_client, "squash-lost-lock")
+    await repo.commit(_file("a.txt", "a"))
+    for name in ("b1", "b2"):
+        response = await owner_client.post(
+            f"/api/models/{repo.id}/branch", json={"branch": name, "revision": "main"}
+        )
+        assert response.status_code == 200, response.text
+    monkeypatch.setattr(s.lock, "renew", lambda repo_id, token: False)
+    response = await _squash(owner_client, repo)
+    assert (
+        response.status_code == 502 and "lapsed" in response.json()["detail"]["error"]
+    )
+    assert (await _refs(s, repo))[0] == ["b2", "main"]  # stopped after the first

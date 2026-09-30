@@ -23,14 +23,32 @@ def get_lakefs_client() -> LakeFSRestClient:
 # from the root: facts about immutable commits, so they can be kept
 _descends: dict[tuple[str, str, str], bool] = {}
 DESCENDS_KEPT = 100_000
+HEADS_PAGE = 1000
+
+
+async def _heads(client: LakeFSRestClient, lakefs_repo: str) -> list[str]:
+    """The commits every branch and tag points at."""
+    heads = []
+    for list_refs in (client.list_branches, client.list_tags):
+        after = None
+        while True:
+            page = await list_refs(repository=lakefs_repo, after=after, amount=HEADS_PAGE)
+            heads += [ref["commit_id"] for ref in page["results"]]
+            if not page["pagination"]["has_more"]:
+                break
+            after = page["pagination"]["next_offset"]
+    return heads
 
 
 async def in_history(client: LakeFSRestClient, repo, lakefs_repo: str, commit_id: str) -> bool:
     """Whether ``commit_id`` is still in the repository's history.
 
-    After a repository squash, the commits its commit does not reach are
-    gone (``Repository.history_root``): LakeFS keeps them until its own
-    garbage collection, but nothing may read or restore them.
+    After a repository squash, the commits its commit (``history_root``)
+    does not reach are gone: LakeFS keeps them until its own garbage
+    collection, but nothing may read or restore them. A commit a branch or
+    tag reaches counts as in it too, such as one squashed alone later
+    (Hugging Face's ``super_squash_history``) or one a squash could not
+    finish dropping.
     """
     root = getattr(repo, "history_root", None)
     if not root or commit_id == root:
@@ -40,7 +58,14 @@ async def in_history(client: LakeFSRestClient, repo, lakefs_repo: str, commit_id
         if len(_descends) >= DESCENDS_KEPT:
             _descends.clear()
         base = await client.find_merge_base(repository=lakefs_repo, left=commit_id, right=root)
-        _descends[key] = base == root
+        reached = base == root
+        for head in [] if reached else await _heads(client, lakefs_repo):
+            if head == commit_id or await client.find_merge_base(
+                repository=lakefs_repo, left=commit_id, right=head
+            ) == commit_id:
+                reached = True
+                break
+        _descends[key] = reached
     return _descends[key]
 
 
@@ -54,7 +79,7 @@ async def ref_in_history(client: LakeFSRestClient, repo, lakefs_repo: str, ref: 
         await client.get_branch(repository=lakefs_repo, branch=ref)
         return True
     except httpx.HTTPStatusError as e:
-        if e.response.status_code != 404:
+        if e.response.status_code not in (400, 404):  # an expression, or no such branch
             raise
     try:
         commit = await client.get_commit(repository=lakefs_repo, commit_id=ref)

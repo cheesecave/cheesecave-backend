@@ -152,6 +152,15 @@ async def _names(list_page, key: str = "id") -> list[str]:
         after = page["pagination"]["next_offset"]
 
 
+class LostLock(Exception):
+    """The repository's lock lapsed while the squash still needed it."""
+
+
+def _renew(renew) -> None:
+    if not renew():
+        raise LostLock("the repository's lock lapsed")
+
+
 async def _drop_other_refs(
     client, lakefs_repo: str, branch: str, renew, dropped: list[str]
 ) -> None:
@@ -165,11 +174,11 @@ async def _drop_other_refs(
         if name != branch:
             await client.delete_branch(repository=lakefs_repo, branch=name)
             dropped.append(name)
-            renew()
+            _renew(renew)
     for name in tags:
         await client.delete_tag(repository=lakefs_repo, tag=name)
         dropped.append(f"tag:{name}")
-        renew()
+        _renew(renew)
 
 
 def _record(
@@ -260,7 +269,7 @@ async def squash(
                     lambda: operation_lock.renew(repo.id, token),
                     dropped,
                 )
-            except httpx.HTTPStatusError as e:
+            except (httpx.HTTPStatusError, LostLock) as e:
                 failure = e
         _record(
             repo,
@@ -280,7 +289,7 @@ async def squash(
             502,
             {
                 "error": f"{branch} was squashed, but deleting the other branches and tags "
-                f"failed ({failure.response.status_code}); squash again to finish.",
+                f"failed ({failure}); squash again to finish.",
                 "dropped": dropped,
             },
         )

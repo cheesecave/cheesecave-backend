@@ -111,7 +111,12 @@ async def _poll(done, seconds: float, refusal) -> None:
 
 @asynccontextmanager
 async def writing(repo: Repository):
-    """Around a write that moves a branch in LakeFS (see the module docstring)."""
+    """Around a write that moves a branch in LakeFS (see the module docstring).
+
+    Once registered, ``repo.history_root`` is read again: an operation it
+    waited for may have moved it. The registration is renewed while the
+    write runs, however long it takes.
+    """
     W = RepositoryWrite
     while True:
         registration = W.create(
@@ -124,15 +129,31 @@ async def writing(repo: Repository):
         await _poll(
             lambda: holder(repo.id) is None, WAIT_SECONDS, lambda: _refusal(operation)
         )
+    repo.history_root = (
+        Repository.select(Repository.history_root)
+        .where(Repository.id == repo.id)
+        .scalar()
+    )
+
+    async def keep_registered():
+        while True:
+            await asyncio.sleep(WRITE_SECONDS / 3)
+            W.update(until=utcnow() + timedelta(seconds=WRITE_SECONDS)).where(
+                W.id == registration.id
+            ).execute()
+
+    renewing = asyncio.create_task(keep_registered())
     try:
         yield
     finally:
+        renewing.cancel()
         W.delete().where(W.id == registration.id).execute()
 
 
 async def drain(repo: Repository, operation: str) -> None:
     """For the lock's holder: wait until no write is registered."""
     W = RepositoryWrite
+    W.delete().where(W.until < utcnow()).execute()  # writers that died
 
     def idle():
         return (

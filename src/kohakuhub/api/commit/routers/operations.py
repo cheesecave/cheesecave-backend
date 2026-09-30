@@ -35,7 +35,7 @@ from kohakuhub.lfs_gc import (
     record_evicted_versions,
 )
 from kohakuhub.storage_cleanup import enqueue_lfs_collection, record_head_change
-from kohakuhub.api.repo.utils.hf import HFErrorCode
+from kohakuhub.api.repo.utils.hf import HFErrorCode, ensure_revision_in_history
 
 logger = get_logger("FILE")
 router = APIRouter()
@@ -618,6 +618,8 @@ async def process_copy_file(
         raise HTTPException(
             400, detail={"error": f"Missing srcPath for copyFile operation"}
         )
+    # Nothing is copied out of history a squash removed
+    await ensure_revision_in_history(get_lakefs_client(), repo, lakefs_repo, src_revision)
 
     logger.info(
         f"Copying file: {src_path} -> {dest_path} (from revision: {src_revision})"

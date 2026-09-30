@@ -516,31 +516,71 @@ async def reconcile_lfs_references(payload: dict[str, Any], ctx: tasks.TaskConte
 
 async def _tree(client, lakefs_repo: str, ref: str) -> list[dict]:
     """Every object ``ref`` has (its committed tree, or a branch with its staging)."""
-    objects, after = [], ""
-    while True:
-        page = await client.list_objects(
+    listing = _pages(
+        lambda after: client.list_objects(
             repository=lakefs_repo, ref=ref, after=after, amount=LAKEFS_LIST_PAGE
         )
-        objects += page["results"]
-        if not page["pagination"]["has_more"]:
-            return objects
-        after = page["pagination"]["next_offset"]
+    )
+    return [obj async for obj in listing]
 
 
-async def _referenced(client, lakefs_repo: str) -> set[str]:
-    """The physical addresses every branch links now, staged changes included."""
-    addresses, after = set(), None
-    while True:
-        page = await client.list_branches(
-            repository=lakefs_repo, after=after, amount=LAKEFS_LIST_PAGE
+async def _linked_since(
+    client, lakefs_repo: str, root: str, root_tree: list[dict]
+) -> set[str]:
+    """The physical addresses the history a squash left links: the squash
+    commit's tree, every branch (with its staged changes) and tag, and what
+    each commit since the squash brought (its changes to its first parent),
+    walking back from every ref until a parentless commit."""
+    addresses = {o["physical_address"] for o in root_tree}
+    branches = [
+        branch
+        async for branch in _pages(
+            lambda after: client.list_branches(
+                repository=lakefs_repo, after=after, amount=LAKEFS_LIST_PAGE
+            )
         )
-        for branch in page["results"]:
-            # A branch ref lists its staged changes too
-            tree = await _tree(client, lakefs_repo, branch["id"])
-            addresses.update(o["physical_address"] for o in tree)
-        if not page["pagination"]["has_more"]:
-            return addresses
-        after = page["pagination"]["next_offset"]
+    ]
+    tags = [
+        tag
+        async for tag in _pages(
+            lambda after: client.list_tags(
+                repository=lakefs_repo, after=after, amount=LAKEFS_LIST_PAGE
+            )
+        )
+    ]
+    for ref in [b["id"] for b in branches] + [t["commit_id"] for t in tags]:
+        # A branch ref lists its staged changes too
+        tree = await _tree(client, lakefs_repo, ref)
+        addresses.update(o["physical_address"] for o in tree)
+    seen = {root}
+    for head in {r["commit_id"] for r in branches + tags}:
+        log = _pages(
+            lambda after: client.log_commits(
+                repository=lakefs_repo, ref=head, after=after, amount=LAKEFS_LIST_PAGE
+            )
+        )
+        async for commit in log:
+            if commit["id"] in seen or not commit["parents"]:
+                continue
+            seen.add(commit["id"])
+            changes = _pages(
+                lambda after: client.diff_refs(
+                    repository=lakefs_repo,
+                    left_ref=commit["parents"][0],
+                    right_ref=commit["id"],
+                    after=after,
+                    amount=LAKEFS_LIST_PAGE,
+                    diff_type="two_dot",
+                )
+            )
+            async for change in changes:
+                if change.get("path_type", "object") != "object" or change["type"] == "removed":
+                    continue
+                stat = await client.stat_object(
+                    repository=lakefs_repo, ref=commit["id"], path=change["path"]
+                )
+                addresses.add(stat["physical_address"])
+    return addresses
 
 
 def _stale_objects(bucket: str, prefix: str, before, keep: set[str]) -> list[str]:
@@ -576,9 +616,9 @@ async def forget_squashed_history(payload: dict[str, Any]) -> None:
     - file rows for a path neither the squash commit nor main has now are
       marked deleted (rows are per repository, not per branch, so the
       dropped branches' files were still there);
-    - regular file objects under the repository's ``data/`` prefix that no
-      branch links now, staged changes included, are deleted: only the old
-      history had them, and nothing may read it any more.
+    - regular file objects under the repository's ``data/`` prefix that the
+      history the squash left does not link (``_linked_since``) are deleted:
+      only the old history had them, and nothing may read it any more.
 
     Rows and objects written after the squash are left alone. The
     repository's LFS usage is then set from the history left. Re-runnable:
@@ -632,7 +672,7 @@ async def forget_squashed_history(payload: dict[str, Any]) -> None:
     bucket, _, prefix = namespace.removeprefix("s3://").partition("/")
     purged = 0
     if bucket == cfg.s3.bucket:
-        keep = await _referenced(client, lakefs_repo)
+        keep = await _linked_since(client, lakefs_repo, payload["commit"], squashed)
         keys = await run_in_s3_executor(
             _stale_objects, bucket, f"{prefix.rstrip('/')}/data/", at, keep
         )
