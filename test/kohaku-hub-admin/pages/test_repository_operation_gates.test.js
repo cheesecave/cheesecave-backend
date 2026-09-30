@@ -121,3 +121,98 @@ describe("admin repository operation capability consumer", () => {
     expect(wrapper.text()).toContain("Squash Repository");
   });
 });
+
+describe("admin storage recount of repositories", () => {
+  const messages = { success: vi.fn(), error: vi.fn(), confirm: vi.fn() };
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    mocks.adminStore.token = "admin-token";
+    mocks.api.listRepositories.mockResolvedValue({
+      repositories: [],
+      total: 0,
+    });
+    mocks.api.getSiteConfig.mockResolvedValue(enabledConfig(false));
+    // See test_cache_page.test.js: element-plus is spied on, not mocked.
+    const elementPlus = await vi.importActual("element-plus");
+    vi.spyOn(elementPlus.ElMessage, "success").mockImplementation(
+      messages.success,
+    );
+    vi.spyOn(elementPlus.ElMessage, "error").mockImplementation(messages.error);
+    vi.spyOn(elementPlus.ElMessageBox, "confirm").mockImplementation(
+      messages.confirm,
+    );
+  });
+
+  async function recount(namespace) {
+    const wrapper = mountPage();
+    await flushPromises();
+    if (namespace) {
+      await wrapper
+        .get('input[placeholder="Filter by namespace"]')
+        .setValue(namespace);
+    }
+    await wrapper
+      .findAll("button")
+      .find((button) => button.text().includes("Recount All Storage"))
+      .trigger("click");
+    await flushPromises();
+    return wrapper;
+  }
+
+  it("schedules a background recount and says so", async () => {
+    messages.confirm.mockResolvedValue("confirm");
+    mocks.api.recalculateAllRepoStorage
+      .mockResolvedValueOnce({ task_id: 12, already_pending: false })
+      .mockResolvedValueOnce({ task_id: null, already_pending: true });
+
+    await recount();
+    expect(messages.confirm.mock.calls[0][0]).toContain(
+      "every repository in the background",
+    );
+    expect(mocks.api.recalculateAllRepoStorage).toHaveBeenCalledWith(
+      "admin-token",
+      {
+        namespace: undefined,
+      },
+    );
+    expect(messages.success).toHaveBeenLastCalledWith(
+      "Recount scheduled (task #12); follow it under Background Tasks",
+    );
+
+    await recount("aurora-labs");
+    expect(messages.confirm.mock.calls[1][0]).toContain(
+      "every repository of aurora-labs",
+    );
+    expect(mocks.api.recalculateAllRepoStorage).toHaveBeenLastCalledWith(
+      "admin-token",
+      {
+        namespace: "aurora-labs",
+      },
+    );
+    expect(messages.success).toHaveBeenLastCalledWith(
+      "A recount is already scheduled",
+    );
+  });
+
+  it("does nothing when cancelled and reports a failure", async () => {
+    messages.confirm.mockRejectedValueOnce("cancel");
+    await recount();
+    expect(mocks.api.recalculateAllRepoStorage).not.toHaveBeenCalled();
+    expect(messages.error).not.toHaveBeenCalled();
+
+    messages.confirm.mockResolvedValue("confirm");
+    mocks.api.recalculateAllRepoStorage.mockRejectedValueOnce({
+      response: { data: { detail: { error: "no worker" } } },
+    });
+    await recount();
+    expect(messages.error).toHaveBeenLastCalledWith("no worker");
+    mocks.api.recalculateAllRepoStorage.mockRejectedValueOnce(
+      new Error("offline"),
+    );
+    await recount();
+    expect(messages.error).toHaveBeenLastCalledWith(
+      "Failed to recount repository storage",
+    );
+  });
+});

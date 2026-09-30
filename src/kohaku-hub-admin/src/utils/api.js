@@ -585,20 +585,16 @@ export function parseSize(sizeStr) {
 }
 
 /**
- * Recalculate storage for all repositories (bulk operation)
+ * Recount the storage usage of every repository, or one namespace's (background task)
  * @param {string} token - Admin token
  * @param {Object} params - Query parameters
- * @param {string} params.repo_type - Optional filter by repository type
  * @param {string} params.namespace - Optional filter by namespace
- * @returns {Promise<Object>} Recalculation summary
+ * @returns {Promise<Object>} { task_id, already_pending }
  */
-export async function recalculateAllRepoStorage(
-  token,
-  { repo_type, namespace } = {},
-) {
+export async function recalculateAllRepoStorage(token, { namespace } = {}) {
   const client = createAdminClient(token);
   const response = await client.post("/repositories/recalculate-all", null, {
-    params: { repo_type, namespace },
+    params: { namespace },
   });
   return response.data;
 }
@@ -1605,6 +1601,28 @@ export async function getLfsReconciliation(token) {
 export async function startLfsReconciliation(token) {
   const client = createAdminClient(token);
   const response = await client.post("/storage/lfs-reconciliation");
+  return response.data;
+}
+
+/**
+ * Latest site-wide storage usage recount and its drift report
+ * @param {string} token - Admin token
+ * @returns {Promise<Object>} { interval_hours, task: { id, status, progress_done, progress_total, stage, stats, drift, created_at, finished_at } | null }
+ */
+export async function getUsageRecount(token) {
+  const client = createAdminClient(token);
+  const response = await client.get("/usage/recount");
+  return response.data;
+}
+
+/**
+ * Start recounting every repository's storage usage (background task)
+ * @param {string} token - Admin token
+ * @returns {Promise<Object>} { task_id, already_pending }
+ */
+export async function startUsageRecount(token) {
+  const client = createAdminClient(token);
+  const response = await client.post("/usage/recount");
   return response.data;
 }
 

@@ -10,7 +10,7 @@ from kohakuhub.db_operations import (
 )
 from kohakuhub.lfs_gc import deleted_shas
 from kohakuhub.logger import get_logger
-from kohakuhub.utils.s3 import delete_objects_with_prefix, object_exists
+from kohakuhub.utils.s3 import object_exists
 
 logger = get_logger("GC")
 
@@ -123,34 +123,3 @@ async def check_lfs_recoverability(
         )
 
     return all_recoverable, missing_files
-
-
-async def cleanup_repository_storage(
-    repo_type: str,
-    namespace: str,
-    name: str,
-    lakefs_repo: str,
-) -> dict[str, int]:
-    """Delete a deleted or moved repository's folder in S3 (its LakeFS data).
-
-    LFS objects are shared, so they are not deleted here: the caller records
-    the repository's LFS objects as collection candidates in the transaction
-    that deletes the row (``storage_cleanup.record_repository_lfs``), and the
-    background collection deletes the ones nothing else relies on.
-
-    Args:
-        repo_type: Repository type (model/dataset/space)
-        namespace: Repository namespace
-        name: Repository name
-        lakefs_repo: LakeFS repository name (for S3 prefix)
-
-    Returns:
-        Dict with the 'repo_objects_deleted' count
-    """
-    repo_prefix = f"{lakefs_repo}/"
-    repo_objects_deleted = await delete_objects_with_prefix(cfg.s3.bucket, repo_prefix)
-    logger.info(
-        f"Deleted {repo_objects_deleted} repository object(s) from S3 prefix: {repo_prefix} "
-        f"({repo_type}/{namespace}/{name})"
-    )
-    return {"repo_objects_deleted": repo_objects_deleted}

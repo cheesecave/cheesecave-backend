@@ -267,36 +267,32 @@ async function handleRecalculateAll() {
   if (!checkAuth()) return;
 
   try {
+    const namespace = filterNamespace.value || undefined;
     await ElMessageBox.confirm(
-      `This will recalculate storage for ${repositories.value.length || "all"} repositories. This may take some time. Continue?`,
-      "Recalculate All Repository Storage",
+      `This recounts the storage usage of ${namespace ? `every repository of ${namespace}` : "every repository"} in the background. Continue?`,
+      "Recount Repository Storage",
       {
         type: "warning",
-        confirmButtonText: "Recalculate",
+        confirmButtonText: "Recount",
         cancelButtonText: "Cancel",
       },
     );
 
     recalculating.value = true;
-    ElMessage.info("Recalculating storage for all repositories...");
-
     const result = await recalculateAllRepoStorage(adminStore.token, {
-      repo_type: filterRepoType.value || undefined,
-      namespace: filterNamespace.value || undefined,
+      namespace,
     });
-
     ElMessage.success(
-      `Storage recalculated: ${result.success_count}/${result.total} succeeded${result.failure_count > 0 ? `, ${result.failure_count} failed` : ""}`,
+      result.already_pending
+        ? "A recount is already scheduled"
+        : `Recount scheduled (task #${result.task_id}); follow it under Background Tasks`,
     );
-
-    // Reload repositories to show updated storage
-    await loadRepositories();
   } catch (err) {
     if (err !== "cancel") {
-      console.error("Failed to recalculate storage:", err);
+      console.error("Failed to recount storage:", err);
       ElMessage.error(
         err.response?.data?.detail?.error ||
-          "Failed to recalculate repository storage",
+          "Failed to recount repository storage",
       );
     }
   } finally {
@@ -431,7 +427,7 @@ onMounted(() => {
           :loading="recalculating"
         >
           <span class="mr-2">🔄</span>
-          Recalculate All Storage
+          Recount All Storage
         </el-button>
       </div>
 

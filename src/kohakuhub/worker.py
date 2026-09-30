@@ -14,6 +14,7 @@ import uuid
 
 from kohakuhub import tasks
 from kohakuhub import storage_cleanup  # noqa: F401 - registers the storage cleanup tasks
+from kohakuhub import usage  # noqa: F401 - registers the usage recount tasks
 from kohakuhub.config import cfg
 from kohakuhub.db import BackgroundTask, BackgroundWorker, db
 from kohakuhub.lakefs_rest_client import close_lakefs_rest_client

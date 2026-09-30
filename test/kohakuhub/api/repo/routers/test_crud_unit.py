@@ -210,23 +210,16 @@ async def test_create_repo_covers_conflicts_lakefs_failure_and_success(monkeypat
 
 @pytest.mark.asyncio
 async def test_delete_repo_covers_admin_validation_not_found_and_failures(monkeypatch):
-    repo_row = SimpleNamespace(
-        delete_instance=lambda: None,
-        repo_type="model",
-        full_id="owner/demo-model",
-        lakefs_repo="model:owner/demo-model",
-    )
-    client = _FakeClient()
-    atomic_state = {}
+    repo_row = SimpleNamespace(repo_type="model", full_id="owner/demo-model")
+    deleted = []
 
-    monkeypatch.setattr(repo_crud, "get_lakefs_client", lambda: client)
-    monkeypatch.setattr(repo_crud, "resolve_lakefs_repo", lambda repo: f"{repo.repo_type}:{repo.full_id}")
+    def delete(repo):
+        if repo is not repo_row:
+            raise RuntimeError("db broke")
+        deleted.append(repo)
+
     monkeypatch.setattr(repo_crud, "check_repo_delete_permission", lambda repo, user, is_admin=False: None)
-    monkeypatch.setattr(repo_crud, "cleanup_repository_storage", lambda **kwargs: _async_return({"repo_objects_deleted": 1}))
-    recorded = []
-    monkeypatch.setattr(repo_crud, "record_repository_lfs", recorded.append)
-    monkeypatch.setattr(repo_crud, "is_lakefs_not_found_error", lambda error: "404" in str(error))
-    monkeypatch.setattr(repo_crud, "db", SimpleNamespace(atomic=lambda: _AtomicContext(atomic_state)))
+    monkeypatch.setattr(repo_crud, "delete_repository", delete)
 
     with pytest.raises(HTTPException) as admin_missing_org:
         await repo_crud.delete_repo(
@@ -242,31 +235,16 @@ async def test_delete_repo_covers_admin_validation_not_found_and_failures(monkey
     )
     assert not_found.status_code == 404
 
+    # The row goes at once; its storage is purged by a task scheduled with it
     monkeypatch.setattr(repo_crud, "get_repository", lambda *_args: repo_row)
     success = await repo_crud.delete_repo(
         repo_crud.DeleteRepoPayload(type="model", name="demo-model"),
         auth=(SimpleNamespace(username="owner"), False),
     )
     assert "deleted" in success["message"].lower()
-    assert atomic_state == {"entered": 1, "exited": 1}
-    # The repository's LFS objects become collection candidates with the row
-    assert recorded == [repo_row]
+    assert deleted == [repo_row]
 
-    client.raise_on["delete_repository"] = RuntimeError("boom")
-    failure = await repo_crud.delete_repo(
-        repo_crud.DeleteRepoPayload(type="model", name="demo-model"),
-        auth=(SimpleNamespace(username="owner"), False),
-    )
-    assert failure.status_code == 500
-
-    client.raise_on["delete_repository"] = RuntimeError("404 missing")
-    db_failure_repo = SimpleNamespace(
-        delete_instance=lambda: (_ for _ in ()).throw(RuntimeError("db broke")),
-        repo_type="model",
-        full_id="owner/demo-model",
-        lakefs_repo="model:owner/demo-model",
-    )
-    monkeypatch.setattr(repo_crud, "get_repository", lambda *_args: db_failure_repo)
+    monkeypatch.setattr(repo_crud, "get_repository", lambda *_args: SimpleNamespace())
     db_failure = await repo_crud.delete_repo(
         repo_crud.DeleteRepoPayload(type="model", name="demo-model"),
         auth=(SimpleNamespace(username="owner"), False),
@@ -427,11 +405,8 @@ async def test_migrate_lakefs_repository_failure_survives_target_cleanup_errors(
 
 
 def test_update_repository_database_records_covers_same_and_cross_namespace_moves(monkeypatch):
-    increments = []
     repo_row = SimpleNamespace(id=1, quota_bytes=100, used_bytes=50, private=False)
     monkeypatch.setattr(repo_crud, "Repository", _FakeRepositoryModel)
-    monkeypatch.setattr(repo_crud, "get_organization", lambda namespace: SimpleNamespace() if namespace.startswith("org") else None)
-    monkeypatch.setattr(repo_crud, "increment_storage", lambda **kwargs: increments.append(kwargs))
 
     repo_crud._update_repository_database_records(
         repo_row=repo_row,
@@ -441,7 +416,6 @@ def test_update_repository_database_records_covers_same_and_cross_namespace_move
         to_namespace="owner",
         to_name="to",
         moving_namespace=False,
-        repo_size=0,
         to_lakefs_repo="m-owner-to",
     )
     assert _FakeRepositoryModel.update_kwargs["quota_bytes"] == 100
@@ -457,12 +431,11 @@ def test_update_repository_database_records_covers_same_and_cross_namespace_move
         to_namespace="org-team",
         to_name="to",
         moving_namespace=True,
-        repo_size=25,
         to_lakefs_repo="m-org-team-to",
     )
     assert _FakeRepositoryModel.update_kwargs["quota_bytes"] is None
-    assert increments[0]["bytes_delta"] == -25
-    assert increments[1]["bytes_delta"] == 25
+    # Its usage goes along with the row: nothing to write
+    assert "used_bytes" not in _FakeRepositoryModel.update_kwargs
 
 
 @pytest.mark.asyncio
@@ -478,6 +451,7 @@ async def test_move_repo_covers_validation_quota_and_metadata_only_success(monke
         repo_type="model",
         full_id="owner/from",
         lakefs_repo="m-owner-from",
+        used_bytes=12,
     )
     atomic_state = {}
 
@@ -490,7 +464,6 @@ async def test_move_repo_covers_validation_quota_and_metadata_only_success(monke
     monkeypatch.setattr(repo_crud, "check_repo_delete_permission", lambda repo, user, is_admin=False: None)
     monkeypatch.setattr(repo_crud, "check_namespace_permission", lambda namespace, user, is_admin=False: None)
     monkeypatch.setattr(repo_crud, "get_repository", lambda repo_type, namespace, name: repo_row if (namespace, name) == ("owner", "from") else None)
-    monkeypatch.setattr(repo_crud, "calculate_repository_storage", lambda repo: _async_return({"total_bytes": 12}))
     monkeypatch.setattr(repo_crud, "get_organization", lambda namespace: None)
     monkeypatch.setattr(repo_crud, "check_quota", lambda **kwargs: (True, None))
     monkeypatch.setattr(repo_crud, "_update_repository_database_records", lambda **kwargs: atomic_state.setdefault("updated", []).append(kwargs))
@@ -501,7 +474,6 @@ async def test_move_repo_covers_validation_quota_and_metadata_only_success(monke
     for name in (
         "_migrate_lakefs_repository",
         "allocate_lakefs_repo_name",
-        "cleanup_repository_storage",
         "get_lakefs_client",
     ):
         monkeypatch.setattr(repo_crud, name, _forbidden(name))
@@ -561,8 +533,8 @@ async def test_move_repo_covers_validation_quota_and_metadata_only_success(monke
     # The row keeps pointing at the LakeFS repository that holds its data.
     assert update["to_lakefs_repo"] == "m-owner-from"
     assert (update["to_namespace"], update["to_name"], update["moving_namespace"]) == ("other", "to", True)
-    # It goes to the account the namespace names, with its usage
-    assert (update["to_owner"].username, update["repo_size"]) == ("other", 12)
+    # It goes to the account the namespace names
+    assert update["to_owner"].username == "other"
 
 
 @pytest.mark.asyncio
@@ -571,6 +543,7 @@ async def test_squash_repo_covers_validation_success_and_recovery(monkeypatch):
         operation_capabilities.cfg.app, "repository_squash_enabled", True
     )
     repo_row = SimpleNamespace(
+        id=5,
         private=False,
         repo_type="model",
         full_id="owner/demo-model",
@@ -579,6 +552,7 @@ async def test_squash_repo_covers_validation_success_and_recovery(monkeypatch):
     # Step 2 reloads the row under the temporary name and resolves its LakeFS id
     # from it, so the temp row carries its own identity too.
     temp_repo = SimpleNamespace(
+        id=6,
         private=False,
         repo_type="model",
         full_id="owner/demo-squash-abc12345",
@@ -601,10 +575,10 @@ async def test_squash_repo_covers_validation_success_and_recovery(monkeypatch):
     # The migration allocates and returns the LakeFS id it created.
     monkeypatch.setattr(repo_crud, "_migrate_lakefs_repository", lambda **kwargs: _async_return(f"lakefs:{kwargs['to_id']}"))
     monkeypatch.setattr(repo_crud, "_update_repository_database_records", lambda **kwargs: atomic_state.setdefault("updated", []).append(kwargs))
-    monkeypatch.setattr(repo_crud, "cleanup_repository_storage", lambda **kwargs: _async_return({"repo_objects_deleted": 1, "lfs_objects_deleted": 0, "lfs_history_deleted": 0}))
     monkeypatch.setattr(repo_crud, "get_lakefs_client", lambda: client)
     monkeypatch.setattr(repo_crud, "resolve_lakefs_repo", lambda repo: f"{repo.repo_type}:{repo.full_id}")
-    monkeypatch.setattr(repo_crud, "update_repository_storage", lambda repo: _async_return(None))
+    recounts = []
+    monkeypatch.setattr(repo_crud.usage, "enqueue_repository_recount", recounts.append)
     monkeypatch.setattr(repo_crud, "db", SimpleNamespace(atomic=lambda: _AtomicContext(atomic_state)))
     monkeypatch.setattr(repo_crud.uuid, "uuid4", lambda: SimpleNamespace(hex="abc12345deadbeef"))
 
@@ -633,6 +607,7 @@ async def test_squash_repo_covers_validation_success_and_recovery(monkeypatch):
         f"lakefs:{atomic_state['updated'][-1]['to_id']}",
     ]
     assert atomic_state["updated"][-1]["to_id"] == atomic_state["updated"][-2]["from_id"]
+    assert recounts == [repo_row.id]  # its main is new: recounted in the background
 
     monkeypatch.setattr(repo_crud, "_migrate_lakefs_repository", lambda **kwargs: (_ for _ in ()).throw(RuntimeError("squash failed")))
     with pytest.raises(HTTPException) as squash_error:
@@ -641,6 +616,7 @@ async def test_squash_repo_covers_validation_success_and_recovery(monkeypatch):
             auth=(SimpleNamespace(username="owner"), False),
         )
     assert squash_error.value.status_code == 500
+    assert recounts[-1] == temp_repo.id  # the row points at the temp copy again: recounted
 
 
 @pytest.mark.asyncio
@@ -912,204 +888,6 @@ async def test_create_repo_does_not_retry_on_unrelated_lakefs_error(monkeypatch)
     assert create_attempts["count"] == 1, "Unrelated errors must not trigger a retry"
     assert list_calls == [], "S3 listing must not run for unrelated errors"
     assert delete_calls == [], "Marker delete must not run for unrelated errors"
-
-
-@pytest.mark.asyncio
-async def test_delete_repo_runs_lakefs_metadata_delete_before_s3_cleanup(monkeypatch):
-    """Reproduces (B): delete order matters.
-
-    Pre-fix, S3 cleanup was step 3 and LakeFS delete was step 4. If LakeFS
-    deletion failed for any non-404 reason, the repo was orphaned: LakeFS
-    metadata still pointed at an S3 prefix that had been wiped out, so reads
-    issued a 302 redirect that resolved to a 403. The fix swaps the order so
-    LakeFS metadata is removed first; S3 cleanup only follows once LakeFS no
-    longer references the storage.
-    """
-    repo_row = SimpleNamespace(
-        delete_instance=lambda: None,
-        repo_type="model",
-        full_id="owner/demo-model",
-        lakefs_repo="model:owner/demo-model",
-    )
-    client = _FakeClient()
-    atomic_state = {}
-    call_order: list[str] = []
-
-    original_delete = client.delete_repository
-
-    async def tracked_lakefs_delete(**kwargs):
-        call_order.append("lakefs_delete")
-        return await original_delete(**kwargs)
-
-    client.delete_repository = tracked_lakefs_delete
-
-    async def fake_cleanup(**kwargs):
-        call_order.append("s3_cleanup")
-        return {
-            "repo_objects_deleted": 1,
-            "lfs_objects_deleted": 0,
-            "lfs_history_deleted": 0,
-        }
-
-    monkeypatch.setattr(repo_crud, "get_lakefs_client", lambda: client)
-    monkeypatch.setattr(
-        repo_crud,
-        "resolve_lakefs_repo",
-        lambda repo: f"{repo.repo_type}:{repo.full_id}",
-    )
-    monkeypatch.setattr(
-        repo_crud,
-        "check_repo_delete_permission",
-        lambda repo, user, is_admin=False: None,
-    )
-    monkeypatch.setattr(repo_crud, "cleanup_repository_storage", fake_cleanup)
-    monkeypatch.setattr(repo_crud, "record_repository_lfs", lambda repo: 0)
-    monkeypatch.setattr(
-        repo_crud, "is_lakefs_not_found_error", lambda error: "404" in str(error)
-    )
-    monkeypatch.setattr(
-        repo_crud, "db", SimpleNamespace(atomic=lambda: _AtomicContext(atomic_state))
-    )
-    monkeypatch.setattr(repo_crud, "get_repository", lambda *_args: repo_row)
-
-    success = await repo_crud.delete_repo(
-        repo_crud.DeleteRepoPayload(type="model", name="demo-model"),
-        auth=(SimpleNamespace(username="owner"), False),
-    )
-
-    assert "deleted" in success["message"].lower()
-    assert call_order == ["lakefs_delete", "s3_cleanup"], (
-        "Pre-fix order was [s3_cleanup, lakefs_delete] which produced 302->403 "
-        "on partial failures. LakeFS metadata MUST be deleted before S3 "
-        f"cleanup. Got {call_order!r}"
-    )
-
-
-@pytest.mark.asyncio
-async def test_delete_repo_skips_s3_cleanup_when_lakefs_delete_fails(monkeypatch):
-    """Reproduces (B) end-state: when LakeFS deletion fails (non-404), S3 must
-    remain untouched. Pre-fix, S3 cleanup had already run before LakeFS was
-    even tried, so the failed delete left an orphan LakeFS repo over wiped S3
-    storage — the exact state that surfaced as 302->403 to clients.
-    """
-    repo_row = SimpleNamespace(
-        delete_instance=lambda: None,
-        repo_type="model",
-        full_id="owner/demo-model",
-        lakefs_repo="model:owner/demo-model",
-    )
-    client = _FakeClient()
-    client.raise_on["delete_repository"] = RuntimeError("LakeFS internal error 500")
-    atomic_state = {}
-    cleanup_calls: list[dict] = []
-
-    async def fake_cleanup(**kwargs):
-        cleanup_calls.append(kwargs)
-        return {
-            "repo_objects_deleted": 1,
-            "lfs_objects_deleted": 0,
-            "lfs_history_deleted": 0,
-        }
-
-    monkeypatch.setattr(repo_crud, "get_lakefs_client", lambda: client)
-    monkeypatch.setattr(
-        repo_crud,
-        "resolve_lakefs_repo",
-        lambda repo: f"{repo.repo_type}:{repo.full_id}",
-    )
-    monkeypatch.setattr(
-        repo_crud,
-        "check_repo_delete_permission",
-        lambda repo, user, is_admin=False: None,
-    )
-    monkeypatch.setattr(repo_crud, "cleanup_repository_storage", fake_cleanup)
-    monkeypatch.setattr(repo_crud, "record_repository_lfs", lambda repo: 0)
-    monkeypatch.setattr(
-        repo_crud, "is_lakefs_not_found_error", lambda error: "404" in str(error)
-    )
-    monkeypatch.setattr(
-        repo_crud, "db", SimpleNamespace(atomic=lambda: _AtomicContext(atomic_state))
-    )
-    monkeypatch.setattr(repo_crud, "get_repository", lambda *_args: repo_row)
-
-    response = await repo_crud.delete_repo(
-        repo_crud.DeleteRepoPayload(type="model", name="demo-model"),
-        auth=(SimpleNamespace(username="owner"), False),
-    )
-
-    assert getattr(response, "status_code", None) == 500
-    assert cleanup_calls == [], (
-        "Pre-fix bug: S3 cleanup ran first, so a later LakeFS delete failure "
-        "left a live LakeFS repo pointing at wiped S3 storage. With the fix, "
-        "S3 must NOT be touched when LakeFS delete fails. Got "
-        f"{cleanup_calls!r}"
-    )
-
-
-@pytest.mark.asyncio
-async def test_delete_repo_treats_lakefs_404_as_success_and_continues_to_s3(
-    monkeypatch,
-):
-    """A LakeFS 404 (already deleted) must not block S3 cleanup. This guards
-    the recovery path: after a previous delete crashed mid-way the user can
-    safely retry and reach a clean end state.
-    """
-    repo_row = SimpleNamespace(
-        delete_instance=lambda: None,
-        repo_type="model",
-        full_id="owner/demo-model",
-        lakefs_repo="model:owner/demo-model",
-    )
-    client = _FakeClient()
-    client.raise_on["delete_repository"] = RuntimeError("404 repository not found")
-    atomic_state = {}
-    cleanup_calls: list[dict] = []
-
-    async def fake_cleanup(**kwargs):
-        cleanup_calls.append(kwargs)
-        return {
-            "repo_objects_deleted": 0,
-            "lfs_objects_deleted": 0,
-            "lfs_history_deleted": 0,
-        }
-
-    monkeypatch.setattr(repo_crud, "get_lakefs_client", lambda: client)
-    monkeypatch.setattr(
-        repo_crud,
-        "resolve_lakefs_repo",
-        lambda repo: f"{repo.repo_type}:{repo.full_id}",
-    )
-    monkeypatch.setattr(
-        repo_crud,
-        "check_repo_delete_permission",
-        lambda repo, user, is_admin=False: None,
-    )
-    monkeypatch.setattr(repo_crud, "cleanup_repository_storage", fake_cleanup)
-    monkeypatch.setattr(repo_crud, "record_repository_lfs", lambda repo: 0)
-    monkeypatch.setattr(
-        repo_crud, "is_lakefs_not_found_error", lambda error: "404" in str(error)
-    )
-    monkeypatch.setattr(
-        repo_crud, "db", SimpleNamespace(atomic=lambda: _AtomicContext(atomic_state))
-    )
-    monkeypatch.setattr(repo_crud, "get_repository", lambda *_args: repo_row)
-
-    success = await repo_crud.delete_repo(
-        repo_crud.DeleteRepoPayload(type="model", name="demo-model"),
-        auth=(SimpleNamespace(username="owner"), False),
-    )
-
-    assert "deleted" in success["message"].lower()
-    assert len(cleanup_calls) == 1, (
-        "After a 404 from LakeFS, S3 cleanup must still run so leftover "
-        "objects from a prior partial delete can be reaped"
-    )
-
-
-# ---------------------------------------------------------------------------
-# Issue #93: a renamed repo's freed name stays unusable while LakeFS finishes
-# deleting the old repository asynchronously.
-# ---------------------------------------------------------------------------
 
 
 def test_is_lakefs_repo_id_taken_error_matches_only_the_async_deletion_conflict():

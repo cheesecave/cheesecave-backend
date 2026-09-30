@@ -125,7 +125,6 @@ describe("admin API client", () => {
       limit: 100,
     });
     await api.recalculateAllRepoStorage("admin-token", {
-      repo_type: "dataset",
       namespace: "aurora-labs",
     });
 
@@ -969,6 +968,17 @@ describe("admin API client", () => {
       task_id: 4,
     });
     expect(client.post).toHaveBeenLastCalledWith("/storage/lfs-reconciliation");
+  });
+
+  it("storage usage recount helpers", async () => {
+    const api = await loadModule();
+    client.get.mockResolvedValueOnce({ data: { task: null } });
+    client.post.mockResolvedValueOnce({ data: { task_id: 5 } });
+
+    expect(await api.getUsageRecount("admin-token")).toEqual({ task: null });
+    expect(client.get).toHaveBeenLastCalledWith("/usage/recount");
+    expect(await api.startUsageRecount("admin-token")).toEqual({ task_id: 5 });
+    expect(client.post).toHaveBeenLastCalledWith("/usage/recount");
   });
 
   it("task cancel, log paging and log download helpers", async () => {

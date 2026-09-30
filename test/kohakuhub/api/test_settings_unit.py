@@ -242,6 +242,7 @@ async def test_repo_settings_and_lfs_settings_cover_validation_quota_and_default
 ):
     repo_row = SimpleNamespace(
         private=False,
+        used_bytes=55,
         lfs_threshold_bytes=None,
         lfs_keep_versions=None,
         lfs_suffix_rules="{bad-json",
@@ -314,11 +315,6 @@ async def test_repo_settings_and_lfs_settings_cover_validation_quota_and_default
         )
     assert bad_visibility.value.status_code == 400
 
-    monkeypatch.setattr(
-        settings_api,
-        "calculate_repository_storage",
-        _async_return({"total_bytes": 55}),
-    )
     monkeypatch.setattr(settings_api, "get_organization", lambda namespace: None)
     monkeypatch.setattr(
         settings_api,

@@ -24,7 +24,7 @@ from kohakuhub.logger import get_logger
 from kohakuhub.storage_cleanup import enqueue_lfs_window_review
 from kohakuhub.api.fallback import with_user_fallback
 from kohakuhub.api.fallback.cache import get_cache as get_fallback_cache
-from kohakuhub.api.quota.util import calculate_repository_storage, check_quota
+from kohakuhub.api.quota.util import check_quota
 from kohakuhub.api.repo.utils.hf import hf_repo_not_found
 from kohakuhub.auth.dependencies import get_current_user
 from kohakuhub.auth.permissions import check_repo_delete_permission
@@ -404,8 +404,7 @@ async def update_repo_settings(
                 f"{'private to public' if repo_row.private else 'public to private'}"
             )
 
-            repo_storage = await calculate_repository_storage(repo_row)
-            repo_size = repo_storage["total_bytes"]
+            repo_size = repo_row.used_bytes
 
             # Check if namespace is an organization
             org = get_organization(namespace)

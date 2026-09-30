@@ -114,6 +114,7 @@ def test_load_config_merges_file_and_environment(monkeypatch):
     monkeypatch.setenv("KOHAKU_HUB_LFS_MULTIPART_CHUNK_SIZE_BYTES", "1024")
     monkeypatch.setenv("KOHAKU_HUB_LFS_KEEP_VERSIONS", "6")
     monkeypatch.setenv("KOHAKU_HUB_LFS_AUTO_GC", "true")
+    monkeypatch.setenv("KOHAKU_HUB_USAGE_RECOUNT_INTERVAL_HOURS", "12.5")
     monkeypatch.setenv("KOHAKU_HUB_SITE_NAME", "Env Hub")
     monkeypatch.setenv("KOHAKU_HUB_DEBUG_LOG_PAYLOADS", "true")
     monkeypatch.setenv("KOHAKU_HUB_LOG_LEVEL", "DEBUG")
@@ -165,6 +166,7 @@ def test_load_config_merges_file_and_environment(monkeypatch):
     assert cfg.app.lfs_multipart_chunk_size_bytes == 1024
     assert cfg.app.lfs_keep_versions == 6
     assert cfg.app.lfs_auto_gc is True
+    assert cfg.app.usage_recount_interval_hours == 12.5
     assert cfg.app.site_name == "Env Hub"
     assert cfg.app.debug_log_payloads is True
     assert cfg.app.log_level == "DEBUG"

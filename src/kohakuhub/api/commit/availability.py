@@ -111,17 +111,18 @@ async def _pages(fetch, budget: Budget | None = None, limit: int | None = None) 
         after = pagination["next_offset"]
 
 
-async def changed_paths(
+async def changes(
     client,
     lakefs_repo: str,
     left: str,
     right: str,
     budget: Budget | None = None,
     limit: int | None = None,
-) -> list[str]:
-    """Every path whose content differs between two refs (a two-dot diff)."""
+) -> list[dict]:
+    """Every file whose content differs between two refs (a two-dot diff):
+    LakeFS's diff entries, ``type`` added, removed or changed."""
     return [
-        entry["path"]
+        entry
         for entry in await _pages(
             lambda after: client.diff_refs(
                 repository=lakefs_repo,
@@ -136,6 +137,18 @@ async def changed_paths(
         )
         if entry.get("path_type", "object") == "object"
     ]
+
+
+async def changed_paths(
+    client,
+    lakefs_repo: str,
+    left: str,
+    right: str,
+    budget: Budget | None = None,
+    limit: int | None = None,
+) -> list[str]:
+    """Every path whose content differs between two refs (a two-dot diff)."""
+    return [entry["path"] for entry in await changes(client, lakefs_repo, left, right, budget, limit)]
 
 
 async def entries(

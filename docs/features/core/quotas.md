@@ -129,10 +129,19 @@ curl http://localhost:28080/api/quota/repo/model/username/repo
 - Checked at preupload stage
 - Error 413: Payload Too Large
 
-**Quota calculation:**
-- Actual file size in S3
-- Includes all LFS versions
-- Deduplicated by SHA256
+**How usage is counted:**
+- A repository uses its regular files on `main`, plus every LFS object any
+  branch's history links that is still stored, each counted once (by SHA256)
+- Deleting an LFS file frees nothing until garbage collection removes the
+  object; then every repository that linked it stops counting it
+- A user's or organization's usage is the sum over its repositories,
+  private and public apart
+
+Usage is kept up to date as repositories change: every commit, branch
+operation (merge, revert, reset) and garbage collection applies its
+difference, in proportion to what it changed. Nothing lists a repository on
+the way. A change the counters cannot follow (for example `main` moved
+outside KohakuHub) recounts that repository in the background.
 
 ---
 
@@ -144,28 +153,32 @@ curl http://localhost:28080/api/quota/repo/model/username/repo
 - All users and quotas at a glance
 - Sort by usage, percentage
 - Filter by over-limit
-- Recalculate all quotas
 
-### Recalculate Quota
+### Recount Usage
 
-**When to use:**
-- After manual S3 operations
-- If numbers seem wrong
-- After GC or cleanup
-
-**How:**
+A recount sets exact usage from what repositories hold, as the
+`usage.recount` background task. It reports how far the kept numbers had
+drifted, the largest drifts first. It runs once on its own after upgrading
+to a version with kept usage (migration 023). Start it from **Admin Portal →
+Storage → Storage usage recount**, which also shows the latest report, or:
 
 ```bash
-# Single user
-curl -X POST http://localhost:28080/admin/api/quota/username/recalculate \\
-  -H "X-Admin-Token: admin_token"
+# Every repository
+curl -X POST http://localhost:28080/admin/api/usage/recount -H "X-Admin-Token: admin_token"
+curl http://localhost:28080/admin/api/usage/recount -H "X-Admin-Token: admin_token"
 
-# Single repo
-curl -X POST http://localhost:28080/admin/api/quota/repo/model/username/repo/recalculate
+# One user's or organization's repositories (background)
+curl -X POST "http://localhost:28080/admin/api/quota/username/recalculate" -H "X-Admin-Token: admin_token"
 
-# All repos (slow!)
-curl -X POST http://localhost:28080/admin/api/repositories/recalculate-all
+# One repository, at once (its write access suffices)
+curl -X POST http://localhost:28080/api/quota/repo/model/username/repo/recalculate
 ```
+
+The recount runs on a background worker (`khub-worker`); the card warns
+when none is online, since recounts then wait in the queue.
+
+`KOHAKU_HUB_USAGE_RECOUNT_INTERVAL_HOURS` repeats the site-wide recount
+periodically as a safety net (off by default).
 
 ### View Storage Breakdown
 
@@ -207,9 +220,8 @@ curl -X POST http://localhost:28080/admin/api/repositories/recalculate-all
 - Use organization quota instead
 
 **Quota shows wrong number:**
-- Recalculate: Admin Portal → Quota
-- Check S3 directly
-- Verify LFS objects counted
+- Recount: Admin Portal → Storage → Storage usage recount; its report lists
+  the repositories that had drifted
 
 **Over quota but can't find files:**
 - Old LFS versions

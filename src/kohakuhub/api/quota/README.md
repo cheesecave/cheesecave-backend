@@ -69,18 +69,9 @@ FastAPI router implementing REST endpoints for quota management:
 
 #### util.py
 
-Core business logic for storage calculation and quota enforcement:
-
-**Async Functions:**
-
-- `calculate_repository_storage(repo)` - Calculate storage for a single repository
-- `calculate_namespace_storage(namespace, is_org)` - Calculate total storage by privacy
-- `update_namespace_storage(namespace, is_org)` - Recalculate and update storage in DB
-
-**Sync Functions:**
+Quota enforcement over the usage `kohakuhub.usage` keeps:
 
 - `check_quota(namespace, additional_bytes, is_private, is_org)` - Validate quota before operations
-- `increment_storage(namespace, bytes_delta, is_private, is_org)` - Update storage counters
 - `get_storage_info(namespace, is_org)` - Retrieve current quota and usage
 - `set_quota(namespace, private_quota_bytes, public_quota_bytes, is_org)` - Update quota limits
 
@@ -89,31 +80,16 @@ Core business logic for storage calculation and quota enforcement:
 ### How Quotas Are Enforced
 
 1. **Pre-upload Check**: `check_quota()` validates that new uploads won't exceed limits
-2. **Incremental Updates**: `increment_storage()` updates usage counters after operations
-3. **Periodic Recalculation**: Admins can trigger full recalculation to fix drift
+2. **Kept Usage**: every change to a repository applies its difference to the repository's counters (`kohakuhub.usage`)
+3. **Recount**: the `usage.recount` background task sets exact values and reports drift (admin Storage page)
 
 ### Storage Calculation Details
 
-For each repository, storage includes:
-
-```
-Total Storage = Current Branch Storage + LFS Total Storage
-```
-
-**Current Branch Storage:**
-- All objects in the main branch
-- Retrieved via LakeFS API pagination
-- Includes regular files tracked by Git
-
-**LFS Storage:**
-- All LFS objects across all versions (total)
-- Unique LFS objects after deduplication (tracked separately)
-- Retrieved from LFSObjectHistory database table
-
-**Namespace Aggregation:**
-- Private repos summed separately from public repos
-- Parallel calculation using asyncio.gather for performance
-- Results stored in User/Organization models
+A repository uses its regular files on `main` (`main_regular_bytes`) plus
+the LFS objects any branch's history links that are still stored, each
+counted once (`lfs_bytes`); `used_bytes` is their sum. A namespace's usage is
+the sum over its repositories, private and public apart, read with one
+`GROUP BY` (`usage.namespace_usage`).
 
 ### Database Schema
 
@@ -147,37 +123,20 @@ if not allowed:
     raise HTTPException(413, detail={"error": error_msg})
 ```
 
-### Update Storage After Operation
+### How Usage Is Kept
+
+Usage is not recomputed here: `kohakuhub.usage` keeps each repository's
+counters up to date as it changes (commits on `main`, LFS history rows,
+garbage collection), and a namespace's usage is summed from its repositories
+(`usage.namespace_usage`). A recount (`usage.recount_repository`, or the
+`usage.recount` background task for many) sets exact values:
 
 ```python
-from kohakuhub.api.quota.util import increment_storage
+from kohakuhub import usage
 
-# After uploading a file
-increment_storage(
-    namespace="orgname",
-    bytes_delta=file_size,
-    is_private=False,
-    is_org=True
-)
-
-# After deleting a file
-increment_storage(
-    namespace="username",
-    bytes_delta=-file_size,
-    is_private=True,
-    is_org=False
-)
-```
-
-### Recalculate Storage (Manual Sync)
-
-```python
-from kohakuhub.api.quota.util import update_namespace_storage
-
-# Recalculate all storage for a namespace
-storage = await update_namespace_storage("username", is_org=False)
-print(f"Private: {storage['private_bytes']} bytes")
-print(f"Public: {storage['public_bytes']} bytes")
+usage.namespace_usage(["username"])  # {"username": {"private": ..., "public": ...}}
+await usage.recount_repository(repo.id)  # one repository, exactly
+usage.enqueue_recount("username")  # every repository of a namespace, in the background
 ```
 
 ### Get Storage Information
@@ -226,16 +185,15 @@ The module uses HTTP exceptions for error conditions:
 ### Used By
 
 - File upload handlers (check quota before accepting uploads)
-- Repository management (track storage on create/delete)
-- LFS operations (increment storage on LFS object operations)
+- Repository management (create starts counting; delete and move need nothing: the sum follows)
+- Commits, branch operations and garbage collection (`kohakuhub.usage` hooks)
 - User/org profile pages (display quota information)
 
 ## Performance Considerations
 
-- **Parallel Calculation**: Uses asyncio.gather to calculate multiple repos simultaneously
-- **Pagination**: LakeFS queries paginate results (1000 objects per request)
-- **Incremental Updates**: Prefer increment_storage over full recalculation
-- **Synchronous Operations**: check_quota and increment_storage are sync for transaction safety
+- **No listing on the way**: a change costs in proportion to what it changed, not to the repository or namespace size
+- **Summed on read**: namespace usage is one indexed `GROUP BY` over its repositories
+- **Recounts page through LakeFS** (1000 objects per request), in the background
 
 ## Logging
 

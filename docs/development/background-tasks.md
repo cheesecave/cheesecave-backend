@@ -25,7 +25,7 @@ async def recalculate_storage(payload: dict) -> None:
     repo = Repository.get_or_none(Repository.id == payload["repo_id"])
     if repo is None:
         raise PermanentTaskError("repository no longer exists")  # no retries
-    await update_repository_storage(repo)
+    await usage.recount_repository(repo.id)
 
 
 with db.atomic():
@@ -195,12 +195,14 @@ changes between runs from the same state.
 | Kind | What it does |
 | --- | --- |
 | `tasks.cleanup` | Hourly: deletes finished task rows past their retention. |
-| `storage.purge_repository` | Deletes one LakeFS repository and its `s3://{bucket}/{lakefs_repo}/` prefix. Scheduled when a user or organization is deleted with its repositories, or from the orphan audit on the admin **Storage** page (`kohakuhub/storage_cleanup.py`). Refuses a LakeFS id a repository still points at. |
+| `storage.purge_repository` | Deletes one LakeFS repository and its `s3://{bucket}/{lakefs_repo}/` prefix. Scheduled when a repository is deleted, when a user or organization is deleted with its repositories, or from the orphan audit on the admin **Storage** page (`kohakuhub/storage_cleanup.py`). Refuses a LakeFS id a repository still points at. |
 | `storage.collect_lfs` | Decides each LFS object recorded in `lfs_gc_candidate` under a per-object lock and deletes the ones nothing relies on, leaving an `lfs_object_tombstone` (`kohakuhub/lfs_gc.py`, see [LFS garbage collection](../features/core/lfs.md#garbage-collection)). |
 | `storage.expire_recent_lfs` | Hourly: turns LFS objects whose 24-hour upload/commit grace period ended into candidates, so uploads that were never committed are collected. |
 | `storage.review_lfs_window` | Records the versions pushed out of a repository's keep windows after its `lfs_keep_versions` was lowered. |
 | `storage.record_branch_links` | Records what a new branch's head links in `lfs_head_ref`, off the branch-creation request; collection waits while one is pending. |
 | `storage.reconcile_lfs_references` | Makes the database account for every LFS object a branch head links: adds the missing `lfs_head_ref` rows, which collection never deletes, and corrects the default branch's file rows. Idempotent and non-destructive, checkpointed per repository. Started from the admin **Storage** page, or by the first collection with `lfs_auto_gc` on, which waits until one has completed. |
+| `usage.recount` | Sets every repository's exact storage usage (or one namespace's) from LakeFS and the database, and reports the drift of the kept counters (`kohakuhub/usage.py`). Checkpointed per repository. Scheduled by migration 023, from the admin **Storage** page, by a namespace's quota recalculation, and every `usage_recount_interval_hours` when set. |
+| `usage.recount_repository` | Recounts one repository whose kept usage could not follow a change (its `main` moved from a commit the counter does not count up to), or that a squash rebuilt. A recount racing a change tries again 30 seconds later. |
 
 ## Admin panel
 

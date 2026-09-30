@@ -22,6 +22,7 @@ from kohakuhub.db import (
     init_db,
 )
 from kohakuhub.db_operations import (
+    delete_repository,
     get_file,
     get_organization,
     get_repository,
@@ -47,14 +48,9 @@ from kohakuhub.api.repo.utils.hf import (
     hf_server_error,
     is_lakefs_not_found_error,
 )
-from kohakuhub.api.quota.util import (
-    calculate_repository_storage,
-    check_quota,
-    increment_storage,
-    update_repository_storage,
-)
-from kohakuhub.api.repo.utils.gc import cleanup_repository_storage
-from kohakuhub.storage_cleanup import record_repository_lfs, refresh_head_refs
+from kohakuhub import usage
+from kohakuhub.api.quota.util import check_quota
+from kohakuhub.storage_cleanup import refresh_head_refs
 from kohakuhub.api.fallback.cache import get_cache as get_fallback_cache
 from kohakuhub.api.validation import normalize_name
 from kohakuhub.api.operation_capabilities import (
@@ -561,6 +557,12 @@ async def create_repo(
         logger.info(f"Concurrent create won the race for {full_id}; dropping {lakefs_repo}")
         await _drop_unclaimed_lakefs_repository(client, lakefs_repo)
         return _repo_exists_response(payload.type, full_id)
+    # Its usage counts from main's first commit (a failure leaves it to a recount)
+    try:
+        head = await client.get_branch(repository=lakefs_repo, branch=usage.MAIN)
+        usage.main_started(_row.id, head["commit_id"])
+    except Exception as e:
+        logger.warning(f"Could not start counting the usage of {full_id}: {e}")
 
     # Strict-freshness invalidation (#79): a fallback ghost binding for
     # this repo (written before the local repo existed) must be evicted
@@ -624,54 +626,15 @@ async def delete_repo(
     if not repo_row:
         return hf_repo_not_found(full_id, repo_type)
 
-    lakefs_repo = resolve_lakefs_repo(repo_row)
-
     # 2. Check if user has permission to delete this repository (admin bypasses)
     check_repo_delete_permission(repo_row, user, is_admin=is_admin)
 
-    # 3. Delete LakeFS repository metadata first to avoid leaving orphan repos behind.
-    client = get_lakefs_client()
+    # 3. Delete the row; its LakeFS repository and storage are purged in the
+    # background (a task scheduled in the same transaction), so the answer
+    # does not wait for however many objects it holds
     try:
-        # Note: Deleting a LakeFS repo is generally fast as it only deletes metadata
-        await client.delete_repository(repository=lakefs_repo, force=True)
-        logger.success(f"Successfully deleted LakeFS repository: {lakefs_repo}")
-    except Exception as e:
-        # LakeFS returns 404 if repo doesn't exist, which is fine
-        if not is_lakefs_not_found_error(e):
-            # If LakeFS deletion fails for other reasons, fail the whole operation
-            logger.exception(f"LakeFS repository deletion failed for {lakefs_repo}", e)
-            return hf_server_error(f"LakeFS repository deletion failed: {str(e)}")
-        logger.info(f"LakeFS repository {lakefs_repo} not found/already deleted (OK)")
-
-    # 4. Clean up S3 storage after LakeFS metadata deletion.
-    try:
-        cleanup_stats = await cleanup_repository_storage(
-            repo_type=repo_type,
-            namespace=namespace,
-            name=payload.name,
-            lakefs_repo=lakefs_repo,
-        )
-        logger.info(
-            f"S3 cleanup for {full_id}: "
-            f"{cleanup_stats['repo_objects_deleted']} repo objects deleted"
-        )
-    except Exception as e:
-        logger.warning(f"S3 cleanup failed for {full_id} (non-fatal): {e}")
-
-    # 5. Delete related metadata from database (CASCADE will handle related records)
-    try:
-        with db.atomic():
-            # LFS objects are shared: record this repository's as collection
-            # candidates in the same transaction, so the background collection
-            # decides them only once the rows below are gone (#114).
-            record_repository_lfs(repo_row)
-            # ForeignKey CASCADE will automatically delete:
-            # - All files (File.repository)
-            # - All commits (Commit.repository)
-            # - All staging uploads (StagingUpload.repository)
-            # - All LFS history (LFSObjectHistory.repository)
-            repo_row.delete_instance()
-        logger.success(f"Successfully deleted database records for: {full_id}")
+        delete_repository(repo_row)
+        logger.success(f"Deleted {full_id}; its storage is purged in the background")
     except Exception as e:
         logger.exception(f"Database deletion failed for {full_id}", e)
         return hf_server_error(f"Database deletion failed for {full_id}: {str(e)}")
@@ -685,7 +648,7 @@ async def delete_repo(
     # the cache TTL window.
     get_fallback_cache().invalidate_repo(repo_type, namespace, payload.name)
 
-    # 6. Return success response (200 OK with a simple message)
+    # 4. Return success response (200 OK with a simple message)
     # HuggingFace Hub delete_repo returns a simple 200 OK.
     return {"message": f"Repository '{full_id}' of type '{repo_type}' deleted."}
 
@@ -966,7 +929,6 @@ def _update_repository_database_records(
     to_namespace: str,
     to_name: str,
     moving_namespace: bool,
-    repo_size: int,
     to_lakefs_repo: str,
     preserve_quota: bool = True,
     to_owner: User | None = None,
@@ -981,7 +943,6 @@ def _update_repository_database_records(
         to_namespace: Target namespace
         to_name: Target repository name
         moving_namespace: Whether namespace is changing
-        repo_size: Repository size in bytes
         to_lakefs_repo: LakeFS repository the row should point at afterwards:
             the one a move keeps, or the one a squash migration created. It is
             stored explicitly because it need not derive back from `to_id`.
@@ -993,13 +954,8 @@ def _update_repository_database_records(
     # Preserve current quota settings before update
     # NOTE: When moving to different namespace, reset quota to inherit from new namespace
     # When staying in same namespace (rename/squash), preserve quota settings
-    if preserve_quota and not moving_namespace:
-        current_quota_bytes = repo_row.quota_bytes
-        current_used_bytes = repo_row.used_bytes
-    else:
-        # Reset quota when moving to different namespace
-        current_quota_bytes = None
-        current_used_bytes = repo_row.used_bytes  # Keep usage tracking
+    # Its usage goes along: a namespace's is summed from its repositories
+    current_quota_bytes = repo_row.quota_bytes if preserve_quota and not moving_namespace else None
 
     # Update repository record
     Repository.update(
@@ -1008,7 +964,6 @@ def _update_repository_database_records(
         full_id=to_id,
         lakefs_repo=to_lakefs_repo,
         quota_bytes=current_quota_bytes,
-        used_bytes=current_used_bytes,
     ).where(Repository.id == repo_row.id).execute()
 
     # File and Commit rows follow the repository by its id; only the owner
@@ -1017,37 +972,6 @@ def _update_repository_database_records(
         Repository.update(owner=to_owner).where(Repository.id == repo_row.id).execute()
         File.update(owner=to_owner).where(File.repository == repo_row).execute()
         Commit.update(owner=to_owner).where(Commit.repository == repo_row).execute()
-
-    # Update storage quotas if namespace changed
-    if moving_namespace and repo_size > 0:
-        source = _namespace_owner(from_namespace)
-
-        # Check if target namespace is an organization
-        target_org = get_organization(to_namespace)
-        is_target_org = target_org is not None
-
-        # Decrement from source namespace, unless no account holds it any more
-        # (an admin moving an orphaned repository out of it)
-        if source is not None:
-            increment_storage(
-                namespace=from_namespace,
-                bytes_delta=-repo_size,
-                is_private=repo_row.private,
-                is_org=source.is_org,
-            )
-
-        # Increment to target namespace
-        increment_storage(
-            namespace=to_namespace,
-            bytes_delta=repo_size,
-            is_private=repo_row.private,
-            is_org=is_target_org,
-        )
-
-        logger.info(
-            f"Updated storage quotas: {from_namespace} -{repo_size:,} bytes, "
-            f"{to_namespace} +{repo_size:,} bytes"
-        )
 
 
 @router.post("/repos/move")
@@ -1124,15 +1048,10 @@ async def move_repo(
             )
 
     # Check storage quota (only for users, admin bypasses)
-    repo_size = 0
     moving_namespace = from_namespace != to_namespace
 
-    if moving_namespace:
-        # Its usage moves along, whoever moves it
-        repo_storage = await calculate_repository_storage(repo_row)
-        repo_size = repo_storage["total_bytes"]
-
     if moving_namespace and not is_admin:
+        repo_size = repo_row.used_bytes
         logger.info(
             f"Checking storage quota for moving {from_id} to {to_namespace} namespace"
         )
@@ -1183,7 +1102,6 @@ async def move_repo(
                 to_namespace=to_namespace,
                 to_name=to_name,
                 moving_namespace=moving_namespace,
-                repo_size=repo_size,
                 to_lakefs_repo=lakefs_repo,
                 to_owner=to_owner,
             )
@@ -1291,7 +1209,6 @@ async def squash_repo(
                 to_namespace=namespace,
                 to_name=temp_name,
                 moving_namespace=False,  # Same namespace
-                repo_size=0,  # No quota change
                 to_lakefs_repo=temp_lakefs_repo,
             )
 
@@ -1328,27 +1245,19 @@ async def squash_repo(
                 to_namespace=namespace,
                 to_name=name,
                 moving_namespace=False,  # Same namespace
-                repo_size=0,  # No quota change
                 to_lakefs_repo=final_lakefs_repo,
             )
 
         # The temp id is never reused, so its deletion only needs to be observed
         # for logging; `_migrate_lakefs_repository` already waited for it.
 
-        # Step 3: Recalculate repository storage after squashing
-        # Storage might have changed after clearing history
+        # Step 3: Bring the records of the squashed repository up to date
         final_repo = get_repository(repo_type, namespace, name)
         if final_repo:
+            # Its main is new: the usage is recounted in the background
+            usage.enqueue_repository_recount(final_repo.id)
             # The squashed repository has only main left
             await refresh_head_refs(final_repo, "main", exact=True, whole_repository=True)
-            logger.info(f"Recalculating storage for squashed repository {repo_id}")
-            try:
-                await update_repository_storage(final_repo)
-                logger.info(
-                    f"Storage recalculated for {repo_id}: {final_repo.used_bytes:,} bytes"
-                )
-            except Exception as e:
-                logger.warning(f"Failed to recalculate storage for {repo_id}: {e}")
 
         logger.success(f"Repository squashed successfully: {repo_id}")
 
@@ -1377,9 +1286,9 @@ async def squash_repo(
                         to_namespace=namespace,
                         to_name=name,
                         moving_namespace=False,
-                        repo_size=0,
                         to_lakefs_repo=resolve_lakefs_repo(temp_repo),
                     )
+                usage.enqueue_repository_recount(temp_repo.id)  # its main may be the new one
                 logger.info("Recovery attempt completed")
         except Exception as recovery_error:
             logger.exception(f"Recovery failed: {recovery_error}")

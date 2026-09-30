@@ -379,12 +379,12 @@ POST /api/validate/check-name  - Check name availability
 
 2. **Storage Update After Commit**:
    ```
-   commit/operations.py → quota/util.update_namespace_storage()
+   commit/operations.py → commit/records.count_main_move() → usage.main_moved()
    ```
 
 3. **LFS Garbage Collection**:
    ```
-   repo/routers/crud.py → storage_cleanup.record_repository_lfs()
+   repo/routers/crud.py → db_operations.delete_repository() → storage_cleanup.schedule_repository_purge()
    commit/operations.py → lfs_gc.record_evicted_versions()
    (deletion runs in the storage.collect_lfs background task, see lfs_gc.py)
    ```

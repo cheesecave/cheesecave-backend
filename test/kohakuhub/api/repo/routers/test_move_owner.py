@@ -47,8 +47,7 @@ def _row(m, full_id):
 
 
 def _usage(m, name):
-    user = m.db.User.get(m.db.User.username == name)
-    return user.public_used_bytes + user.private_used_bytes
+    return sum(_live("kohakuhub.usage").namespace_usage([name])[name].values())
 
 
 def _owners(m, row):
@@ -99,8 +98,6 @@ async def test_a_repository_moved_into_an_organization_belongs_to_it(m, owner_cl
     assert response.status_code == 200, response.text
     # A repository of an account that will be deleted afterwards
     leaver, source = _hand_to(m, _row(m, repo.id), "leaver")
-    await m.quota.update_namespace_storage("leaver")
-    await m.quota.update_namespace_storage(ORG, True)
     size = _row(m, source).used_bytes
     assert size > 0
     user_before, org_before = _usage(m, "leaver"), _usage(m, ORG)
@@ -111,7 +108,7 @@ async def test_a_repository_moved_into_an_organization_belongs_to_it(m, owner_cl
     assert _owners(m, row) == (ORG, {ORG}, {ORG})
     assert (_usage(m, "leaver"), _usage(m, ORG)) == (user_before - size, org_before + size)
     info = (await owner_client.get(f"/api/quota/repo/model/{ORG}/move-hand-over")).json()
-    public = m.db.User.get(m.db.User.username == ORG).public_used_bytes
+    public = _live("kohakuhub.usage").namespace_used(ORG, False)
     assert info["namespace_used_bytes"] == public  # the organization's, not the leaver's
 
     # Deleting the account it came from leaves it, its commits and its data alone
@@ -162,9 +159,11 @@ async def test_a_rename_keeps_owner_and_usage(m, owner_client):
 
 
 def _migration():
+    """022 as the newest migration (later ones make it skip itself)."""
     spec = importlib.util.spec_from_file_location("migration_022", MIGRATION)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    module.should_skip_due_to_future_migrations = lambda *args: False
     return module
 
 

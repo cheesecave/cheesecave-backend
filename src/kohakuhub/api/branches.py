@@ -569,9 +569,8 @@ async def revert_branch(
         raise HTTPException(status_code=e.status, detail=e.detail)
     except Exception as e:
         logger.exception(f"Failed to revert commit: {e}", e)
-        # Whether the revert landed is unknown here: have the reconciliation
-        # record what the branch links (collection waits for it)
-        enqueue_lfs_reconciliation()
+        # Whether the revert landed is unknown here
+        records.outcome_unknown(repo_row, branch)
         raise HTTPException(status_code=500, detail={"error": f"Revert failed: {e}"})
     await records.record_commits(
         client, lakefs_repo, repo_row, branch, rounds, user, message, f"Reverted {commit_id}"
@@ -698,7 +697,7 @@ async def merge_branches(
         )
     else:
         logger.warning("Merge result did not contain commit reference")
-        enqueue_lfs_reconciliation()  # whatever it did, the reconciliation records it
+        records.outcome_unknown(repo_row, destination_branch)
 
     return {
         "success": True,
@@ -794,9 +793,8 @@ async def reset_branch(
         raise HTTPException(status_code=e.status, detail=e.detail)
     except Exception as e:
         logger.exception(f"Failed to reset branch: {e}", e)
-        # Whether a merge landed before the failure is unknown here: have the
-        # reconciliation record what the branch links (collection waits for it)
-        enqueue_lfs_reconciliation()
+        # Whether a merge landed before the failure is unknown here
+        records.outcome_unknown(repo_row, branch)
         raise HTTPException(status_code=500, detail={"error": f"Reset failed: {e}"})
     await records.record_commits(
         client, lakefs_repo, repo_row, branch, rounds, user, message, f"Reset to {commit_id}"

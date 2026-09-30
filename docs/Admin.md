@@ -481,60 +481,34 @@ curl -X PUT http://localhost:48888/admin/api/quota/alice \
   }'
 ```
 
-### Recalculate Storage
+### Recount Storage Usage
 
-**Purpose:** Re-scan all files and update storage usage.
+Usage is kept up to date as repositories change (see
+[Storage Quotas](features/core/quotas.md)). A recount sets exact values from
+what repositories hold and reports how far the kept numbers had drifted. It
+runs once on its own after upgrading.
 
-**When to use:**
-- Database out of sync
-- After manual S3 operations
-- Quota shows incorrect values
+**Admin Portal → Storage → Storage usage recount** starts one and shows the
+latest report: repositories recounted, how many had drifted and by how much,
+and the largest drifts.
 
-**Process:**
-1. Scans all files for namespace
-2. Sums file sizes (private and public separately)
-3. Updates User/Organization table
-
-**API Endpoint:**
+**API Endpoints:**
 ```bash
+# Every repository (background task usage.recount)
+curl -X POST http://localhost:48888/admin/api/usage/recount \
+  -H "X-Admin-Token: your-secret-token"
+curl http://localhost:48888/admin/api/usage/recount \
+  -H "X-Admin-Token: your-secret-token"
+
+# One namespace's repositories
 curl -X POST "http://localhost:48888/admin/api/quota/alice/recalculate?is_org=false" \
   -H "X-Admin-Token: your-secret-token"
-```
-
-### Bulk Storage Recalculation
-
-**NEW:** Recalculate storage for all repositories at once.
-
-**API Endpoint:**
-```bash
-# Recalculate all repositories
-curl -X POST http://localhost:48888/admin/api/repositories/recalculate-all \
-  -H "X-Admin-Token: your-secret-token"
-
-# Filter by type
-curl -X POST "http://localhost:48888/admin/api/repositories/recalculate-all?repo_type=model" \
-  -H "X-Admin-Token: your-secret-token"
-
-# Filter by namespace
 curl -X POST "http://localhost:48888/admin/api/repositories/recalculate-all?namespace=org" \
   -H "X-Admin-Token: your-secret-token"
 ```
 
-**Response:**
-```json
-{
-  "total": 250,
-  "success_count": 248,
-  "failure_count": 2,
-  "failures": [
-    {
-      "repo_id": "org/problem-repo",
-      "error": "Repository not found in LakeFS"
-    }
-  ],
-  "message": "Recalculated storage for 248/250 repositories"
-}
-```
+Each answers `{"task_id": ..., "already_pending": ...}` at once; follow the
+task under **Background Tasks**.
 
 ---
 
@@ -671,7 +645,9 @@ PATCH  /admin/api/users/{username}/email-verification  # Set verification
 ```
 GET /admin/api/repositories                # List repositories
 GET /admin/api/repositories/{type}/{namespace}/{name}  # Get details
-POST /admin/api/repositories/recalculate-all           # Bulk storage recalc
+POST /admin/api/repositories/recalculate-all           # Recount storage usage (background)
+GET  /admin/api/usage/recount                           # Latest usage recount and drift
+POST /admin/api/usage/recount                           # Recount every repository's usage
 ```
 
 **Commit History:**
@@ -697,7 +673,7 @@ GET /admin/api/stats/top-repos?by=commits  # Top repositories
 ```
 GET  /admin/api/quota/{namespace}          # Get quota
 PUT  /admin/api/quota/{namespace}          # Set quota
-POST /admin/api/quota/{namespace}/recalculate  # Recalculate
+POST /admin/api/quota/{namespace}/recalculate  # Recount (background)
 ```
 
 **Invitations:**

@@ -14,11 +14,10 @@ from kohakuhub.auth.permissions import (
 from kohakuhub.api.quota.util import (
     get_storage_info,
     set_quota,
-    update_namespace_storage,
     get_repo_storage_info,
     set_repo_quota,
-    update_repository_storage,
 )
+from kohakuhub import usage
 
 logger = get_logger("QUOTA")
 router = APIRouter()
@@ -233,9 +232,10 @@ async def recalculate_storage(
     namespace: str,
     user: User = Depends(get_current_user),
 ):
-    """Recalculate storage usage for a user or organization.
+    """Recount the storage usage of a user's or organization's repositories.
 
-    This can be useful if storage tracking gets out of sync.
+    Usage is kept up to date as repositories change; this schedules a recount
+    (the ``usage.recount`` task) and answers with the usage as it stands.
 
     Args:
         namespace: Username or organization name
@@ -271,9 +271,8 @@ async def recalculate_storage(
                 403, detail={"error": "You can only recalculate quota for yourself"}
             )
 
-    # Recalculate storage
-    logger.info(f"Recalculating storage for {'org' if is_org else 'user'} {namespace}")
-    await update_namespace_storage(namespace, is_org)
+    logger.info(f"Recounting storage for {'org' if is_org else 'user'} {namespace}")
+    usage.enqueue_recount(namespace)
 
     # Get updated info
     info = get_storage_info(namespace, is_org)
@@ -496,9 +495,10 @@ async def recalculate_repo_storage(
     name: str,
     user: User = Depends(get_current_user),
 ):
-    """Recalculate storage usage for a repository.
+    """Recount the storage usage of a repository, exactly.
 
-    This can be useful if storage tracking gets out of sync.
+    Usage is kept up to date as the repository changes; this sets it from
+    what the repository holds (``usage.recount_repository``).
 
     Args:
         repo_type: Repository type (model/dataset/space)
@@ -527,9 +527,9 @@ async def recalculate_repo_storage(
     # Check write permission
     check_repo_write_permission(repo, user)
 
-    # Recalculate storage
-    logger.info(f"Recalculating storage for repository {repo.full_id}")
-    await update_repository_storage(repo)
+    logger.info(f"Recounting storage for repository {repo.full_id}")
+    await usage.recount_repository(repo.id)
+    repo = Repository.get_by_id(repo.id)
 
     # Get updated info
     info = get_repo_storage_info(repo)

@@ -174,6 +174,12 @@ class Repository(BaseModel):
         null=True
     )  # NULL = no specific limit, inherit from namespace
     used_bytes = BigIntegerField(default=0)
+    # Kept up to date as the repository changes (kohakuhub.usage);
+    # used_bytes is their sum. A namespace's usage is summed from these.
+    main_regular_bytes = BigIntegerField(default=0)  # regular files on main
+    lfs_bytes = BigIntegerField(default=0)  # stored LFS objects its history links, once each
+    # The main commit main_regular_bytes counts up to; NULL = not aligned yet
+    main_counted_commit = CharField(max_length=64, null=True)
 
     # LFS settings (NULL = use server defaults from config)
     lfs_threshold_bytes = IntegerField(
@@ -192,7 +198,10 @@ class Repository(BaseModel):
 
     class Meta:
         # Unique constraint on (repo_type, namespace, name) allows same name across types
-        indexes = ((("repo_type", "namespace", "name"), True),)
+        indexes = (
+            (("repo_type", "namespace", "name"), True),
+            (("namespace", "private"), False),  # summing a namespace's usage
+        )
 
 
 class File(BaseModel):

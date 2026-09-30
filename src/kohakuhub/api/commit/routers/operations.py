@@ -9,6 +9,7 @@ import json
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
+from kohakuhub import usage
 from kohakuhub.config import cfg
 from kohakuhub.db import File, Repository, User
 from kohakuhub.db_operations import (
@@ -17,7 +18,6 @@ from kohakuhub.db_operations import (
     delete_file,
     get_effective_lfs_threshold,
     get_file,
-    get_organization,
     should_use_lfs,
     update_file,
 )
@@ -26,7 +26,6 @@ from kohakuhub.auth.dependencies import get_current_user
 from kohakuhub.auth.permissions import check_repo_write_permission
 from kohakuhub.utils.lakefs import get_lakefs_client, resolve_lakefs_repo
 from kohakuhub.utils.s3 import get_object_metadata, object_exists
-from kohakuhub.api.quota.util import update_namespace_storage, update_repository_storage
 from kohakuhub.api.repo.utils.gc import track_lfs_object
 from kohakuhub.lfs_gc import (
     LfsObjectUnavailable,
@@ -1048,26 +1047,10 @@ async def commit(
     ]
     record_head_change(repo_row, revision, head_paths, folders)
 
-    # Update storage usage for namespace and repository after successful commit
-    try:
-        # Recalculate repository storage (keeps repo.used_bytes accurate)
-        await update_repository_storage(repo_row)
-        logger.debug(
-            f"Updated repository storage for {repo_id}: {repo_row.used_bytes:,} bytes"
-        )
+    if revision == usage.MAIN:
+        from kohakuhub.api.commit.records import count_main_move  # imports this module
 
-        # Check if namespace is organization (User with is_org=True)
-        org = get_organization(namespace)
-        is_org = org is not None
-
-        # Recalculate namespace storage usage
-        await update_namespace_storage(namespace, is_org)
-        logger.debug(
-            f"Updated storage usage for {'org' if is_org else 'user'} {namespace}"
-        )
-    except Exception as e:
-        # Log error but don't fail the commit
-        logger.warning(f"Failed to update storage usage for {namespace}: {e}")
+        await count_main_move(client, lakefs_repo, repo_row, commit_result["id"])
 
     return {
         "commitUrl": commit_url,

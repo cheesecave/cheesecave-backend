@@ -149,7 +149,7 @@ response = requests.put(
 
 ### Recalculate Namespace Storage
 
-Recalculate total storage usage for a namespace (useful if tracking gets out of sync).
+Schedule a recount of a namespace's storage usage (the `usage.recount` background task). Usage is kept up to date as repositories change; the answer is the usage as it stands.
 
 **Endpoint:** `POST /api/quota/{namespace}/recalculate`
 
@@ -470,7 +470,7 @@ response = requests.put(
 
 ### Recalculate Repository Storage
 
-Recalculate storage usage for a specific repository.
+Recount a repository's storage usage exactly, from what it holds (it is kept up to date as the repository changes; this sets it from scratch).
 
 **Endpoint:** `POST /api/quota/repo/{repo_type}/{namespace}/{name}/recalculate`
 
