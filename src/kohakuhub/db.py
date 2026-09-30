@@ -184,6 +184,8 @@ class Repository(BaseModel):
     # api/repo/utils/operation_lock), and until when; writes wait or retry
     operation = CharField(max_length=64, null=True)
     operation_until = DateTimeField(null=True)
+    # A repository squash's commit: the commits it does not reach are gone
+    history_root = CharField(max_length=64, null=True)
 
     # LFS settings (NULL = use server defaults from config)
     lfs_threshold_bytes = IntegerField(
@@ -676,6 +678,21 @@ class LfsGcState(BaseModel):
         table_name = "lfs_gc_state"
 
 
+class RepositoryWrite(BaseModel):
+    """A write about to move a branch of a repository in LakeFS.
+
+    Registered before the lock of a history operation is checked, so the
+    operation waits for it (see api/repo/utils/operation_lock); it expires in
+    case its process dies.
+    """
+
+    repository = ForeignKeyField(Repository, on_delete="CASCADE", index=True)
+    until = DateTimeField()
+
+    class Meta:
+        table_name = "repository_write"
+
+
 class BackgroundWorker(BaseModel):
     """A worker process, registered at startup and kept fresh by heartbeats.
 
@@ -745,6 +762,7 @@ def init_db():
             LfsRecentObject,
             LfsHeadRef,
             LfsGcState,
+            RepositoryWrite,
         ],
         safe=True,
     )

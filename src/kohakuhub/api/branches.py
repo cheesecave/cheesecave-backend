@@ -29,6 +29,7 @@ from kohakuhub.api.commit import records, reset, revert, squash
 from kohakuhub.api.repo.utils import operation_lock
 from kohakuhub.api.repo.utils.hf import (
     HFErrorCode,
+    ensure_revision_in_history,
     hf_error_response,
     hf_repo_not_found,
     hf_server_error,
@@ -103,14 +104,17 @@ async def create_branch(
         # Resolve source revision — accept branch name, tag, or commit sha
         # (huggingface_hub.create_branch(revision=…) passes any of the three).
         source_ref = payload.revision or "main"
-        source_commit, _ = await resolve_revision(client, lakefs_repo, source_ref)
+        async with operation_lock.writing(repo_row):  # the source is read inside
+            source_commit, _ = await resolve_revision(client, lakefs_repo, source_ref, repo_row)
 
-        # Create new branch
-        await client.create_branch(
-            repository=lakefs_repo,
-            name=payload.branch,
-            source=source_commit,
-        )
+            # Create new branch
+            await client.create_branch(
+                repository=lakefs_repo,
+                name=payload.branch,
+                source=source_commit,
+            )
+    except HTTPException:
+        raise  # refused while an operation holds the repository
     except ValueError as e:
         # resolve_revision raises ValueError when the ref is neither branch
         # nor commit — surface it as a 404 RevisionNotFound to the client.
@@ -203,7 +207,10 @@ async def delete_branch(
     client = get_lakefs_client()
 
     try:
-        await client.delete_branch(repository=lakefs_repo, branch=branch)
+        async with operation_lock.writing(repo_row):
+            await client.delete_branch(repository=lakefs_repo, branch=branch)
+    except HTTPException:
+        raise  # refused while an operation holds the repository
     except Exception as e:
         return hf_server_error(f"Failed to delete branch: {str(e)}")
 
@@ -300,14 +307,17 @@ async def create_tag(
     try:
         # Resolve source revision — accept branch, tag, or commit sha.
         source_ref = payload.revision or "main"
-        source_commit, _ = await resolve_revision(client, lakefs_repo, source_ref)
+        async with operation_lock.writing(repo_row):  # the source is read inside
+            source_commit, _ = await resolve_revision(client, lakefs_repo, source_ref, repo_row)
 
-        # Create new tag
-        await client.create_tag(
-            repository=lakefs_repo,
-            id=payload.tag,
-            ref=source_commit,
-        )
+            # Create new tag
+            await client.create_tag(
+                repository=lakefs_repo,
+                id=payload.tag,
+                ref=source_commit,
+            )
+    except HTTPException:
+        raise  # refused while an operation holds the repository
     except ValueError as e:
         return hf_error_response(
             404,
@@ -379,7 +389,10 @@ async def delete_tag(
     client = get_lakefs_client()
 
     try:
-        await client.delete_tag(repository=lakefs_repo, tag=tag)
+        async with operation_lock.writing(repo_row):
+            await client.delete_tag(repository=lakefs_repo, tag=tag)
+    except HTTPException:
+        raise  # refused while an operation holds the repository
     except Exception as e:
         return hf_server_error(f"Failed to delete tag: {str(e)}")
 
@@ -550,6 +563,7 @@ async def revert_branch(
     lakefs_repo = resolve_lakefs_repo(repo_row)
     client = get_lakefs_client()
 
+    await ensure_revision_in_history(client, repo_row, lakefs_repo, payload.ref)
     # Resolve the ref to a commit ID (for logging/validation)
     try:
         commit = await client.get_commit(repository=lakefs_repo, commit_id=payload.ref)
@@ -568,16 +582,19 @@ async def revert_branch(
     # uncommitted changes with or without it.
     message = payload.message or f"Revert commit {commit_id[:8]}"
     try:
-        new_commit_id, rounds = await revert.revert_commit(
-            client,
-            lakefs_repo,
-            branch,
-            commit,
-            payload.parent_number,
-            message,
-            payload.metadata,
-            payload.allow_empty,
-        )
+        async with operation_lock.writing(repo_row):
+            new_commit_id, rounds = await revert.revert_commit(
+                client,
+                lakefs_repo,
+                branch,
+                commit,
+                payload.parent_number,
+                message,
+                payload.metadata,
+                payload.allow_empty,
+            )
+    except HTTPException:
+        raise  # refused while an operation holds the repository
     except records.OperationRefused as e:
         raise HTTPException(status_code=e.status, detail=e.detail)
     except Exception as e:
@@ -641,30 +658,44 @@ async def merge_branches(
     lakefs_repo = resolve_lakefs_repo(repo_row)
     client = get_lakefs_client()
 
+    await ensure_revision_in_history(client, repo_row, lakefs_repo, source_ref)
     # Perform the merge
     try:
-        # What the merge commit changed is measured from here
-        base = (await client.get_branch(repository=lakefs_repo, branch=destination_branch))[
-            "commit_id"
-        ]
-        merge_result = await client.merge_into_branch(
-            repository=lakefs_repo,
-            source_ref=source_ref,
-            destination_branch=destination_branch,
-            message=payload.message,
-            metadata=payload.metadata,
-            strategy=payload.strategy,
-            force=payload.force,
-            allow_empty=payload.allow_empty,
-            squash_merge=payload.squash_merge,
-        )
+        async with operation_lock.writing(repo_row):
+            # What the merge commit changed is measured from here
+            base = (await client.get_branch(repository=lakefs_repo, branch=destination_branch))[
+                "commit_id"
+            ]
+            merge_result = await client.merge_into_branch(
+                repository=lakefs_repo,
+                source_ref=source_ref,
+                destination_branch=destination_branch,
+                message=payload.message,
+                metadata=payload.metadata,
+                strategy=payload.strategy,
+                force=payload.force,
+                allow_empty=payload.allow_empty,
+                squash_merge=payload.squash_merge,
+            )
         logger.success(
             f"Successfully merged {source_ref} into {destination_branch} in {repo_id}"
         )
+    except HTTPException:
+        raise  # refused while an operation holds the repository
     except Exception as e:
         logger.exception(f"Failed to merge {source_ref} into {destination_branch}", e)
         error_msg = str(e)
         logger.error(f"Failed to merge branches: {error_msg}")
+
+        if "no merge base" in error_msg.lower():
+            # One of them was squashed (super_squash_history): nothing in common
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": f"{source_ref} and {destination_branch} share no history "
+                    "(one of them was squashed), so they cannot be merged.",
+                },
+            )
 
         # Check if it's a conflict error
         if "conflict" in error_msg.lower():
@@ -779,6 +810,7 @@ async def reset_branch(
     lakefs_repo = resolve_lakefs_repo(repo_row)
     client = get_lakefs_client()
 
+    await ensure_revision_in_history(client, repo_row, lakefs_repo, payload.ref)
     # Resolve the ref to a commit ID
     try:
         # Get the commit to reset to
@@ -797,9 +829,12 @@ async def reset_branch(
     # checked, ``force`` only allows resetting main (#107).
     message = payload.message or f"Reset to commit {commit_id[:8]}"
     try:
-        head, rounds = await reset.reset_branch(
-            client, repo_row, lakefs_repo, branch, commit_id, message
-        )
+        async with operation_lock.writing(repo_row):
+            head, rounds = await reset.reset_branch(
+                client, repo_row, lakefs_repo, branch, commit_id, message
+            )
+    except HTTPException:
+        raise  # refused while an operation holds the repository
     except records.OperationRefused as e:
         # Merged before giving up or failing: those commits are on the branch
         await records.record_commits(

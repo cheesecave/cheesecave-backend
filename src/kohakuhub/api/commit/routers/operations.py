@@ -944,22 +944,23 @@ async def commit(
             "pullRequestUrl": None,
         }
 
-    # A history operation holding the repository goes first; the staged
-    # changes then land on top of what it left
-    await operation_lock.wait_until_free(repo_row)
-
     # Create commit in LakeFS
     commit_msg = header.get("summary", "Commit via API")
     commit_desc = header.get("description", "")
     logger.info(f"Commit message: {commit_msg}")
 
     try:
-        commit_result = await client.commit(
-            repository=lakefs_repo,
-            branch=revision,
-            message=commit_msg,
-            metadata={"description": commit_desc} if commit_desc else None,
-        )
+        # A history operation holding the repository goes first; the staged
+        # changes then land on top of what it left (operation_lock)
+        async with operation_lock.writing(repo_row):
+            commit_result = await client.commit(
+                repository=lakefs_repo,
+                branch=revision,
+                message=commit_msg,
+                metadata={"description": commit_desc} if commit_desc else None,
+            )
+    except HTTPException:
+        raise  # refused while an operation holds the repository
     except Exception as e:
         raise HTTPException(500, detail={"error": f"Commit failed: {str(e)}"})
 

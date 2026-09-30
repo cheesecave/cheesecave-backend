@@ -175,10 +175,15 @@ of the moved one.
 
 **What it does:**
 1. `main` becomes a single commit with its current tree and no parent. It is made in place with LakeFS metadata operations, so nothing is copied and the repository keeps its name and data throughout. It takes about a second whatever the repository's size.
-2. The other branches and tags are deleted: only the current state is kept.
-3. In the background (`storage.forget_squashed_history`), the history and file rows of what is no longer reachable are forgotten. LFS garbage collection then removes the objects no repository relies on any more, and the repository's usage drops with them.
+2. The other branches and tags are deleted: only the current state is kept. The commits the squash commit does not reach are out of the history: every endpoint answers `404 RevisionNotFound` for them, and nothing restores them.
+3. A few minutes later, in the background (`storage.forget_squashed_history`):
+   - the history and file rows of what is no longer reachable are forgotten;
+   - the regular file objects only the old history had are deleted from storage;
+   - LFS garbage collection removes the objects no repository relies on any more.
 
-While it runs, other writes to the repository wait or answer `409` with `Retry-After`; a commit that was already uploading lands on top of the squash commit.
+   The repository's usage drops with them.
+
+While it runs, other writes to the repository wait for it; the ones that have not started answer `409` with `Retry-After`. A commit that was already uploading lands on top of the squash commit.
 
 To squash one branch and keep the others, use Hugging Face's `super_squash_history` (`POST /api/{repo_type}s/{namespace}/{name}/super-squash/{branch}`, see [Branch API](branches.md)).
 
@@ -201,6 +206,7 @@ To squash one branch and keep the others, use Hugging Face's `super_squash_histo
 - `403 Forbidden` - No permission
 - `404 Not Found` - Repository not found
 - `409 Conflict` - Another operation holds the repository, or `main` kept changing; retry
+- `502 Bad Gateway` - `main` was squashed but deleting another branch or tag failed; squash again to finish
 
 **Operation gate:** The server exposes the current `revert`, `reset`, and
 `squash` capabilities without authentication through `GET /api/site-config`.

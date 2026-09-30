@@ -378,6 +378,17 @@ class LakeFSRestClient:
             return
         self._check_response(response)
 
+    async def find_merge_base(self, repository: str, left: str, right: str) -> str | None:
+        """The merge base of two refs (commit ids accepted), or ``None`` when
+        they share no history."""
+        url = f"{self.base_url}/repositories/{repository}/refs/{left}/merge/{right}"
+        client = self._httpx()
+        response = await client.get(url, auth=self.auth, timeout=None)
+        if response.status_code >= 400 and "no merge base" in response.text:
+            return None
+        self._check_response(response)
+        return response.json()["base_commit_id"]
+
     async def get_commit(self, repository: str, commit_id: str) -> dict[str, Any]:
         """Get commit details.
 

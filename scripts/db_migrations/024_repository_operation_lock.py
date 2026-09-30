@@ -5,6 +5,10 @@ Migration 024: A history operation can hold a repository.
 Changes:
 - repository.operation: the operation holding the repository (with a token)
 - repository.operation_until: until when; an expired hold is free
+- repository.history_root: a repository squash's commit; the commits it does
+  not reach are gone
+- repository_write (+ repository_id index): writes about to move a branch in
+  LakeFS, which an operation waits for
 
 Super Squash moves a branch in a way LakeFS cannot make conditional; while it
 runs, writes to the repository are refused or wait
@@ -39,17 +43,31 @@ def is_applied(db, cfg):
         return False
     if not check_column_exists(db, cfg, "repository", "main_counted_commit"):
         return False
-    return check_column_exists(db, cfg, "repository", "operation_until")
+    if not check_column_exists(db, cfg, "repository", "history_root"):
+        return False
+    return check_table_exists(db, "repository_write")
 
 
-def _migrate(timestamp_type: str):
+def _migrate(timestamp_type: str, serial: str):
     cursor = db.cursor()
     print("Adding the operation lock to repository...")
     cursor.execute('ALTER TABLE "repository" ADD COLUMN "operation" VARCHAR(64)')
     cursor.execute(
         f'ALTER TABLE "repository" ADD COLUMN "operation_until" {timestamp_type}'
     )
-    print("  ✓ Added repository.operation and repository.operation_until")
+    cursor.execute('ALTER TABLE "repository" ADD COLUMN "history_root" VARCHAR(64)')
+    cursor.execute(
+        'CREATE TABLE IF NOT EXISTS "repository_write" ('
+        f'"id" {serial} NOT NULL PRIMARY KEY, '
+        '"repository_id" INTEGER NOT NULL, '
+        f'"until" {timestamp_type} NOT NULL, '
+        'FOREIGN KEY ("repository_id") REFERENCES "repository" ("id") ON DELETE CASCADE)'
+    )
+    cursor.execute(
+        'CREATE INDEX IF NOT EXISTS "repositorywrite_repository_id" '
+        'ON "repository_write" ("repository_id")'
+    )
+    print("  ✓ Added the repository lock columns, history_root and repository_write")
 
 
 def run():
@@ -77,7 +95,10 @@ def run():
         print(f"Migration {MIGRATION_NUMBER}: Repository operation lock")
         print("=" * 70)
         with db.atomic():
-            _migrate("TIMESTAMP" if cfg.app.db_backend == "postgres" else "DATETIME")
+            if cfg.app.db_backend == "postgres":
+                _migrate("TIMESTAMP", "SERIAL")
+            else:
+                _migrate("DATETIME", "INTEGER")
         print(f"Migration {MIGRATION_NUMBER}: ✓ Completed Successfully")
         return True
 

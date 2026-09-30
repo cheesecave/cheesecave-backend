@@ -49,7 +49,6 @@ def s(prepared_backend_test_state, monkeypatch):
     ns.s3 = _live("kohakuhub.utils.s3").get_s3_client()
     ns.rest = _live("kohakuhub.lakefs_rest_client")
     ns.rest._singleton_client = None
-    monkeypatch.setattr(ns.squash, "FENCE_SECONDS", 0)
     # The test's own reads: not the singleton, which the live server's loop may bind
     T = ns.db.BackgroundTask
     T.delete().where(T.kind == ns.cleanup.FORGET_SQUASHED_KIND).execute()
@@ -427,7 +426,6 @@ async def test_a_commit_already_uploading_lands_after_the_squash(
         return result
 
     monkeypatch.setattr(ops, "process_regular_file", slow)
-    monkeypatch.setattr(s.squash, "FENCE_SECONDS", 1.0)
 
     async def squash_meanwhile():
         await started.wait()
@@ -441,6 +439,26 @@ async def test_a_commit_already_uploading_lands_after_the_squash(
     assert [c["id"] for c in log][0] == commit and len(log) == 2
     assert log[1]["message"] == "Squash history" and not log[1]["parents"]
     assert "late.txt" in await _tree(s, repo)
+    # Forgetting what the squash made unreachable keeps what landed on top
+    (payload,) = _pending(s, s.cleanup.FORGET_SQUASHED_KIND)
+    await s.cleanup.forget_squashed_history(payload)
+    F = s.db.File
+    late = F.get((F.repository == _row(s, repo.id)) & (F.path_in_repo == "late.txt"))
+    assert not late.is_deleted
+
+    # A commit reaching LakeFS while the repository is held waits for it
+    started.clear()
+
+    async def hold_briefly():
+        await started.wait()
+        token = s.lock.acquire(_row(s, repo.id).id, "squash")
+        await asyncio.sleep(0.8)
+        s.lock.release(_row(s, repo.id).id, token)
+
+    commit, _ = await asyncio.gather(
+        repo.commit(_file("waited.txt", "w")), hold_briefly()
+    )
+    assert (await _log(s, repo))[0]["id"] == commit
 
     # One that cannot wait that long is refused
     monkeypatch.setattr(s.lock, "WAIT_SECONDS", 0.2)
@@ -650,8 +668,9 @@ def test_the_migration_adds_the_lock(s):
     D = s.db
     assert migration.is_applied(D.db, s.cfg)
     with D.db.atomic() as transaction:
-        for column in ("operation", "operation_until"):
+        for column in ("operation", "operation_until", "history_root"):
             D.db.execute_sql(f'ALTER TABLE "repository" DROP COLUMN "{column}"')
+        D.db.execute_sql('DROP TABLE "repository_write"')
         assert not migration.is_applied(D.db, s.cfg)
         assert migration.run() is True
         assert migration.is_applied(D.db, s.cfg)
@@ -672,7 +691,7 @@ def test_the_migration_reports_a_failure(s, monkeypatch):
     migration = _migration()
     monkeypatch.setattr(migration, "is_applied", lambda db, cfg: False)
 
-    def broken(timestamp_type):
+    def broken(timestamp_type, serial):
         raise RuntimeError("boom")
 
     monkeypatch.setattr(migration, "_migrate", broken)
@@ -681,3 +700,369 @@ def test_the_migration_reports_a_failure(s, monkeypatch):
         migration, "should_skip_due_to_future_migrations", lambda *a: True
     )
     assert migration.run() is True
+
+
+async def _squashed_with_history(s, owner_client, name):
+    """A repository squashed after some history: (repo, old commit, squash commit)."""
+    repo = await _new(s, owner_client, name)
+    old = await repo.commit(_file("a.txt", "old"), lfs("w.bin", b"old weights\n" * 20))
+    await repo.commit(_file("a.txt", "new"), lfs("w.bin", b"new weights\n" * 20))
+    assert (await _squash(owner_client, repo)).status_code == 200
+    return repo, old, (await _log(s, repo))[0]["id"]
+
+
+async def test_the_history_a_squash_removed_is_gone(
+    s, owner_client, live_server_url, hf_api_token
+):
+    """Nothing reads or restores a commit the squash commit does not reach."""
+    repo, old, root = await _squashed_with_history(s, owner_client, "squash-gone")
+    after = await repo.commit(_file("b.txt", "after"))
+    assert _row(s, repo.id).history_root == root
+    base = f"/api/models/{repo.id}"
+    gone = {
+        "commit": await owner_client.get(f"{base}/commit/{old}"),
+        "diff": await owner_client.get(f"{base}/commit/{old}/diff"),
+        "commits": await owner_client.get(f"{base}/commits/{old}"),
+        "operations": await owner_client.get(f"{base}/commit/{old}/operations"),
+        "list operations": await owner_client.post(
+            f"{base}/commits/{old}/operations", json={"commit_ids": [old]}
+        ),
+        "unavailable": await owner_client.get(f"{base}/commit/{old}/unavailable-files"),
+        "tree": await owner_client.get(f"{base}/tree/{old}"),
+        "paths-info": await owner_client.post(
+            f"{base}/paths-info/{old}", data={"paths": ["a.txt"]}
+        ),
+        "revision": await owner_client.get(f"{base}/revision/{old}"),
+        "resolve": await owner_client.get(f"/models/{repo.id}/resolve/{old}/a.txt"),
+        "reset": await owner_client.post(
+            f"{base}/branch/main/reset", json={"ref": old, "force": True}
+        ),
+        "revert": await owner_client.post(
+            f"{base}/branch/main/revert", json={"ref": old}
+        ),
+        "merge": await owner_client.post(f"{base}/merge/{old}/into/main", json={}),
+        "branch": await owner_client.post(
+            f"{base}/branch", json={"branch": "back", "revision": old}
+        ),
+        "tag": await owner_client.post(
+            f"{base}/tag", json={"tag": "back", "revision": old}
+        ),
+    }
+    assert {name: r.status_code for name, r in gone.items()} == {
+        name: 404 for name in gone
+    }
+    assert gone["resolve"].headers["x-error-code"] == "RevisionNotFound"
+    # What the squash left is all there: its commit, what came after, branches and tags
+    for ref in (root, after, root[:12]):
+        r = await owner_client.get(f"/models/{repo.id}/resolve/{ref}/a.txt")
+        assert r.status_code in (200, 302, 307), (ref, r.status_code)
+    assert (await owner_client.get(f"{base}/commit/{root}")).status_code == 200
+    response = await owner_client.post(
+        f"{base}/branch", json={"branch": "kept", "revision": root}
+    )
+    assert response.status_code == 200, response.text
+    response = await owner_client.post(
+        f"{base}/tag", json={"tag": "t1", "revision": "main"}
+    )
+    assert response.status_code == 200, response.text
+    assert (
+        await owner_client.get(f"/models/{repo.id}/resolve/t1/a.txt")
+    ).status_code in (200, 302, 307)
+    # huggingface_hub sees the old revision as missing
+    from huggingface_hub import hf_hub_download
+    from huggingface_hub.errors import RevisionNotFoundError
+
+    with pytest.raises(RevisionNotFoundError):
+        await _hf(
+            s,
+            hf_hub_download,
+            repo_id=repo.id,
+            filename="a.txt",
+            revision=old,
+            endpoint=live_server_url,
+            token=hf_api_token,
+            cache_dir=f"/tmp/hf-squash-{time.time()}",
+        )
+
+
+async def test_what_decides_the_history(s, owner_client, monkeypatch):
+    repo, old, root = await _squashed_with_history(s, owner_client, "squash-decides")
+    lakefs = _live("kohakuhub.utils.lakefs")
+    row = _row(s, repo.id)
+    # Remembered: a commit is asked about once
+    calls = []
+    find = s.client.find_merge_base
+
+    async def counted(**kwargs):
+        calls.append(kwargs)
+        return await find(**kwargs)
+
+    monkeypatch.setattr(s.client, "find_merge_base", counted)
+    lakefs._descends.clear()
+    assert not await lakefs.in_history(s.client, row, repo.lakefs_repo, old)
+    assert not await lakefs.in_history(s.client, row, repo.lakefs_repo, old)
+    assert len(calls) == 1
+    monkeypatch.setattr(lakefs, "DESCENDS_KEPT", 1)  # full: forgotten, asked again
+    after = await repo.commit(_file("c.txt", "c"))
+    assert await lakefs.in_history(s.client, row, repo.lakefs_repo, after)
+    assert len(lakefs._descends) == 1
+    # A repository never squashed, or its root itself, asks nothing
+    other = await _new(s, owner_client, "squash-decides-other")
+    assert await lakefs.ref_in_history(
+        s.client, _row(s, other.id), other.lakefs_repo, "whatever"
+    )
+    assert await lakefs.in_history(s.client, row, repo.lakefs_repo, root)
+
+    # LakeFS failing otherwise surfaces
+    def failing(status):
+        async def call(**kwargs):
+            request = httpx.Request("GET", "http://lakefs")
+            raise httpx.HTTPStatusError(
+                "x", request=request, response=httpx.Response(status, request=request)
+            )
+
+        return call
+
+    monkeypatch.setattr(s.client, "get_branch", failing(503))
+    with pytest.raises(httpx.HTTPStatusError):
+        await lakefs.ref_in_history(s.client, row, repo.lakefs_repo, old)
+    monkeypatch.setattr(s.client, "get_branch", failing(404))
+    monkeypatch.setattr(s.client, "get_commit", failing(503))
+    with pytest.raises(httpx.HTTPStatusError):
+        await lakefs.ref_in_history(s.client, row, repo.lakefs_repo, old)
+    monkeypatch.setattr(s.client, "get_commit", failing(404))
+    assert await lakefs.ref_in_history(
+        s.client, row, repo.lakefs_repo, "unknown"
+    )  # the caller says 404
+    monkeypatch.undo()
+    with pytest.raises(
+        httpx.HTTPStatusError
+    ):  # a merge base LakeFS cannot compute for another reason
+        await s.client.find_merge_base(
+            repository=repo.lakefs_repo, left="nope", right=root
+        )
+
+
+async def test_a_squash_waits_for_writes_under_way(s, owner_client, monkeypatch):
+    repo = await _new(s, owner_client, "squash-drain")
+    await repo.commit(_file("a.txt", "a"))
+    row = _row(s, repo.id)
+    W = s.db.RepositoryWrite
+    write = W.create(repository=row.id, until=s.db.utcnow() + timedelta(minutes=5))
+
+    async def finish_later():
+        await asyncio.sleep(0.6)
+        write.delete_instance()
+
+    started = time.monotonic()
+    response, _ = await asyncio.gather(_squash(owner_client, repo), finish_later())
+    assert response.status_code == 200 and time.monotonic() - started >= 0.5
+    # A registration whose writer died lapses; one that stays blocks, then refuses
+    W.create(repository=row.id, until=s.db.utcnow() - timedelta(seconds=1))
+    await repo.commit(_file("b.txt", "b"))
+    assert (await _squash(owner_client, repo)).status_code == 200
+    stuck = W.create(repository=row.id, until=s.db.utcnow() + timedelta(minutes=5))
+    monkeypatch.setattr(s.lock, "DRAIN_SECONDS", 0.3)
+    response = await _squash(owner_client, repo)
+    assert (
+        response.status_code == 409
+        and "writes before squash" in response.json()["detail"]["error"]
+    )
+    assert s.lock.holder(row.id) is None
+    stuck.delete_instance()
+
+
+async def test_the_lock_is_renewed_and_a_partial_squash_can_be_finished(
+    s, owner_client, monkeypatch
+):
+    repo = await _new(s, owner_client, "squash-partial")
+    await repo.commit(_file("a.txt", "a"), lfs("d.bin", b"dropped\n" * 20))
+    for name in ("b1", "b2"):
+        response = await owner_client.post(
+            f"/api/models/{repo.id}/branch", json={"branch": name, "revision": "main"}
+        )
+        assert response.status_code == 200, response.text
+    await repo.commit(lfs("only-b1.bin", b"only on b1\n" * 20), branch="b1")
+    response = await owner_client.post(
+        f"/api/models/{repo.id}/tag", json={"tag": "v1", "revision": "main"}
+    )
+    assert response.status_code == 200, response.text
+    row = _row(s, repo.id)
+    renewed = []
+    renew = s.lock.renew
+
+    def counting(repo_id, token):
+        renewed.append(renew(repo_id, token))
+        return renewed[-1]
+
+    monkeypatch.setattr(s.lock, "renew", counting)
+
+    async def refused(self, **kwargs):
+        request = httpx.Request("DELETE", "http://lakefs")
+        raise httpx.HTTPStatusError(
+            "x", request=request, response=httpx.Response(500, request=request)
+        )
+
+    delete_tag = type(s.client).delete_tag
+    monkeypatch.setattr(type(s.client), "delete_tag", refused)
+    response = await _squash(owner_client, repo)
+    assert response.status_code == 502, response.text
+    assert "squash again to finish" in response.json()["detail"]["error"]
+    assert renewed == [True, True]  # after each branch
+    assert len(await _log(s, repo)) == 1 and await _refs(s, repo) == (["main"], ["v1"])
+    # The dropped branch's objects were handed to the collection; the history stays for now
+    assert _sha(b"only on b1\n" * 20) in {
+        c.sha256 for c in s.db.LfsGcCandidate.select()
+    }
+    assert _row(s, repo.id).history_root is None and not _pending(
+        s, s.cleanup.FORGET_SQUASHED_KIND
+    )
+    monkeypatch.setattr(type(s.client), "delete_tag", delete_tag)
+    assert (await _squash(owner_client, repo)).status_code == 200
+    assert await _refs(s, repo) == (["main"], [])
+    assert _row(s, repo.id).history_root and _pending(s, s.cleanup.FORGET_SQUASHED_KIND)
+    assert not s.lock.renew(row.id, "squash:not-the-holder")
+
+
+async def test_the_old_regular_objects_are_deleted(s, owner_client, monkeypatch):
+    """Only what the old history had goes: what the squash commit, a branch
+    made afterwards, a commit afterwards and a staged upload link stays."""
+    repo = await _new(s, owner_client, "squash-purge")
+    await repo.commit(_file("a.txt", "a1"), _file("gone.txt", "g"))
+    await repo.commit(_file("a.txt", "a2"), _delete("gone.txt"))
+    old_objects = set()
+    for commit in await _log(s, repo):
+        page = await s.client.list_objects(
+            repository=repo.lakefs_repo, ref=commit["id"], amount=100
+        )
+        old_objects |= {o["physical_address"] for o in page["results"]}
+    assert (await _squash(owner_client, repo)).status_code == 200
+    (payload,) = _pending(s, s.cleanup.FORGET_SQUASHED_KIND)
+    task = s.db.BackgroundTask.get(
+        s.db.BackgroundTask.kind == s.cleanup.FORGET_SQUASHED_KIND
+    )
+    assert task.run_after > s.db.utcnow() + timedelta(
+        minutes=4
+    )  # after the uploads under way
+    current = {
+        o["physical_address"]
+        for o in (
+            await s.client.list_objects(
+                repository=repo.lakefs_repo, ref="main", amount=100
+            )
+        )["results"]
+    }
+    after = await repo.commit(_file("after.txt", "after"))
+    await s.client.upload_object(
+        repository=repo.lakefs_repo, branch="main", path="staged.txt", content=b"staged"
+    )
+    response = await owner_client.post(
+        f"/api/models/{repo.id}/branch", json={"branch": "later", "revision": "main"}
+    )
+    assert response.status_code == 200, response.text
+    monkeypatch.setattr(
+        s.cleanup, "LAKEFS_LIST_PAGE", 1
+    )  # branches and trees page by page
+    monkeypatch.setattr(s.cleanup, "S3_DELETE_BATCH", 1)  # the bucket too
+    await s.cleanup.forget_squashed_history(payload)
+
+    def stored(address):
+        bucket, _, key = address.removeprefix("s3://").partition("/")
+        try:
+            s.s3.head_object(Bucket=bucket, Key=key)
+            return True
+        except Exception:
+            return False
+
+    assert all(stored(a) for a in current)
+    assert not any(stored(a) for a in old_objects - current)
+    tree = {
+        o["path"]: o["physical_address"]
+        for o in (
+            await s.client.list_objects(
+                repository=repo.lakefs_repo, ref="main", amount=100
+            )
+        )["results"]
+    }
+    assert all(stored(tree[p]) for p in ("after.txt", "staged.txt", "a.txt"))
+    assert (
+        await owner_client.get(f"/models/{repo.id}/resolve/main/a.txt")
+    ).status_code in (200, 302, 307)
+    await s.cleanup.forget_squashed_history(payload)  # again: nothing more
+    assert all(stored(tree[p]) for p in ("after.txt", "staged.txt", "a.txt"))
+    # A storage namespace outside the bucket is not this service's to clean
+    get_repository = s.client.get_repository
+
+    async def elsewhere(**kwargs):
+        return {
+            **await get_repository(**kwargs),
+            "storage_namespace": "local://elsewhere/x",
+        }
+
+    monkeypatch.setattr(
+        type(s.client), "get_repository", lambda self, **kw: elsewhere(**kw)
+    )
+    await s.cleanup.forget_squashed_history(payload)
+
+
+async def test_writes_caught_by_a_squash_after_their_first_check_wait_or_retry(
+    s, owner_client, monkeypatch
+):
+    """A write that passed the first check before a squash took the
+    repository waits at LakeFS's door, and answers 409 if it waits too long."""
+    repo = await _new(s, owner_client, "squash-door")
+    first = await repo.commit(_file("a.txt", "a"))
+    await repo.commit(_file("a.txt", "b"))
+    response = await owner_client.post(
+        f"/api/models/{repo.id}/branch", json={"branch": "x", "revision": "main"}
+    )
+    assert response.status_code == 200, response.text
+    response = await owner_client.post(
+        f"/api/models/{repo.id}/tag", json={"tag": "t", "revision": "main"}
+    )
+    assert response.status_code == 200, response.text
+    monkeypatch.setattr(
+        s.lock, "ensure_free", lambda repo: None
+    )  # as if checked just before
+    monkeypatch.setattr(s.lock, "WAIT_SECONDS", 0.2)
+    row = _row(s, repo.id)
+    token = s.lock.acquire(row.id, "squash")
+    base = f"/api/models/{repo.id}"
+    refused = [
+        await owner_client.post(
+            f"{base}/branch", json={"branch": "y", "revision": "main"}
+        ),
+        await owner_client.delete(f"{base}/branch/x"),
+        await owner_client.post(f"{base}/tag", json={"tag": "u", "revision": "main"}),
+        await owner_client.delete(f"{base}/tag/t"),
+        await owner_client.post(f"{base}/branch/main/revert", json={"ref": first}),
+        await owner_client.post(
+            f"{base}/branch/main/reset", json={"ref": first, "force": True}
+        ),
+        await owner_client.post(f"{base}/merge/x/into/main", json={}),
+    ]
+    assert [r.status_code for r in refused] == [409] * len(refused)
+    assert all(r.json()["detail"]["operation"] == "squash" for r in refused)
+    s.lock.release(row.id, token)
+    assert await _refs(s, repo) == (["main", "x"], ["t"])  # nothing happened
+
+
+async def test_a_branch_squashed_alone_cannot_be_merged_back(s, owner_client):
+    repo = await _new(s, owner_client, "squash-unrelated")
+    await repo.commit(_file("a.txt", "a"))
+    response = await owner_client.post(
+        f"/api/models/{repo.id}/branch", json={"branch": "dev", "revision": "main"}
+    )
+    assert response.status_code == 200, response.text
+    await repo.commit(_file("dev.txt", "d"), branch="dev")
+    response = await owner_client.post(
+        f"/api/models/{repo.id}/super-squash/main", json={}
+    )
+    assert response.status_code == 200, response.text
+    response = await owner_client.post(
+        f"/api/models/{repo.id}/merge/dev/into/main", json={}
+    )
+    assert (
+        response.status_code == 409
+        and "share no history" in response.json()["detail"]["error"]
+    )

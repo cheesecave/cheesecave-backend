@@ -7,39 +7,47 @@ objects and the repository's name all stay, so a squash costs the same for
 any repository size and the repository never disappears meanwhile.
 
 A hard reset is not conditional, so the repository is held while it runs
-(``operation_lock``): writes that have not started wait or retry, and the
-head is read again right before the reset.
+(``operation_lock``): writes wait for the squash and the squash waits for
+the writes already under way.
 
 Squashing a repository (``whole_repository``) also deletes its other
-branches and tags, as it always has: only the current state is kept. The
-versions that became unreachable are forgotten in the background
-(``storage.forget_squashed_history``), and LFS garbage collection then
-removes the objects nothing else relies on. Squashing one branch
-(Hugging Face's ``super_squash_history``) keeps the other branches and
-tags, and the history they may still reach.
+branches and tags, as it always has: only the current state is kept, and
+the commits the squash commit does not reach are out of the history
+(``Repository.history_root``; nothing reads or restores them). In the
+background, ``storage.forget_squashed_history`` then forgets their history
+and file rows, deletes the regular file objects only they had, and leaves
+their LFS objects to garbage collection. Squashing one branch (Hugging
+Face's ``super_squash_history``) keeps the other branches and tags, and
+the history they reach.
 """
 
-import asyncio
 import hashlib
 import struct
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import httpx
 
 from kohakuhub import tasks, usage
 from kohakuhub.api.commit.records import OperationRefused, refused_by_lakefs
 from kohakuhub.api.repo.utils import operation_lock
-from kohakuhub.db import Commit, LFSObjectHistory, LfsHeadRef, Repository, User, db
+from kohakuhub.db import (
+    Commit,
+    LFSObjectHistory,
+    LfsHeadRef,
+    Repository,
+    User,
+    db,
+    utcnow,
+)
 from kohakuhub.db_operations import create_commit
 from kohakuhub.logger import get_logger
-from kohakuhub.storage_cleanup import FORGET_SQUASHED_KIND
+from kohakuhub.storage_cleanup import FORGET_SQUASHED_KIND, release_objects
 
 logger = get_logger("SQUASH")
 
 SQUASH_MESSAGE = "Squash history"
-# Commits already sent to LakeFS when the repository is taken land first
-FENCE_SECONDS = 1.0
+FORGET_DELAY = timedelta(minutes=5)
 MOVE_TRIES = 3  # the head moved between reading it and the reset
 PAGE = 1000
 
@@ -144,21 +152,24 @@ async def _names(list_page, key: str = "id") -> list[str]:
         after = page["pagination"]["next_offset"]
 
 
-async def _drop_other_refs(client, lakefs_repo: str, branch: str) -> list[str]:
-    """Delete every branch but ``branch``, and every tag; their names."""
+async def _drop_other_refs(
+    client, lakefs_repo: str, branch: str, renew, dropped: list[str]
+) -> None:
+    """Delete every branch but ``branch``, and every tag, adding their names
+    to ``dropped`` as they go; the lock is renewed after each one."""
     branches = await _names(
         lambda **kw: client.list_branches(repository=lakefs_repo, **kw)
     )
     tags = await _names(lambda **kw: client.list_tags(repository=lakefs_repo, **kw))
-    dropped = []
     for name in branches:
         if name != branch:
             await client.delete_branch(repository=lakefs_repo, branch=name)
             dropped.append(name)
+            renew()
     for name in tags:
         await client.delete_tag(repository=lakefs_repo, tag=name)
         dropped.append(f"tag:{name}")
-    return dropped
+        renew()
 
 
 def _record(
@@ -168,21 +179,31 @@ def _record(
     head: str,
     author: User,
     message: str,
+    dropped: list[str],
     whole_repository: bool,
 ) -> None:
-    """The database, as the squash left the repository (one transaction)."""
+    """The database, as the squash left the repository (one transaction).
+
+    ``whole_repository`` only when every other ref is gone: the commits the
+    squash commit does not reach are then out of the history.
+    """
     with db.atomic():
+        gone = [name for name in dropped if not name.startswith("tag:")]
+        if gone:
+            H = LfsHeadRef
+            refs = (H.repository == repo) & H.branch.in_(gone)
+            released = {sha for (sha,) in H.select(H.sha256).where(refs).tuples()}
+            H.delete().where(refs).execute()
+            release_objects(released)  # what only the dropped branches linked
         if whole_repository:
-            # Every commit but the new one is gone from every ref
             Commit.delete().where(Commit.repository == repo).execute()
-            LfsHeadRef.delete().where(
-                (LfsHeadRef.repository == repo) & (LfsHeadRef.branch != branch)
+            Repository.update(history_root=commit).where(
+                Repository.id == repo.id
             ).execute()
-            H = LFSObjectHistory
             through = (
-                H.select(H.id)
-                .where(H.repository == repo)
-                .order_by(H.id.desc())
+                LFSObjectHistory.select(LFSObjectHistory.id)
+                .where(LFSObjectHistory.repository == repo)
+                .order_by(LFSObjectHistory.id.desc())
                 .scalar()
             )
             tasks.enqueue(
@@ -195,6 +216,8 @@ def _record(
                         timezone.utc
                     ).isoformat(),  # as file rows are dated
                 },
+                # Uploads in flight at the squash are committed or staged by then
+                run_after=utcnow() + FORGET_DELAY,
             )
         create_commit(
             commit_id=commit,
@@ -222,17 +245,45 @@ async def squash(
 ) -> str:
     """Squash ``branch`` (and drop the other refs if ``whole_repository``);
     the new commit. Raises ``OperationRefused``."""
-    with operation_lock.held(repo, "squash"):
-        await asyncio.sleep(FENCE_SECONDS)
+    with operation_lock.held(repo, "squash") as token:
+        await operation_lock.drain(repo, "squash")
         commit, head = await _move(
             client, lakefs_repo, branch, author.username, message
         )
-        dropped = (
-            await _drop_other_refs(client, lakefs_repo, branch)
-            if whole_repository
-            else []
+        dropped, failure = [], None
+        if whole_repository:
+            try:
+                await _drop_other_refs(
+                    client,
+                    lakefs_repo,
+                    branch,
+                    lambda: operation_lock.renew(repo.id, token),
+                    dropped,
+                )
+            except httpx.HTTPStatusError as e:
+                failure = e
+        _record(
+            repo,
+            branch,
+            commit,
+            head,
+            author,
+            message,
+            dropped,
+            whole_repository and failure is None,
         )
-        _record(repo, branch, commit, head, author, message, whole_repository)
+    if failure is not None:
+        logger.warning(
+            f"Squashed {repo.full_id}@{branch}, but not all refs went: {failure}"
+        )
+        raise OperationRefused(
+            502,
+            {
+                "error": f"{branch} was squashed, but deleting the other branches and tags "
+                f"failed ({failure.response.status_code}); squash again to finish.",
+                "dropped": dropped,
+            },
+        )
     logger.success(
         f"Squashed {repo.full_id}@{branch}: {head[:8]} -> {commit[:8]}"
         + (f", dropped {len(dropped)} ref(s)" if dropped else "")

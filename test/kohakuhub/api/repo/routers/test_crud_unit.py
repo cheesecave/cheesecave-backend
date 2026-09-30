@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 import json
 from types import SimpleNamespace
 
@@ -154,8 +155,9 @@ def _async_return(value):
     return _inner()
 
 
-async def _async_none(*args, **kwargs):
-    return None
+@asynccontextmanager
+async def _no_lock(repo):
+    yield
 
 
 @pytest.fixture(autouse=True)
@@ -163,7 +165,7 @@ def _repository_not_held(monkeypatch):
     """No history operation holds the fake repositories (the lock itself is
     tested against the real database in test_super_squash.py)."""
     monkeypatch.setattr(repo_crud.operation_lock, "ensure_free", lambda repo: None)
-    monkeypatch.setattr(repo_crud.operation_lock, "wait_until_free", _async_none)
+    monkeypatch.setattr(repo_crud.operation_lock, "writing", _no_lock)
 
 
 @pytest.fixture(autouse=True)

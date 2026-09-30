@@ -6,10 +6,12 @@ This module provides utilities for making Kohaku Hub compatible with
 
 from typing import Optional
 
+from fastapi import HTTPException
 from fastapi.responses import Response
 from peewee import PeeweeException
 
 from kohakuhub.logger import get_logger
+from kohakuhub.utils.lakefs import ref_in_history
 
 logger = get_logger("HF")
 
@@ -238,6 +240,18 @@ def hf_revision_not_found(
         HFErrorCode.REVISION_NOT_FOUND,
         f"Revision '{revision}' not found in repository '{repo_id}'",
     )
+
+
+async def ensure_revision_in_history(client, repo, lakefs_repo: str, revision: str) -> None:
+    """404 RevisionNotFound for a commit a squash of ``repo`` removed
+    (``kohakuhub.utils.lakefs.in_history``)."""
+    if not await ref_in_history(client, repo, lakefs_repo, revision):
+        message = f"Revision '{revision}' not found in repository '{repo.full_id}'"
+        raise HTTPException(
+            status_code=404,
+            detail={"error": message},
+            headers={"X-Error-Code": HFErrorCode.REVISION_NOT_FOUND, "X-Error-Message": message},
+        )
 
 
 def hf_entry_not_found(

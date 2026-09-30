@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 
 import pytest
@@ -11,9 +12,9 @@ import kohakuhub.api.branches as branches_api
 import kohakuhub.api.operation_capabilities as operation_capabilities
 
 
-
-async def _async_none(*args, **kwargs):
-    return None
+@asynccontextmanager
+async def _no_lock(repo):
+    yield
 
 
 @pytest.fixture(autouse=True)
@@ -21,7 +22,7 @@ def _repository_not_held(monkeypatch):
     """No history operation holds the fake repositories (the lock itself is
     tested against the real database in test_super_squash.py)."""
     monkeypatch.setattr(branches_api.operation_lock, "ensure_free", lambda repo: None)
-    monkeypatch.setattr(branches_api.operation_lock, "wait_until_free", _async_none)
+    monkeypatch.setattr(branches_api.operation_lock, "writing", _no_lock)
 
 
 class _FakeClient:

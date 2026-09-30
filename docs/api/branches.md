@@ -339,6 +339,8 @@ Hugging Face's `super_squash_history`: the branch becomes a single commit with i
 
 **Status Codes:** `200`; `404` for a missing repository or branch (a tag cannot be squashed); `409` while another operation holds the repository; `503` when Squash is disabled.
 
+A squashed branch shares no history with the branches it came from, so merging one into the other answers `409`.
+
 ```python
 from huggingface_hub import HfApi
 

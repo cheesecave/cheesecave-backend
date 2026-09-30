@@ -496,7 +496,7 @@ async def list_repo_tree(
 
     try:
         resolved_revision, _ = await resolve_revision(
-            get_lakefs_client(), lakefs_repo, revision
+            get_lakefs_client(), lakefs_repo, revision, repo_row
         )
     except Exception:
         return hf_revision_not_found(repo_id, revision)
@@ -617,7 +617,7 @@ async def get_paths_info(
     lakefs_repo = resolve_lakefs_repo(repo_row)
     try:
         resolved_revision, _ = await resolve_revision(
-            get_lakefs_client(), lakefs_repo, revision
+            get_lakefs_client(), lakefs_repo, revision, repo_row
         )
     except Exception:
         return hf_revision_not_found(repo_id, revision)
