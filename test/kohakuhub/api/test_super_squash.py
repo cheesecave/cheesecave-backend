@@ -1080,7 +1080,9 @@ async def test_a_branch_squashed_alone_cannot_be_merged_back(s, owner_client):
     )
 
 
-async def test_the_purge_keeps_whatever_the_history_left_links(s, owner_client):
+async def test_the_purge_keeps_whatever_the_history_left_links(
+    s, owner_client, monkeypatch
+):
     """Objects of the squash commit a later commit replaced, a tag on it, and
     a version made after the squash and replaced since all stay."""
     repo = await _new(s, owner_client, "squash-keeps")
@@ -1110,9 +1112,22 @@ async def test_the_purge_keeps_whatever_the_history_left_links(s, owner_client):
     await repo.commit(
         _file("a.txt", "a3"), _delete("b.txt")
     )  # replaces what the root had
-    between = await repo.commit(_file("c.txt", "c1"))
+    between = await repo.commit(_file("c.txt", "c1"), _file("d.txt", "d1"))
     c1 = await address(between, "c.txt")
     await repo.commit(_file("c.txt", "c2"))  # replaces a version made after the squash
+    # A branch squashed alone since: its commit has no parent, all of it stays
+    response = await owner_client.post(
+        f"/api/models/{repo.id}/branch", json={"branch": "alone", "revision": "main"}
+    )
+    assert response.status_code == 200, response.text
+    alone_before = await repo.commit(_file("e.txt", "e1"), branch="alone")
+    e1 = await address(alone_before, "e.txt")
+    response = await owner_client.post(
+        f"/api/models/{repo.id}/super-squash/alone", json={}
+    )
+    assert response.status_code == 200, response.text
+    await repo.commit(_file("e.txt", "e2"), branch="alone")
+    monkeypatch.setattr(s.cleanup, "LAKEFS_LIST_PAGE", 1)  # two changes: one listing
     await s.cleanup.forget_squashed_history(payload)
 
     def stored(address):
@@ -1123,7 +1138,7 @@ async def test_the_purge_keeps_whatever_the_history_left_links(s, owner_client):
         except Exception:
             return False
 
-    assert all(stored(a) for a in in_root.values()) and stored(c1)
+    assert all(stored(a) for a in in_root.values()) and stored(c1) and stored(e1)
     assert not stored(old_a)  # only the old history had it
     for ref in (root, "v1"):
         r = await owner_client.get(f"/models/{repo.id}/resolve/{ref}/b.txt")
@@ -1237,6 +1252,17 @@ async def test_the_registration_lives_as_long_as_the_write(
         (registration,) = W.select().where(W.repository == row.id)
         await asyncio.sleep(0.5)  # longer than it was registered for
         assert W.get_by_id(registration.id).until > s.db.utcnow()
+    assert not W.select().where(W.repository == row.id).exists()
+
+    # A renewal that fails is logged and tried again; the write goes on
+    def down(cls, **kwargs):
+        raise RuntimeError("database hiccup")
+
+    monkeypatch.setattr(W, "update", classmethod(down))
+    async with s.lock.writing(row):
+        await asyncio.sleep(0.5)
+    monkeypatch.undo()
+    monkeypatch.setattr(s.cfg.app, "repository_squash_enabled", True)
     assert not W.select().where(W.repository == row.id).exists()
     # A lapsed registration is cleared when a squash looks
     W.create(repository=row.id, until=s.db.utcnow() - timedelta(seconds=1))

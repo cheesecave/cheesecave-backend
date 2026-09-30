@@ -560,9 +560,13 @@ async def _linked_since(
             )
         )
         async for commit in log:
-            if commit["id"] in seen or not commit["parents"]:
+            if commit["id"] in seen:
                 continue
             seen.add(commit["id"])
+            if not commit["parents"]:  # another squash's commit: all of it
+                tree = await _tree(client, lakefs_repo, commit["id"])
+                addresses.update(o["physical_address"] for o in tree)
+                continue
             changes = _pages(
                 lambda after: client.diff_refs(
                     repository=lakefs_repo,
@@ -573,11 +577,19 @@ async def _linked_since(
                     diff_type="two_dot",
                 )
             )
-            async for change in changes:
-                if change.get("path_type", "object") != "object" or change["type"] == "removed":
-                    continue
+            paths = [
+                change["path"]
+                async for change in changes
+                if change.get("path_type", "object") == "object" and change["type"] != "removed"
+            ]
+            if len(paths) > LAKEFS_LIST_PAGE:  # one listing beats a stat per path
+                wanted = set(paths)
+                tree = await _tree(client, lakefs_repo, commit["id"])
+                addresses.update(o["physical_address"] for o in tree if o["path"] in wanted)
+                continue
+            for path in paths:
                 stat = await client.stat_object(
-                    repository=lakefs_repo, ref=commit["id"], path=change["path"]
+                    repository=lakefs_repo, ref=commit["id"], path=path
                 )
                 addresses.add(stat["physical_address"])
     return addresses

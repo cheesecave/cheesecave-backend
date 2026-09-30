@@ -19,8 +19,10 @@ def get_lakefs_client() -> LakeFSRestClient:
     return get_lakefs_rest_client()
 
 
-# (LakeFS repository, history root, commit) -> whether the commit descends
-# from the root: facts about immutable commits, so they can be kept
+# (LakeFS repository, history root, commit) -> whether the commit is in the
+# history. Descending from the root is a fact about immutable commits; being
+# reached from a branch or tag is kept too, as a repository never squashed
+# keeps reading the commits of a deleted branch by id
 _descends: dict[tuple[str, str, str], bool] = {}
 DESCENDS_KEPT = 100_000
 HEADS_PAGE = 1000

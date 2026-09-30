@@ -30,6 +30,9 @@ from datetime import timedelta
 from fastapi import HTTPException
 
 from kohakuhub.db import Repository, RepositoryWrite, utcnow
+from kohakuhub.logger import get_logger
+
+logger = get_logger("OPERATION_LOCK")
 
 LOCK_SECONDS = 60  # a crashed holder frees the repository after this long
 WRITE_SECONDS = 600  # a crashed writer's registration lapses after this long
@@ -138,9 +141,14 @@ async def writing(repo: Repository):
     async def keep_registered():
         while True:
             await asyncio.sleep(WRITE_SECONDS / 3)
-            W.update(until=utcnow() + timedelta(seconds=WRITE_SECONDS)).where(
-                W.id == registration.id
-            ).execute()
+            try:
+                W.update(until=utcnow() + timedelta(seconds=WRITE_SECONDS)).where(
+                    W.id == registration.id
+                ).execute()
+            except Exception as e:  # tried again next time
+                logger.warning(
+                    f"Could not renew a write registration of {repo.full_id}: {e}"
+                )
 
     renewing = asyncio.create_task(keep_registered())
     try:
