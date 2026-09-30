@@ -68,7 +68,7 @@ async function start() {
 }
 
 function formatTime(value) {
-  return value ? dayjs(value).format("YYYY-MM-DD HH:mm:ss") : "never";
+  return dayjs(value).format("YYYY-MM-DD HH:mm:ss");
 }
 
 function formatDifference(bytes) {

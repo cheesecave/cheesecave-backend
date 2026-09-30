@@ -11,6 +11,7 @@ import json
 import random
 from pathlib import Path
 
+import httpx
 import pytest
 from peewee import fn
 
@@ -653,3 +654,50 @@ async def test_counting_without_row_locks(u, owner_client, monkeypatch):
     assert _kept(u, repo.id) == (9, 99)
     assert await u.usage.recount_repository(_row(u, repo.id).id) is not None
     await _assert_exact(u, repo.id)
+
+
+async def test_recount_edges(u, owner_client, monkeypatch):
+    repo = await _new(u, owner_client, "usage-edges")
+    await repo.commit(*[_file(f"f{i}.txt", "e" * (i + 1)) for i in range(5)])
+    row = _row(u, repo.id)
+    # Listed page by page
+    monkeypatch.setattr(u.usage, "LIST_PAGE", 2)
+    u.db.Repository.update(main_regular_bytes=0, used_bytes=0).where(
+        u.db.Repository.id == row.id
+    ).execute()
+    await u.usage.recount_repository(row.id)
+    await _assert_exact(u, repo.id)
+
+    # Without a main branch nothing regular counts; other LakeFS failures surface
+    client = u.lakefs.get_lakefs_client()
+
+    def failing(status):
+        async def get_branch(**kwargs):
+            request = httpx.Request("GET", "http://lakefs")
+            raise httpx.HTTPStatusError(
+                "x", request=request, response=httpx.Response(status, request=request)
+            )
+
+        return get_branch
+
+    monkeypatch.setattr(client, "get_branch", failing(404))
+    assert await u.usage._main_regular_bytes(row) == (None, 0)
+    monkeypatch.setattr(client, "get_branch", failing(503))
+    with pytest.raises(httpx.HTTPStatusError):
+        await u.usage._main_regular_bytes(row)
+
+    # Only sha256 objects are LFS objects; one no history links changes nothing
+    before = _kept(u, repo.id)
+    u.usage.object_gone("d41d8cd98f00b204e9800998ecf8427e")
+    u.usage.object_back("f" * 64)
+    assert _kept(u, repo.id) == before
+
+    # A repository changing while the full recount reaches it is left to its own recount
+    async def busy(repo_id):
+        return None
+
+    monkeypatch.setattr(u.usage, "recount_repository", busy)
+    ctx = _live("kohakuhub.task_testing").RecordingContext(kind=u.usage.RECOUNT_KIND)
+    await u.usage.recount({"namespace": "owner"}, ctx)
+    stats = ctx.checkpoint_state["stats"]
+    assert stats["busy"] == stats["repositories"] > 0
