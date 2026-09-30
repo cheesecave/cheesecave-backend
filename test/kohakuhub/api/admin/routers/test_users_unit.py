@@ -73,6 +73,8 @@ class _FakeUserModel:
     username = _Field("username")
     email = _Field("email")
     is_org = _Field("is_org")
+    private_quota_bytes = _Field("private_quota_bytes")
+    public_quota_bytes = _Field("public_quota_bytes")
 
     select_query = _Query()
     get_or_none_responses = []
@@ -112,6 +114,15 @@ def _reset_models():
     _FakeRepositoryModel.reset()
 
 
+def _usage(monkeypatch, used):
+    """Summed usage per namespace (kohakuhub.usage), as the routes read it."""
+    monkeypatch.setattr(
+        admin_users,
+        "namespace_usage",
+        lambda names: {name: used.get(name, {"private": 0, "public": 0}) for name in names},
+    )
+
+
 @pytest.mark.asyncio
 async def test_get_user_info_and_list_users_cover_not_found_and_filters(monkeypatch):
     created_at = datetime(2024, 1, 2, tzinfo=timezone.utc)
@@ -124,8 +135,6 @@ async def test_get_user_info_and_list_users_cover_not_found_and_filters(monkeypa
         is_org=False,
         private_quota_bytes=100,
         public_quota_bytes=200,
-        private_used_bytes=10,
-        public_used_bytes=20,
         created_at=created_at,
     )
     org = SimpleNamespace(
@@ -137,12 +146,18 @@ async def test_get_user_info_and_list_users_cover_not_found_and_filters(monkeypa
         is_org=True,
         private_quota_bytes=300,
         public_quota_bytes=400,
-        private_used_bytes=30,
-        public_used_bytes=40,
         created_at=created_at,
     )
 
     monkeypatch.setattr(admin_users, "User", _FakeUserModel)
+    _usage(
+        monkeypatch,
+        {"alice": {"private": 10, "public": 20}, "org-team": {"private": 30, "public": 40}},
+    )
+    _usage(
+        monkeypatch,
+        {"alice": {"private": 10, "public": 20}, "org-team": {"private": 30, "public": 40}},
+    )
 
     with pytest.raises(HTTPException) as not_found:
         await admin_users.get_user_info("missing")
@@ -192,13 +207,12 @@ async def test_create_user_and_delete_user_cover_conflicts_force_and_success(mon
         is_org=False,
         private_quota_bytes=123,
         public_quota_bytes=456,
-        private_used_bytes=0,
-        public_used_bytes=0,
         created_at=created_at,
     )
     repo = SimpleNamespace(repo_type="model", full_id="bob/demo")
 
     monkeypatch.setattr(admin_users, "User", _FakeUserModel)
+    _usage(monkeypatch, {})
     monkeypatch.setattr(admin_users, "Repository", _FakeRepositoryModel)
     monkeypatch.setattr(
         admin_users, "db", SimpleNamespace(atomic=lambda: _AtomicContext(atomic_state))
@@ -282,12 +296,11 @@ async def test_email_verification_and_quota_update_cover_not_found_and_success(m
         email_verified=False,
         private_quota_bytes=10,
         public_quota_bytes=20,
-        private_used_bytes=1,
-        public_used_bytes=2,
-        save=lambda: save_calls.append("saved"),
+        save=lambda **kwargs: save_calls.append("saved"),
     )
 
     monkeypatch.setattr(admin_users, "User", _FakeUserModel)
+    _usage(monkeypatch, {"alice": {"private": 1, "public": 2}})
 
     _FakeUserModel.get_or_none_responses = [None]
     with pytest.raises(HTTPException) as verification_missing:

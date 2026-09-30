@@ -4,6 +4,7 @@ import { useRouter } from "vue-router";
 import AdminLayout from "@/components/AdminLayout.vue";
 import OrphanLakefsRepos from "@/components/storage/OrphanLakefsRepos.vue";
 import LfsReconciliation from "@/components/storage/LfsReconciliation.vue";
+import UsageRecount from "@/components/storage/UsageRecount.vue";
 import { useAdminStore } from "@/stores/admin";
 import {
   listS3Buckets,
@@ -399,6 +400,17 @@ onMounted(() => {
           ElMessage.error(
             $event.response?.data?.detail?.error ||
               'LFS reference reconciliation failed',
+          )
+        "
+      />
+
+      <UsageRecount
+        class="mt-6"
+        :token="adminStore.token"
+        @error="
+          ElMessage.error(
+            $event.response?.data?.detail?.error ||
+              'Storage usage recount failed',
           )
         "
       />

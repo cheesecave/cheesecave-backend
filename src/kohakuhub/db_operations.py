@@ -34,7 +34,7 @@ from kohakuhub.db import (
     UserOrganization,
     db,
 )
-from kohakuhub import lfs_gc
+from kohakuhub import lfs_gc, usage
 from kohakuhub.storage_cleanup import schedule_repository_purge
 from kohakuhub.utils.names import normalize_name
 
@@ -251,10 +251,10 @@ def delete_repository(repo: Repository) -> None:
 
 
 def update_repository(repo: Repository, **fields) -> None:
-    """Update repository fields."""
+    """Update repository fields, and only them (the usage counters move on their own)."""
     for key, value in fields.items():
         setattr(repo, key, value)
-    repo.save()
+    repo.save(only=[getattr(Repository, key) for key in fields])
 
 
 def list_repositories(
@@ -677,14 +677,16 @@ def create_lfs_history(
 
     logger = get_logger("DB")
 
-    entry = LFSObjectHistory.create(
-        repository=repository,
-        path_in_repo=path_in_repo,
-        sha256=sha256,
-        size=size,
-        commit_id=commit_id,
-        file=file,  # Optional FK to File for faster lookups
-    )
+    with db.atomic():
+        usage.lfs_linked(repository.id, {sha256: size})
+        entry = LFSObjectHistory.create(
+            repository=repository,
+            path_in_repo=path_in_repo,
+            sha256=sha256,
+            size=size,
+            commit_id=commit_id,
+            file=file,  # Optional FK to File for faster lookups
+        )
 
     logger.success(
         f"[LFS_HISTORY_CREATE] repo={repository.full_id}, "

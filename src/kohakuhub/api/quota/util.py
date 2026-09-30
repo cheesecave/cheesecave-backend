@@ -1,226 +1,15 @@
 """Storage quota utilities for KohakuHub with separate private/public quotas.
 
-This module provides functions to calculate, track, and enforce storage quotas
-for users and organizations with separate tracking for private and public repositories.
+Enforces the quotas of users and organizations, private and public
+repositories apart. Usage itself is kept by ``kohakuhub.usage``.
 """
 
-import asyncio
-
-from peewee import fn
-
-from kohakuhub.config import cfg
-from kohakuhub.db import File, LFSObjectHistory, LfsObjectTombstone, Repository, User
+from kohakuhub.db import Repository, User
 from kohakuhub.db_operations import get_organization
 from kohakuhub.logger import get_logger
-from kohakuhub.utils.lakefs import get_lakefs_client, resolve_lakefs_repo
+from kohakuhub.usage import namespace_usage, namespace_used
 
 logger = get_logger("QUOTA")
-
-
-async def calculate_repository_storage(repo: Repository) -> dict[str, int]:
-    """Calculate total storage usage for a repository.
-
-    Storage calculation:
-    - Non-LFS files: Counted from current branch
-    - LFS files: Counted from ALL history (all versions, including deleted)
-
-    This ensures:
-    - Deleting LFS files doesn't decrease quota (LFS cache preserved)
-    - No double counting of LFS files
-
-    Args:
-        repo: Repository model instance
-
-    Returns:
-        Dict with keys:
-        - total_bytes: Total storage used (non-LFS current + all LFS history)
-        - current_branch_bytes: Storage in current branch (all files)
-        - current_branch_non_lfs_bytes: Non-LFS files in current branch
-        - lfs_total_bytes: Total LFS storage (all versions)
-        - lfs_unique_bytes: Unique LFS storage (deduplicated by SHA256)
-    """
-    lakefs_repo = resolve_lakefs_repo(repo)
-    client = get_lakefs_client()
-
-    # Bulk-load LFS flag for every active file in this repo *once* up front,
-    # so the per-object loop below is O(1) lookup instead of O(N) DB queries.
-    # The (repository, path_in_repo) composite index makes this scan cheap
-    # even for repos with tens of thousands of files.
-    file_is_lfs: dict[str, bool] = {
-        path: lfs
-        for path, lfs in File.select(File.path_in_repo, File.lfs)
-        .where((File.repository == repo) & (File.is_deleted == False))
-        .tuples()
-        .iterator()
-    }
-
-    # Calculate current branch storage (all files)
-    current_branch_bytes = 0
-    current_branch_lfs_bytes = 0
-
-    try:
-        # List all objects in main branch
-        after = ""
-        has_more = True
-
-        while has_more:
-            result = await client.list_objects(
-                repository=lakefs_repo,
-                ref="main",
-                delimiter="",  # Recursive
-                amount=1000,
-                after=after,
-            )
-
-            for obj in result["results"]:
-                if obj["path_type"] == "object":
-                    size = obj.get("size_bytes") or 0
-                    current_branch_bytes += size
-
-                    # Look up LFS flag from the bulk-loaded dict.
-                    # Missing path or non-LFS file → counted as non-LFS, matching
-                    # the previous semantics (File.get_or_none returning None or
-                    # a row with lfs=False both yielded "non-LFS").
-                    if file_is_lfs.get(obj.get("path"), False):
-                        current_branch_lfs_bytes += size
-
-            if result.get("pagination") and result["pagination"].get("has_more"):
-                after = result["pagination"]["next_offset"]
-                has_more = True
-            else:
-                has_more = False
-
-    except Exception as e:
-        logger.warning(
-            f"Failed to calculate current branch storage for {repo.full_id}: {e}"
-        )
-
-    # Calculate non-LFS storage in current branch
-    current_branch_non_lfs_bytes = current_branch_bytes - current_branch_lfs_bytes
-
-    # Calculate LFS storage from history (all versions, including deleted),
-    # except objects garbage collection removed: history rows outlive them
-    # and their tombstones say they are gone (#114).
-    # SQL aggregation avoids pulling every history row into Python.
-    stored = (LFSObjectHistory.repository == repo) & LFSObjectHistory.sha256.not_in(
-        LfsObjectTombstone.select(LfsObjectTombstone.sha256)
-    )
-    lfs_total_bytes = (
-        LFSObjectHistory.select(fn.COALESCE(fn.SUM(LFSObjectHistory.size), 0))
-        .where(stored)
-        .scalar()
-        or 0
-    )
-
-    # Unique LFS storage: SUM over distinct (sha256, size) pairs for this repo.
-    # Built as a subquery so the SUM happens server-side instead of pulling
-    # every distinct row into Python.
-    unique_subquery = (
-        LFSObjectHistory.select(LFSObjectHistory.sha256, LFSObjectHistory.size)
-        .where(stored)
-        .distinct()
-        .alias("u")
-    )
-    lfs_unique_bytes = (
-        LFSObjectHistory.select(fn.COALESCE(fn.SUM(unique_subquery.c.size), 0))
-        .from_(unique_subquery)
-        .scalar()
-        or 0
-    )
-
-    # Total storage = non-LFS in current branch + unique LFS storage (deduplicated)
-    # Using lfs_unique_bytes ensures global deduplication works correctly for quota
-    # This avoids counting the same SHA256 object multiple times across versions
-    total_bytes = current_branch_non_lfs_bytes + lfs_unique_bytes
-
-    return {
-        "total_bytes": total_bytes,
-        "current_branch_bytes": current_branch_bytes,
-        "current_branch_non_lfs_bytes": current_branch_non_lfs_bytes,
-        "lfs_total_bytes": lfs_total_bytes,
-        "lfs_unique_bytes": lfs_unique_bytes,
-    }
-
-
-async def calculate_namespace_storage(
-    namespace: str, is_org: bool = False
-) -> dict[str, int]:
-    """Calculate total storage usage for a user or organization by privacy.
-
-    Args:
-        namespace: Username or organization name
-        is_org: True if namespace is an organization
-
-    Returns:
-        Dict with keys:
-        - private_bytes: Total private repository storage
-        - public_bytes: Total public repository storage
-        - total_bytes: Total storage
-    """
-
-    # Get all repositories in this namespace
-    repos = list(Repository.select().where(Repository.namespace == namespace))
-
-    # Separate repos by privacy
-    private_repos = [r for r in repos if r.private]
-    public_repos = [r for r in repos if not r.private]
-
-    # Calculate storage for all repos in parallel
-    private_bytes = 0
-    public_bytes = 0
-
-    if private_repos:
-        stats_list = await asyncio.gather(
-            *[calculate_repository_storage(repo) for repo in private_repos]
-        )
-        private_bytes = sum(stats["total_bytes"] for stats in stats_list)
-
-    if public_repos:
-        stats_list = await asyncio.gather(
-            *[calculate_repository_storage(repo) for repo in public_repos]
-        )
-        public_bytes = sum(stats["total_bytes"] for stats in stats_list)
-
-    total_bytes = private_bytes + public_bytes
-
-    logger.info(
-        f"Calculated storage for {'org' if is_org else 'user'} {namespace}: "
-        f"private={private_bytes:,} bytes, public={public_bytes:,} bytes, total={total_bytes:,} bytes"
-    )
-
-    return {
-        "private_bytes": private_bytes,
-        "public_bytes": public_bytes,
-        "total_bytes": total_bytes,
-    }
-
-
-async def update_namespace_storage(
-    namespace: str, is_org: bool = False
-) -> dict[str, int]:
-    """Recalculate and update storage usage for a user or organization.
-
-    Args:
-        namespace: Username or organization name
-        is_org: True if namespace is an organization
-
-    Returns:
-        Dict with updated storage usage (private_bytes, public_bytes, total_bytes)
-    """
-    storage = await calculate_namespace_storage(namespace, is_org)
-
-    # Update database - organizations are now users with is_org=True
-    if is_org:
-        entity = get_organization(namespace)
-    else:
-        entity = User.get(User.username == namespace)
-
-    if entity:
-        entity.private_used_bytes = storage["private_bytes"]
-        entity.public_used_bytes = storage["public_bytes"]
-        entity.save()
-
-    return storage
 
 
 def check_quota(
@@ -247,24 +36,15 @@ def check_quota(
     if not entity:
         return False, f"{'Organization' if is_org else 'User'} not found: {namespace}"
 
-    private_quota = entity.private_quota_bytes
-    public_quota = entity.public_quota_bytes
-    private_used = entity.private_used_bytes
-    public_used = entity.public_used_bytes
-
-    # Check the appropriate quota based on repo privacy
-    if is_private:
-        quota_bytes = private_quota
-        used_bytes = private_used
-        quota_type = "private"
-    else:
-        quota_bytes = public_quota
-        used_bytes = public_used
-        quota_type = "public"
+    quota_bytes = (
+        entity.private_quota_bytes if is_private else entity.public_quota_bytes
+    )
+    quota_type = "private" if is_private else "public"
 
     # NULL quota = unlimited
     if quota_bytes is None:
         return True, None
+    used_bytes = namespace_used(namespace, is_private)
 
     # Check if would exceed quota
     new_usage = used_bytes + additional_bytes
@@ -278,44 +58,6 @@ def check_quota(
         )
 
     return True, None
-
-
-def increment_storage(
-    namespace: str, bytes_delta: int, is_private: bool, is_org: bool = False
-) -> tuple[int, int]:
-    """Increment storage usage for a user or organization (SYNCHRONOUS).
-
-    Args:
-        namespace: Username or organization name
-        bytes_delta: Bytes to add (can be negative for deletions)
-        is_private: True if this is for a private repository
-        is_org: True if namespace is an organization
-
-    Returns:
-        Tuple of (private_used_bytes, public_used_bytes)
-    """
-
-    # Organizations are now users with is_org=True
-    if is_org:
-        entity = get_organization(namespace)
-    else:
-        entity = User.get(User.username == namespace)
-
-    if is_private:
-        entity.private_used_bytes = max(0, entity.private_used_bytes + bytes_delta)
-    else:
-        entity.public_used_bytes = max(0, entity.public_used_bytes + bytes_delta)
-    entity.save()
-
-    private_used, public_used = entity.private_used_bytes, entity.public_used_bytes
-
-    logger.debug(
-        f"Updated storage for {'org' if is_org else 'user'} {namespace}: "
-        f"{'private' if is_private else 'public'} {bytes_delta:+,} bytes "
-        f"(totals: private={private_used:,}, public={public_used:,})"
-    )
-
-    return private_used, public_used
 
 
 def get_storage_info(
@@ -337,13 +79,10 @@ def get_storage_info(
     else:
         entity = User.get_or_none(User.username == namespace)
 
-    if not entity:
-        private_quota, public_quota, private_used, public_used = None, None, 0, 0
-    else:
-        private_quota = entity.private_quota_bytes
-        public_quota = entity.public_quota_bytes
-        private_used = entity.private_used_bytes
-        public_used = entity.public_used_bytes
+    private_quota = entity.private_quota_bytes if entity else None
+    public_quota = entity.public_quota_bytes if entity else None
+    used = namespace_usage([namespace])[namespace]
+    private_used, public_used = used["private"], used["public"]
 
     # Calculate availability and percentages
     private_available = (
@@ -407,7 +146,7 @@ def set_quota(
         entity.private_quota_bytes = private_quota_bytes
     if public_quota_bytes is not None:
         entity.public_quota_bytes = public_quota_bytes
-    entity.save()
+    entity.save(only=[User.private_quota_bytes, User.public_quota_bytes])
 
     logger.info(
         f"Set quota for {'org' if is_org else 'user'} {namespace}: "
@@ -431,23 +170,20 @@ def get_repo_storage_info(repo: Repository) -> dict[str, int | float | None]:
     Returns:
         Dict with quota information including namespace context
     """
-    # Get namespace quota info for context - use owner ForeignKey
-    entity = repo.owner  # Direct ForeignKey access
-
-    if entity:
-        namespace_quota = (
-            entity.private_quota_bytes if repo.private else entity.public_quota_bytes
-        )
-        namespace_used = (
-            entity.private_used_bytes if repo.private else entity.public_used_bytes
-        )
-    else:
-        namespace_quota = None
-        namespace_used = 0
+    # Namespace context: the account the repository belongs to
+    entity = repo.owner
+    namespace_quota = (
+        (entity.private_quota_bytes if repo.private else entity.public_quota_bytes)
+        if entity
+        else None
+    )
+    namespace_used_bytes = namespace_used(repo.namespace, repo.private)
 
     # Calculate namespace available quota
     namespace_available = (
-        None if namespace_quota is None else max(0, namespace_quota - namespace_used)
+        None
+        if namespace_quota is None
+        else max(0, namespace_quota - namespace_used_bytes)
     )
 
     # Repository quota and usage
@@ -477,7 +213,7 @@ def get_repo_storage_info(repo: Repository) -> dict[str, int | float | None]:
         "effective_quota_bytes": effective_quota,
         # Namespace context
         "namespace_quota_bytes": namespace_quota,
-        "namespace_used_bytes": namespace_used,
+        "namespace_used_bytes": namespace_used_bytes,
         "namespace_available_bytes": namespace_available,
         "is_inheriting": repo_quota is None,
     }
@@ -500,25 +236,18 @@ def set_repo_quota(
     """
     # If setting a specific quota (not NULL), validate against namespace
     if quota_bytes is not None:
-        # Get namespace available quota - use owner ForeignKey
-        entity = repo.owner  # Direct ForeignKey access
-
-        if entity:
-            namespace_quota = (
-                entity.private_quota_bytes
-                if repo.private
-                else entity.public_quota_bytes
-            )
-            namespace_used = (
-                entity.private_used_bytes if repo.private else entity.public_used_bytes
-            )
-        else:
-            namespace_quota = None
-            namespace_used = 0
+        entity = repo.owner  # the account the repository belongs to
+        namespace_quota = (
+            (entity.private_quota_bytes if repo.private else entity.public_quota_bytes)
+            if entity
+            else None
+        )
 
         # Validate: repository quota cannot exceed namespace available
         if namespace_quota is not None:
-            namespace_available = max(0, namespace_quota - namespace_used)
+            namespace_available = max(
+                0, namespace_quota - namespace_used(repo.namespace, repo.private)
+            )
 
             # Add back current repo quota if it was set (we're replacing it)
             if repo.quota_bytes is not None:
@@ -532,29 +261,8 @@ def set_repo_quota(
 
     # Update repository quota
     repo.quota_bytes = quota_bytes
-    repo.save()
+    repo.save(only=[Repository.quota_bytes])  # the usage counters move on their own
 
     logger.info(f"Set quota for repository {repo.full_id}: quota={quota_bytes} bytes")
 
     return get_repo_storage_info(repo)
-
-
-async def update_repository_storage(repo: Repository) -> dict[str, int]:
-    """Recalculate and update storage usage for a repository.
-
-    Args:
-        repo: Repository model instance
-
-    Returns:
-        Dict with updated storage usage
-    """
-    storage = await calculate_repository_storage(repo)
-    total_bytes = storage["total_bytes"]
-
-    # Update repository used_bytes
-    repo.used_bytes = total_bytes
-    repo.save()
-
-    logger.info(f"Updated storage for repository {repo.full_id}: {total_bytes:,} bytes")
-
-    return {"used_bytes": total_bytes, "total_bytes": total_bytes}

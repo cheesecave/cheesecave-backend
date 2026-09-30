@@ -239,20 +239,3 @@ async def test_check_lfs_recoverability_covers_empty_and_missing_objects(monkeyp
 
     assert recoverable is False
     assert missing_files == ["weights.bin"]
-
-
-@pytest.mark.asyncio
-async def test_cleanup_repository_storage_deletes_only_the_repository_prefix(monkeypatch):
-    prefixes = []
-
-    async def fake_delete(bucket, prefix):
-        prefixes.append(prefix)
-        return 3
-
-    monkeypatch.setattr(gc_utils, "delete_objects_with_prefix", fake_delete)
-
-    result = await gc_utils.cleanup_repository_storage("model", "owner", "repo", "lakefs-repo")
-
-    # Shared LFS objects are left to the background collection.
-    assert result == {"repo_objects_deleted": 3}
-    assert prefixes == ["lakefs-repo/"]

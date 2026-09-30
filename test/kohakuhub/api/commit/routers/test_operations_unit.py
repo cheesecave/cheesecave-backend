@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import importlib
 import json
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -505,9 +506,12 @@ async def test_commit_route_covers_parse_dispatch_noop_and_success_paths(monkeyp
         lambda repo_arg, branch, paths, folders: head_changes.append((branch, paths, folders)),
     )
     monkeypatch.setattr(commit_ops, "create_commit", lambda **kwargs: tracked.append({"commit": kwargs["commit_id"]}))
-    monkeypatch.setattr(commit_ops, "update_repository_storage", lambda repo_arg: _async_return(None))
-    monkeypatch.setattr(commit_ops, "get_organization", lambda namespace: None)
-    monkeypatch.setattr(commit_ops, "update_namespace_storage", lambda namespace, is_org: _async_return(None))
+    counted = []
+    monkeypatch.setattr(
+        importlib.import_module("kohakuhub.api.commit.records"),
+        "count_main_move",
+        lambda client_arg, lakefs_repo, repo_arg, commit_id: _async_return(counted.append(commit_id)),
+    )
     monkeypatch.setattr(commit_ops.logger, "warning", lambda message: warnings.append(message))
 
     monkeypatch.setattr(commit_ops.Repository, "get_or_none", lambda *args: None)
@@ -555,6 +559,7 @@ async def test_commit_route_covers_parse_dispatch_noop_and_success_paths(monkeyp
     assert success_response["commitOid"] == "commit-created"
     assert success_response["commitUrl"] == "models/owner/repo/commit/commit-created"
     assert tracked
+    assert counted == ["commit-created"]  # main moved: its usage follows
     assert gc_calls == [["weights.bin"]]  # the path whose old version was replaced
     assert collections == [1]
     # What the branch head links now: LFS results, everything else touched links none
@@ -579,7 +584,6 @@ async def test_commit_route_covers_parse_dispatch_noop_and_success_paths(monkeyp
 
     client.raise_on.pop("commit", None)
     monkeypatch.setattr(commit_ops, "process_lfs_file", lambda **kwargs: _async_return((False, None)))
-    monkeypatch.setattr(commit_ops, "update_repository_storage", lambda repo_arg: (_ for _ in ()).throw(RuntimeError("storage failed")))
     success_without_lfs = await commit_ops.commit(commit_ops.RepoType.model, "owner", "repo", "main", _FakeRequest(success_payload), user=user)
     assert success_without_lfs["commitOid"] == "commit-created"
     assert any("No LFS files to track" in message for message in warnings)

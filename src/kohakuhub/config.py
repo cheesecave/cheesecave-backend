@@ -164,6 +164,9 @@ class AppConfig(BaseModel):
     # LFS Garbage Collection settings
     lfs_keep_versions: int = 5  # Keep last K versions of each file
     lfs_auto_gc: bool = False  # Collect LFS versions beyond lfs_keep_versions (background)
+    # Storage usage is kept up to date as repositories change; a periodic
+    # full recount (kohakuhub.usage) is a safety net. 0 = off
+    usage_recount_interval_hours: float = 0
     # Download tracking settings
     download_time_bucket_seconds: int = 900  # 15 minutes - session deduplication window
     download_session_cleanup_threshold: int = (
@@ -575,6 +578,10 @@ def load_config(path: str = None) -> Config:
         app_env["lfs_keep_versions"] = int(os.environ["KOHAKU_HUB_LFS_KEEP_VERSIONS"])
     if "KOHAKU_HUB_LFS_AUTO_GC" in os.environ:
         app_env["lfs_auto_gc"] = os.environ["KOHAKU_HUB_LFS_AUTO_GC"].lower() == "true"
+    if "KOHAKU_HUB_USAGE_RECOUNT_INTERVAL_HOURS" in os.environ:
+        app_env["usage_recount_interval_hours"] = float(
+            os.environ["KOHAKU_HUB_USAGE_RECOUNT_INTERVAL_HOURS"]
+        )
     if "KOHAKU_HUB_SITE_NAME" in os.environ:
         app_env["site_name"] = os.environ["KOHAKU_HUB_SITE_NAME"]
     if "KOHAKU_HUB_DEBUG_LOG_PAYLOADS" in os.environ:

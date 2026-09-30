@@ -5,11 +5,10 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from kohakuhub.config import cfg
-from kohakuhub.db import DailyRepoStats, RepositoryLike
+from kohakuhub.db import DailyRepoStats, Repository, RepositoryLike
 from kohakuhub.api.quota.util import (
     get_repo_storage_info,
     get_storage_info,
-    increment_storage,
     set_quota,
     set_repo_quota,
 )
@@ -326,21 +325,22 @@ def test_file_commit_ssh_lfs_and_quota_helpers_cover_remaining_crud():
     repo.save()
     assert get_effective_lfs_suffix_rules(repo) == cfg.app.lfs_suffix_rules_default
 
-    owner.private_used_bytes = 20
-    owner.public_used_bytes = 10
     owner.private_quota_bytes = 100
     owner.public_quota_bytes = 50
     owner.save()
-    assert increment_storage("owner", 5, is_private=True) == (25, 10)
     storage_info = get_storage_info("owner")
-    assert storage_info["private_percentage_used"] == 25.0
+    assert storage_info["private_used_bytes"] == sum(
+        r.used_bytes for r in Repository.select().where((Repository.namespace == "owner") & Repository.private)
+    )
     repo.quota_bytes = None
     repo.used_bytes = 12
     repo.private = False
     repo.save()
     assert get_repo_storage_info(repo)["is_inheriting"] is True
-    set_quota("owner", private_quota_bytes=120, public_quota_bytes=60)
-    assert get_storage_info("owner")["public_quota_bytes"] == 60
+    public_used = get_storage_info("owner")["public_used_bytes"]
+    set_quota("owner", private_quota_bytes=120, public_quota_bytes=public_used + 60)
+    assert get_storage_info("owner")["public_quota_bytes"] == public_used + 60
+    repo = Repository.get_by_id(repo.id)  # its owner as stored now
     set_repo_quota(repo, 30)
     assert get_repo_storage_info(repo)["quota_bytes"] == 30
     with pytest.raises(ValueError):

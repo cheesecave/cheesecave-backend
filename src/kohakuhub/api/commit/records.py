@@ -15,10 +15,11 @@ from peewee import EXCLUDED
 
 from kohakuhub.api.commit import availability
 from kohakuhub.api.commit.routers.operations import calculate_git_blob_sha1
-from kohakuhub.api.quota.util import update_namespace_storage, update_repository_storage
 from kohakuhub.config import cfg
 from kohakuhub.db import File, LFSObjectHistory, LfsHeadRef, LfsObjectTombstone, Repository, User
-from kohakuhub.db_operations import create_commit, get_organization, should_use_lfs
+from kohakuhub import usage
+from kohakuhub.db import db
+from kohakuhub.db_operations import create_commit, should_use_lfs
 from kohakuhub.lfs_gc import (
     DELETED,
     LfsObjectUnavailable,
@@ -103,7 +104,9 @@ async def claim_objects(required: dict[str, dict | None], action: str, optional=
         try:
             if claim_for_commit(oid, True) and not await object_exists(cfg.s3.bucket, lfs_key(oid)):
                 # Revived, but gone since the check: it is collected after all
-                LfsObjectTombstone.get_or_create(sha256=oid, defaults={"state": DELETED})
+                with db.atomic():
+                    if LfsObjectTombstone.get_or_create(sha256=oid, defaults={"state": DELETED})[1]:
+                        usage.object_gone(oid)
                 raise LfsObjectUnavailable(oid)
         except LfsObjectUnavailable:
             lost.add(oid)
@@ -158,6 +161,40 @@ async def _regular_ids(client, lakefs_repo: str, ref: str, paths: list[str]) -> 
 
     await asyncio.gather(*(blob(path) for path in paths))
     return ids
+
+
+def _regular_bytes(entries: dict[str, dict | None]) -> int:
+    return sum(
+        e.get("size_bytes") or 0
+        for e in entries.values()
+        if e is not None and lfs_oid(e.get("physical_address")) is None
+    )
+
+
+async def count_main_move(client, lakefs_repo: str, repo: Repository, commit: str) -> None:
+    """Count main's move to ``commit`` from its first parent in the
+    repository's usage (``usage.main_moved``), from the regular files it
+    changed. Anything unexpected recounts the repository instead."""
+    try:
+        parents = (await client.get_commit(repository=lakefs_repo, commit_id=commit)).get(
+            "parents"
+        ) or []
+        if not parents:
+            raise ValueError("an initial commit")
+        diff = await availability.changes(client, lakefs_repo, parents[0], commit)
+        before, after = await asyncio.gather(
+            availability.entries(
+                client, lakefs_repo, parents[0], [e["path"] for e in diff if e["type"] != "added"]
+            ),
+            availability.entries(
+                client, lakefs_repo, commit, [e["path"] for e in diff if e["type"] != "removed"]
+            ),
+        )
+    except Exception as e:
+        logger.warning(f"Could not count {commit[:8]} in the usage of {repo.full_id}: {e}")
+        usage.enqueue_repository_recount(repo.id)
+        return
+    usage.main_moved(repo.id, parents[0], commit, _regular_bytes(after) - _regular_bytes(before))
 
 
 def _batches(items: list, size: int = ROW_BATCH):
@@ -297,7 +334,9 @@ async def record_commits(
             if e is not None and lfs_oid(e.get("physical_address"))
         ]
         for batch in _batches(history):
-            LFSObjectHistory.insert_many(batch).execute()
+            with db.atomic():
+                usage.lfs_linked(repo.id, {row["sha256"]: row["size"] for row in batch})
+                LFSObjectHistory.insert_many(batch).execute()
             await asyncio.sleep(0)
         if record_evicted_versions(repo, sorted(replaced)):
             enqueue_lfs_collection()
@@ -305,9 +344,6 @@ async def record_commits(
         logger.exception(f"Could not record the commits on {repo.full_id}@{branch}", e)
         enqueue_lfs_reconciliation()
         return
-    try:
-        await update_repository_storage(repo)
-        namespace = repo.namespace
-        await update_namespace_storage(namespace, get_organization(namespace) is not None)
-    except Exception as e:
-        logger.warning(f"Failed to update storage usage for {repo.full_id}: {e}")
+    if branch == usage.MAIN:
+        for commit_id, _ in rounds:
+            await count_main_move(client, lakefs_repo, repo, commit_id)

@@ -344,31 +344,50 @@ under **Background Tasks**, and both need a running `khub-worker`.
 
 ---
 
-### Recalculate All Repository Storage
+### Recount Repository Storage
 
 **Pattern:** `POST /admin/api/repositories/recalculate-all`
 
+Schedules the `usage.recount` background task, which sets every repository's
+exact storage usage and reports how far the kept usage had drifted.
+
 **Query Parameters:**
-- `repo_type` (optional): Filter by type
-- `namespace` (optional): Filter by namespace
+- `namespace` (optional): Only this namespace's repositories
+
+**Response:**
+```json
+{"task_id": 42, "already_pending": false}
+```
+
+`task_id` is `null` with `already_pending: true` when one is already scheduled.
+
+### Storage Usage Recount
+
+**Pattern:** `GET /admin/api/usage/recount` — the latest site-wide recount
 
 **Response:**
 ```json
 {
-  "total": 100,
-  "success_count": 98,
-  "failure_count": 2,
-  "failures": [
-    {
-      "repo_id": "alice/broken",
-      "error": "LakeFS error: repository not found"
-    }
-  ],
-  "message": "Recalculated storage for 98/100 repositories"
+  "interval_hours": 0,
+  "task": {
+    "id": 42,
+    "status": "succeeded",
+    "progress_done": 120,
+    "progress_total": 120,
+    "stage": "recounting model:alice/demo",
+    "stats": {"repositories": 120, "drifted": 2, "drift_bytes": 5242880},
+    "drift": [{"repository": "model:alice/demo", "before": 10485760, "after": 5242880}],
+    "created_at": "2026-09-30T10:00:00+00:00",
+    "finished_at": "2026-09-30T10:02:13+00:00"
+  }
 }
 ```
 
-**Use Case:** Fix storage usage after bulk operations or migrations
+`drift` lists the repositories whose usage was off by the most. `stats.busy`
+counts repositories that changed while being recounted; each is recounted
+again on its own.
+
+**Pattern:** `POST /admin/api/usage/recount` — start one (`{"task_id", "already_pending"}`)
 
 ---
 
@@ -450,15 +469,16 @@ under **Background Tasks**, and both need a running `khub-worker`.
 
 **Pattern:** `POST /admin/api/quota/{namespace}/recalculate?is_org={true|false}`
 
+Schedules a recount of the namespace's repositories (`usage.recount`); the
+answer is the usage as it stands.
+
 **Response:**
 ```json
 {
   "namespace": "alice",
   "is_organization": false,
-  "recalculated": {
-    "private_used": 1073741824,
-    "public_used": 536870912
-  },
+  "task_id": 43,
+  "already_pending": false,
   "quota_bytes": 10737418240,
   "used_bytes": 1610612736,
   "available_bytes": 9126805504,
@@ -1276,19 +1296,9 @@ for consumer in overview["top_consumers"][:5]:
 ### Bulk Operations
 
 ```python
-# Recalculate all model storage
-recalc_resp = requests.post(
-    f"{API_BASE}/repositories/recalculate-all?repo_type=model",
-    headers=ADMIN_HEADERS
-)
-
-result = recalc_resp.json()
-print(f"Success: {result['success_count']}/{result['total']}")
-
-if result['failure_count'] > 0:
-    print("Failures:")
-    for fail in result['failures']:
-        print(f"  {fail['repo_id']}: {fail['error']}")
+# Recount every repository's storage usage in the background
+recalc_resp = requests.post(f"{API_BASE}/usage/recount", headers=ADMIN_HEADERS)
+print(f"Recount task: {recalc_resp.json()['task_id']}")
 ```
 
 ---

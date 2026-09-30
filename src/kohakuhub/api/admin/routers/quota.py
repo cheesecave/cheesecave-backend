@@ -4,16 +4,15 @@ from fastapi import APIRouter, Depends, HTTPException
 from peewee import fn
 from pydantic import BaseModel
 
-from kohakuhub.db import LFSObjectHistory, Repository, User
+from kohakuhub import usage
+from kohakuhub.db import Repository, User
 from kohakuhub.logger import get_logger
 from kohakuhub.api.admin.utils import verify_admin_token
 from kohakuhub.api.quota.util import (
-    get_repo_storage_info,
     get_storage_info,
     set_quota,
-    update_namespace_storage,
-    update_repository_storage,
 )
+from kohakuhub.usage import namespace_usage
 
 logger = get_logger("ADMIN")
 router = APIRouter()
@@ -51,16 +50,29 @@ async def get_quota_overview(
         Users/repos over quota, top consumers, system totals
     """
 
-    # Users over quota
+    R = Repository
+    # Users over quota: only a user with a quota can be
+    limited = list(
+        User.select().where(
+            (User.is_org == False)
+            & (
+                User.private_quota_bytes.is_null(False)
+                | User.public_quota_bytes.is_null(False)
+            )
+        )
+    )
+    used = namespace_usage(user.username for user in limited)
     users_over = []
-    for user in User.select().where(User.is_org == False):
+    for user in limited:
+        private_used = used[user.username]["private"]
+        public_used = used[user.username]["public"]
         private_pct = (
-            (user.private_used_bytes / user.private_quota_bytes * 100)
+            (private_used / user.private_quota_bytes * 100)
             if user.private_quota_bytes
             else 0
         )
         public_pct = (
-            (user.public_used_bytes / user.public_quota_bytes * 100)
+            (public_used / user.public_quota_bytes * 100)
             if user.public_quota_bytes
             else 0
         )
@@ -71,63 +83,70 @@ async def get_quota_overview(
                     "username": user.username,
                     "private_percentage": round(private_pct, 1),
                     "public_percentage": round(public_pct, 1),
-                    "private_used": user.private_used_bytes,
+                    "private_used": private_used,
                     "private_quota": user.private_quota_bytes,
-                    "public_used": user.public_used_bytes,
+                    "public_used": public_used,
                     "public_quota": user.public_quota_bytes,
                 }
             )
 
-    # Repos over quota
+    # Repos over quota: their own quota, or else their account's
     repos_over = []
-    for repo in Repository.select():
-        info = get_repo_storage_info(repo)
-        if info["percentage_used"] and info["percentage_used"] > 100:
+    for repo in R.select(R, User).join(User, on=(R.owner == User.id)):
+        quota = repo.quota_bytes
+        if quota is None:
+            quota = (
+                repo.owner.private_quota_bytes
+                if repo.private
+                else repo.owner.public_quota_bytes
+            )
+        if quota and repo.used_bytes > quota:
             repos_over.append(
                 {
                     "full_id": repo.full_id,
                     "repo_type": repo.repo_type,
-                    "used_bytes": info["used_bytes"],
-                    "quota_bytes": info["quota_bytes"],
-                    "percentage": round(info["percentage_used"], 1),
+                    "used_bytes": repo.used_bytes,
+                    "quota_bytes": repo.quota_bytes,
+                    "percentage": round(repo.used_bytes / quota * 100, 1),
                 }
             )
 
     # Top consumers (users + orgs by total storage)
-    top_consumers = (
-        User.select(
-            User.username,
-            User.is_org,
-            (User.private_used_bytes + User.public_used_bytes).alias("total"),
-        )
-        .order_by((User.private_used_bytes + User.public_used_bytes).desc())
+    total = fn.SUM(R.used_bytes)
+    top = list(
+        R.select(R.namespace, total.alias("total"))
+        .group_by(R.namespace)
+        .order_by(total.desc())
         .limit(10)
+        .tuples()
     )
+    orgs = {
+        username
+        for (username,) in User.select(User.username)
+        .where(
+            User.username.in_([namespace for namespace, _ in top])
+            & (User.is_org == True)
+        )
+        .tuples()
+    }
+    top_consumers = [
+        {
+            "username": namespace,
+            "is_org": namespace in orgs,
+            "total_bytes": int(total_bytes),
+        }
+        for namespace, total_bytes in top
+    ]
 
-    # System totals
-    total_private = (
-        User.select(fn.SUM(User.private_used_bytes))
-        .where(User.is_org == False)
-        .scalar()
-        or 0
-    )
-    total_public = (
-        User.select(fn.SUM(User.public_used_bytes)).where(User.is_org == False).scalar()
-        or 0
-    )
-    total_lfs = LFSObjectHistory.select(fn.SUM(LFSObjectHistory.size)).scalar() or 0
+    # System totals (users' repositories, as before)
+    users = usage.users_usage()
+    total_private, total_public = users["private"], users["public"]
+    total_lfs = R.select(fn.COALESCE(fn.SUM(R.lfs_bytes), 0)).scalar()
 
     return {
         "users_over_quota": users_over,
         "repos_over_quota": repos_over,
-        "top_consumers": [
-            {
-                "username": c.username,
-                "is_org": c.is_org,
-                "total_bytes": c.total,
-            }
-            for c in top_consumers
-        ],
+        "top_consumers": top_consumers,
         "system_storage": {
             "private_used": total_private,
             "public_used": total_public,
@@ -241,7 +260,10 @@ async def recalculate_quota_admin(
     is_org: bool = False,
     _admin: bool = Depends(verify_admin_token),
 ):
-    """Recalculate storage usage for a user or organization (admin only).
+    """Recount the storage usage of a user's or organization's repositories (admin only).
+
+    Schedules the ``usage.recount`` task for the namespace; the answer is the
+    usage as it stands (kept up to date as repositories change).
 
     Args:
         namespace: Username or organization name
@@ -273,83 +295,42 @@ async def recalculate_quota_admin(
         f"Admin recalculating storage for {'org' if is_org else 'user'} {namespace}"
     )
 
-    storage = await update_namespace_storage(namespace, is_org)
+    task_id = usage.enqueue_recount(namespace)
     info = get_storage_info(namespace, is_org)
 
     return {
         "namespace": namespace,
         "is_organization": is_org,
-        "recalculated": storage,
+        "task_id": task_id,
+        "already_pending": task_id is None,
         **info,
     }
 
 
 @router.post("/repositories/recalculate-all")
 async def recalculate_all_repo_storage_admin(
-    repo_type: str | None = None,
     namespace: str | None = None,
     _admin: bool = Depends(verify_admin_token),
 ):
-    """Recalculate storage usage for all repositories (admin only).
+    """Recount the storage usage of every repository, or one namespace's (admin only).
 
-    This is a bulk operation that recalculates storage for all repositories
-    matching the optional filters. Can be slow for large datasets.
-
-    Args:
-        repo_type: Optional filter by repository type
-        namespace: Optional filter by namespace
-        _admin: Admin authentication (dependency)
-
-    Returns:
-        Recalculation summary with success/failure counts
+    Schedules the ``usage.recount`` background task, which reports how far
+    the kept usage had drifted (``GET /admin/api/usage/recount``).
     """
+    task_id = usage.enqueue_recount(namespace)
+    logger.info(f"Admin started a usage recount of {namespace or 'every repository'}")
+    return {"task_id": task_id, "already_pending": task_id is None}
 
-    logger.warning("Admin initiated bulk repository storage recalculation")
 
-    # Get all repositories matching filters
-    query = Repository.select()
-    if repo_type:
-        query = query.where(Repository.repo_type == repo_type)
-    if namespace:
-        query = query.where(Repository.namespace == namespace)
+@router.get("/usage/recount")
+async def get_usage_recount(_admin: bool = Depends(verify_admin_token)):
+    """The latest site-wide usage recount: its progress and drift report."""
+    return usage.recount_status()
 
-    repos = list(query)
-    total = len(repos)
 
-    logger.info(f"Recalculating storage for {total} repository(ies)")
-
-    # Recalculate storage for each repository
-    success_count = 0
-    failure_count = 0
-    failures = []
-
-    for repo in repos:
-        try:
-            await update_repository_storage(repo)
-            success_count += 1
-
-            if success_count % 10 == 0:
-                logger.info(
-                    f"Progress: {success_count}/{total} repositories recalculated"
-                )
-        except Exception as e:
-            failure_count += 1
-            failures.append(
-                {
-                    "repo_id": repo.full_id,
-                    "error": str(e),
-                }
-            )
-            logger.error(f"Failed to recalculate storage for {repo.full_id}: {e}")
-
-    logger.info(
-        f"Bulk recalculation completed: {success_count} succeeded, {failure_count} failed"
-    )
-
-    return {
-        "total": total,
-        "success_count": success_count,
-        "failure_count": failure_count,
-        "failures": failures,
-        "message": f"Recalculated storage for {success_count}/{total} repositories",
-    }
+@router.post("/usage/recount")
+async def start_usage_recount(_admin: bool = Depends(verify_admin_token)):
+    """Recount every repository's storage usage and report the drift. One runs at a time."""
+    task_id = usage.enqueue_recount()
+    logger.info("Admin started the usage recount")
+    return {"task_id": task_id, "already_pending": task_id is None}

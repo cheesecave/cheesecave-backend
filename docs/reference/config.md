@@ -60,6 +60,7 @@ By default, the application looks for `config.toml` in the current working direc
 | `KOHAKU_HUB_LFS_MULTIPART_CHUNK_SIZE_BYTES` | The chunk size for LFS multipart uploads. | `52428800` (50MB) |
 | `KOHAKU_HUB_LFS_KEEP_VERSIONS` | The number of LFS file versions to keep during garbage collection. | `5` |
 | `KOHAKU_HUB_LFS_AUTO_GC` | If `true`, LFS versions beyond the keep count are collected in the background. | `false` |
+| `KOHAKU_HUB_USAGE_RECOUNT_INTERVAL_HOURS` | Repeats the full storage usage recount (`usage.recount`) every this many hours. Usage is kept up to date as repositories change; this is a safety net. `0` turns it off. | `0` |
 
 ## Authentication & Session Settings
 

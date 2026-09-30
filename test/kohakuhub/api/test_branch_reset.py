@@ -680,20 +680,31 @@ async def test_the_scratch_branch_protects_nothing(m, owner_client, monkeypatch)
 
 async def test_storage_usage_follows_and_its_failure_is_harmless(m, owner_client, monkeypatch):
     repo, (initial, c1, c2, *_rest) = await _linear(m, owner_client, "reset-usage")
-    updated = []
+    counted = []
+    count = m.records.count_main_move
 
-    async def update(repo_row):
-        updated.append(repo_row.full_id)
+    async def spy(client, lakefs_repo, repo_row, commit):
+        counted.append(repo_row.full_id)
+        await count(client, lakefs_repo, repo_row, commit)
 
-    monkeypatch.setattr(m.records, "update_repository_storage", update)
+    monkeypatch.setattr(m.records, "count_main_move", spy)
     assert (await _reset(repo, c1)).status_code == 200
-    assert updated == [repo.id]
+    assert counted == [repo.id]
 
-    async def broken(repo_row):
-        raise RuntimeError("quota service down")
+    async def broken(*args, **kwargs):
+        raise RuntimeError("LakeFS hiccup")
 
-    monkeypatch.setattr(m.records, "update_repository_storage", broken)
+    readable = m.records.availability
+
+    class Unreadable:  # only counting the move cannot read the diff
+        def __getattr__(self, name):
+            return broken if name == "changes" else getattr(readable, name)
+
+    monkeypatch.setattr(m.records, "count_main_move", count)
+    monkeypatch.setattr(m.records, "availability", Unreadable())
     assert (await _reset(repo, c2)).status_code == 200
+    queued = m.db.BackgroundTask.select().where(m.db.BackgroundTask.kind == "usage.recount_repository")
+    assert queued.exists()  # counted by a recount instead
 
 
 async def test_a_failure_dropping_the_scratch_references_is_harmless(m, owner_client, monkeypatch):

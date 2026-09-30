@@ -355,12 +355,15 @@ async def test_commits_collect_evicted_versions_and_keep_shared_content(
     gc_utils = _live("kohakuhub.api.repo.utils.gc")
     recoverable, missing = await gc_utils.check_lfs_recoverability(repo, commit_id)
     assert (recoverable, missing) == (False, [PATH])
-    storage = await _live("kohakuhub.api.quota.util").calculate_repository_storage(repo)
     H = m.db.LFSObjectHistory
     live_bytes = sum(
-        row.size for row in H.select().where((H.repository == repo) & (H.sha256 != oids[1]))
+        {
+            row.sha256: row.size
+            for row in H.select().where((H.repository == repo) & (H.sha256 != oids[1]))
+            if len(row.sha256) == 64
+        }.values()
     )
-    assert storage["lfs_total_bytes"] == live_bytes
+    assert m.db.Repository.get_by_id(repo.id).lfs_bytes == live_bytes
 
 
 async def test_collected_content_must_be_uploaded_again(m, owner_client):

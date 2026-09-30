@@ -33,6 +33,7 @@ from datetime import datetime, timedelta, timezone
 
 from peewee import PostgresqlDatabase, fn
 
+from kohakuhub import usage
 from kohakuhub.config import cfg
 from kohakuhub.db import (
     File,
@@ -404,6 +405,7 @@ def claim_for_commit(sha256: str, exists_in_storage: bool) -> bool:
             raise LfsObjectUnavailable(sha256)
         if state == DELETED:
             LfsObjectTombstone.delete().where(LfsObjectTombstone.sha256 == sha256).execute()
+            usage.object_back(sha256)
         touch(sha256)
     return state == DELETED
 
@@ -418,10 +420,13 @@ def begin_delete(sha256: str) -> bool:
     with _database().atomic():
         _lock(sha256)
         if retention_reason(sha256) is not None:
-            LfsObjectTombstone.delete().where(
+            if LfsObjectTombstone.delete().where(
                 (LfsObjectTombstone.sha256 == sha256) & (LfsObjectTombstone.state == DELETING)
-            ).execute()
+            ).execute():
+                usage.object_back(sha256)
             return False
+        if tombstone_state(sha256) is None:
+            usage.object_gone(sha256)
         now = utcnow()
         LfsObjectTombstone.insert(
             sha256=sha256, state=DELETING, created_at=now, updated_at=now

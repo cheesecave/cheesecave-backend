@@ -95,38 +95,9 @@ class _FakeUserModel:
         return _Query()
 
 
-class _FakeRepositoryModel:
-    repo_type = _Field("repo_type")
-    namespace = _Field("namespace")
-    select_query = _Query()
-
-    @classmethod
-    def reset(cls):
-        cls.select_query = _Query()
-
-    @classmethod
-    def select(cls):
-        return cls.select_query
-
-
-class _FakeLFSHistoryModel:
-    size = _Field("size")
-    select_query = _Query()
-
-    @classmethod
-    def reset(cls):
-        cls.select_query = _Query()
-
-    @classmethod
-    def select(cls, *args):
-        return cls.select_query
-
-
 @pytest.fixture(autouse=True)
 def _reset_models():
     _FakeUserModel.reset()
-    _FakeRepositoryModel.reset()
-    _FakeLFSHistoryModel.reset()
 
 
 def _async_return(value=None, error=None):
@@ -136,84 +107,6 @@ def _async_return(value=None, error=None):
         return value
 
     return _inner
-
-
-@pytest.mark.asyncio
-async def test_get_quota_overview_covers_overages_and_totals(monkeypatch):
-    users = [
-        SimpleNamespace(
-            username="alice",
-            is_org=False,
-            private_used_bytes=150,
-            private_quota_bytes=100,
-            public_used_bytes=10,
-            public_quota_bytes=20,
-        ),
-        SimpleNamespace(
-            username="bob",
-            is_org=False,
-            private_used_bytes=10,
-            private_quota_bytes=None,
-            public_used_bytes=120,
-            public_quota_bytes=100,
-        ),
-    ]
-    top_consumers = [
-        SimpleNamespace(username="alice", is_org=False, total=160),
-        SimpleNamespace(username="org-team", is_org=True, total=99),
-    ]
-    repos = [
-        SimpleNamespace(full_id="alice/demo", repo_type="model"),
-        SimpleNamespace(full_id="bob/ok", repo_type="dataset"),
-    ]
-
-    monkeypatch.setattr(admin_quota, "User", _FakeUserModel)
-    monkeypatch.setattr(admin_quota, "Repository", _FakeRepositoryModel)
-    monkeypatch.setattr(admin_quota, "LFSObjectHistory", _FakeLFSHistoryModel)
-    monkeypatch.setattr(admin_quota, "fn", SimpleNamespace(SUM=lambda value: ("sum", value)))
-    monkeypatch.setattr(
-        admin_quota,
-        "get_repo_storage_info",
-        lambda repo: {
-            "used_bytes": 120,
-            "quota_bytes": 100,
-            "percentage_used": 120,
-        }
-        if repo.full_id == "alice/demo"
-        else {
-            "used_bytes": 10,
-            "quota_bytes": 100,
-            "percentage_used": 10,
-        },
-    )
-
-    _FakeUserModel.select_queries = [
-        _Query(items=users),
-        _Query(items=top_consumers),
-        _Query(scalar_value=160),
-        _Query(scalar_value=130),
-    ]
-    _FakeRepositoryModel.select_query = _Query(items=repos)
-    _FakeLFSHistoryModel.select_query = _Query(scalar_value=77)
-
-    overview = await admin_quota.get_quota_overview()
-    assert [item["username"] for item in overview["users_over_quota"]] == ["alice", "bob"]
-    assert overview["repos_over_quota"] == [
-        {
-            "full_id": "alice/demo",
-            "repo_type": "model",
-            "used_bytes": 120,
-            "quota_bytes": 100,
-            "percentage": 120,
-        }
-    ]
-    assert overview["top_consumers"][0]["username"] == "alice"
-    assert overview["system_storage"] == {
-        "private_used": 160,
-        "public_used": 130,
-        "lfs_used": 77,
-        "total_used": 290,
-    }
 
 
 @pytest.mark.asyncio
@@ -232,11 +125,7 @@ async def test_quota_namespace_routes_cover_not_found_and_success(monkeypatch):
             "public_quota_bytes": public_quota_bytes,
         },
     )
-    monkeypatch.setattr(
-        admin_quota,
-        "update_namespace_storage",
-        _async_return({"private_used_bytes": 12, "public_used_bytes": 34}),
-    )
+    monkeypatch.setattr(admin_quota.usage, "enqueue_recount", lambda namespace=None: 7)
 
     _FakeUserModel.get_or_none_responses = [None]
     with pytest.raises(HTTPException) as missing_get:
@@ -284,39 +173,19 @@ async def test_quota_namespace_routes_cover_not_found_and_success(monkeypatch):
     assert recalculated == {
         "namespace": "alice",
         "is_organization": False,
-        "recalculated": {"private_used_bytes": 12, "public_used_bytes": 34},
+        "task_id": 7,
+        "already_pending": False,
         "used_bytes": 10,
         "quota_bytes": 20,
     }
 
 
 @pytest.mark.asyncio
-async def test_recalculate_all_repo_storage_admin_covers_filters_progress_and_failures(
-    monkeypatch,
-):
-    repos = [
-        SimpleNamespace(full_id=f"owner/repo-{idx}", repo_type="model", namespace="owner")
-        for idx in range(11)
-    ]
-    updated = []
-
-    async def _update_repo(repo):
-        updated.append(repo.full_id)
-        if repo.full_id.endswith("5"):
-            raise RuntimeError("boom")
-        return {"ok": True}
-
-    monkeypatch.setattr(admin_quota, "Repository", _FakeRepositoryModel)
-    monkeypatch.setattr(admin_quota, "update_repository_storage", _update_repo)
-
-    _FakeRepositoryModel.select_query = _Query(items=repos)
-    result = await admin_quota.recalculate_all_repo_storage_admin(
-        repo_type="model",
-        namespace="owner",
+async def test_recalculate_all_repo_storage_admin_schedules_a_recount(monkeypatch):
+    scheduled = []
+    monkeypatch.setattr(
+        admin_quota.usage, "enqueue_recount", lambda namespace=None: scheduled.append(namespace)
     )
-    assert result["total"] == 11
-    assert result["success_count"] == 10
-    assert result["failure_count"] == 1
-    assert result["failures"] == [{"repo_id": "owner/repo-5", "error": "boom"}]
-    assert len(_FakeRepositoryModel.select_query.where_calls) == 2
-    assert len(updated) == 11
+    result = await admin_quota.recalculate_all_repo_storage_admin(namespace="owner")
+    assert result == {"task_id": None, "already_pending": True}
+    assert scheduled == ["owner"]

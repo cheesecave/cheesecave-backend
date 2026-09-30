@@ -103,8 +103,16 @@ async function handleSaveQuota() {
 async function handleRecalculate() {
   recalculating.value = true;
   try {
-    await recalculateQuota(props.token, props.namespace, props.isOrg);
-    ElMessage.success("Storage recalculated successfully");
+    const result = await recalculateQuota(
+      props.token,
+      props.namespace,
+      props.isOrg,
+    );
+    ElMessage.success(
+      result?.already_pending
+        ? "A recount of this namespace is already scheduled"
+        : "Recount scheduled; usage updates when it finishes",
+    );
     loadQuota();
   } catch (error) {
     console.error("Failed to recalculate:", error);
@@ -178,7 +186,7 @@ onUnmounted(() => {
               :icon="'Renew'"
               size="small"
             >
-              Recalculate
+              Recount
             </el-button>
           </div>
         </div>

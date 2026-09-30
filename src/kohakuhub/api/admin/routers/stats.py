@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, Query
 from peewee import fn
 
+from kohakuhub import usage
 from kohakuhub.db import Commit, File, LFSObjectHistory, Repository, User
 from kohakuhub.logger import get_logger
 from kohakuhub.api.admin.utils import verify_admin_token
@@ -104,18 +105,8 @@ async def get_detailed_stats(
     )
 
     # Storage stats (only count regular users, not orgs)
-    total_private_used = (
-        User.select(fn.SUM(User.private_used_bytes).alias("total"))
-        .where(User.is_org == False)
-        .scalar()
-        or 0
-    )
-    total_public_used = (
-        User.select(fn.SUM(User.public_used_bytes).alias("total"))
-        .where(User.is_org == False)
-        .scalar()
-        or 0
-    )
+    users_used = usage.users_usage()
+    total_private_used, total_public_used = users_used["private"], users_used["public"]
 
     return {
         "users": {

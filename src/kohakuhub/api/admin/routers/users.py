@@ -7,6 +7,7 @@ from pydantic import BaseModel
 from kohakuhub.db import Repository, User, db
 from kohakuhub.db_operations import create_user, delete_user
 from kohakuhub.logger import get_logger
+from kohakuhub.usage import namespace_usage
 from kohakuhub.api.admin.utils import verify_admin_token
 
 logger = get_logger("ADMIN")
@@ -70,6 +71,7 @@ async def get_user_info(
     if not user:
         raise HTTPException(404, detail={"error": f"User/org not found: {username}"})
 
+    used = namespace_usage([user.username])[user.username]
     return UserInfo(
         id=user.id,
         username=user.username,
@@ -79,8 +81,8 @@ async def get_user_info(
         is_org=user.is_org,  # Add org flag
         private_quota_bytes=user.private_quota_bytes,
         public_quota_bytes=user.public_quota_bytes,
-        private_used_bytes=user.private_used_bytes,
-        public_used_bytes=user.public_used_bytes,
+        private_used_bytes=used["private"],
+        public_used_bytes=used["public"],
         created_at=user.created_at.isoformat(),
     )
 
@@ -120,6 +122,8 @@ async def list_users(
 
     users_query = users_query.limit(limit).offset(offset)
 
+    users_page = list(users_query)
+    used = namespace_usage(u.username for u in users_page)
     users = [
         {
             "id": u.id,
@@ -130,11 +134,11 @@ async def list_users(
             "is_org": u.is_org,  # Add org flag
             "private_quota_bytes": u.private_quota_bytes,
             "public_quota_bytes": u.public_quota_bytes,
-            "private_used_bytes": u.private_used_bytes,
-            "public_used_bytes": u.public_used_bytes,
+            "private_used_bytes": used[u.username]["private"],
+            "public_used_bytes": used[u.username]["public"],
             "created_at": u.created_at.isoformat(),
         }
-        for u in users_query
+        for u in users_page
     ]
 
     return {"users": users, "limit": limit, "offset": offset, "search": search}
@@ -188,6 +192,7 @@ async def create_user_admin(
 
     logger.info(f"Admin created user: {user.username}")
 
+    used = namespace_usage([user.username])[user.username]
     return UserInfo(
         id=user.id,
         username=user.username,
@@ -197,8 +202,8 @@ async def create_user_admin(
         is_org=user.is_org,
         private_quota_bytes=user.private_quota_bytes,
         public_quota_bytes=user.public_quota_bytes,
-        private_used_bytes=user.private_used_bytes,
-        public_used_bytes=user.public_used_bytes,
+        private_used_bytes=used["private"],
+        public_used_bytes=used["public"],
         created_at=user.created_at.isoformat(),
     )
 
@@ -334,7 +339,8 @@ async def update_user_quota(
     # Update quotas
     user.private_quota_bytes = request.private_quota_bytes
     user.public_quota_bytes = request.public_quota_bytes
-    user.save()
+    user.save(only=[User.private_quota_bytes, User.public_quota_bytes])
+    used = namespace_usage([user.username])[user.username]
 
     logger.info(
         f"Admin updated quota for {username}: "
@@ -345,6 +351,6 @@ async def update_user_quota(
         "username": user.username,
         "private_quota_bytes": user.private_quota_bytes,
         "public_quota_bytes": user.public_quota_bytes,
-        "private_used_bytes": user.private_used_bytes,
-        "public_used_bytes": user.public_used_bytes,
+        "private_used_bytes": used["private"],
+        "public_used_bytes": used["public"],
     }
