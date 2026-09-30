@@ -194,12 +194,13 @@ def _object_moved(sha256: str, sign: int) -> None:
     size = H.select(fn.MAX(H.size)).where(H.sha256 == sha256).scalar()
     if size is None:
         return  # no repository's history has it
-    holders = [
+    holders = sorted(
         r
         for (r,) in H.select(H.repository).where(H.sha256 == sha256).distinct().tuples()
-    ]
-    _hold(holders)
-    _add(holders, lfs=sign * size)
+    )
+    for batch in _batches(holders):  # in id order across batches too
+        _hold(batch)
+        _add(batch, lfs=sign * size)
 
 
 def object_gone(sha256: str) -> None:
@@ -427,10 +428,11 @@ async def recount(payload: dict[str, Any], ctx: tasks.TaskContext) -> None:
 def recount_status() -> dict[str, Any]:
     """The newest site-wide recount and its report, for the admin panel.
 
-    A periodic recount's next occurrence, queued for later, is not it.
+    A periodic recount's next occurrence, queued for later, is not it; one
+    waiting to retry is.
     """
     T = BackgroundTask
-    due = (T.status != tasks.QUEUED) | (T.run_after <= utcnow())
+    due = (T.status != tasks.QUEUED) | (T.run_after <= utcnow()) | (T.attempts > 0)
     task = (
         T.select()
         .where((T.kind == RECOUNT_KIND) & (T.payload == "{}") & due)

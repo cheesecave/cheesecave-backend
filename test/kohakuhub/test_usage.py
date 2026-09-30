@@ -720,7 +720,9 @@ async def test_a_commit_stands_whatever_counting_it_does(u, owner_client, monkey
 
     # An operation whose outcome is unknown recounts main, not another branch
     monkeypatch.undo()
-    u.db.BackgroundTask.delete().where(u.db.BackgroundTask.kind.startswith("usage.")).execute()
+    u.db.BackgroundTask.delete().where(
+        u.db.BackgroundTask.kind.startswith("usage.")
+    ).execute()
     u.records.outcome_unknown(row, "dev")
     assert not _pending(u, u.usage.RECOUNT_REPOSITORY_KIND)
     u.records.outcome_unknown(row, "main")
@@ -792,3 +794,11 @@ def test_the_status_is_not_the_next_periodic_recount(u):
         run_after=u.db.utcnow() + timedelta(hours=6),
     )
     assert u.usage.recount_status()["task"]["id"] == started
+    # A recount waiting to retry after a failed attempt is shown
+    T.update(
+        status=u.tasks.QUEUED,
+        attempts=1,
+        run_after=u.db.utcnow() + timedelta(minutes=1),
+    ).where(T.id == started).execute()
+    shown = u.usage.recount_status()["task"]
+    assert (shown["id"], shown["status"]) == (started, "queued")

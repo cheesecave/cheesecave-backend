@@ -1254,10 +1254,10 @@ async def squash_repo(
         # Step 3: Bring the records of the squashed repository up to date
         final_repo = get_repository(repo_type, namespace, name)
         if final_repo:
-            # The squashed repository has only main left
-            await refresh_head_refs(final_repo, "main", exact=True, whole_repository=True)
             # Its main is new: the usage is recounted in the background
             usage.enqueue_repository_recount(final_repo.id)
+            # The squashed repository has only main left
+            await refresh_head_refs(final_repo, "main", exact=True, whole_repository=True)
 
         logger.success(f"Repository squashed successfully: {repo_id}")
 
