@@ -18,16 +18,16 @@ release works with it, and LakeFS changed its license in 1.87.0.
 | 1.48.1 – 1.69.x | Supported | |
 | 1.70.0 | **Unsupported** | Cannot store regular files on an S3 endpoint without TLS, such as the bundled MinIO. Fixed in 1.70.1. |
 | 1.70.1 – **1.86.0** | Supported | **1.86.0 is the bundled release**, and the last one under Apache 2.0. |
-| 1.87.0 | Supported, **BSL 1.1** | Works, but under a different license: see [License](#license). |
+| 1.87.0 – 1.88.0 | Supported, **BSL 1.1** | Works, but under a different license: see [License](#license). |
 | newer | Untested | |
 
 How this was determined:
 
-- The full backend suite (1,444 tests) passes on 1.48.1, 1.70.1, 1.86.0 and
-  1.87.0.
+- The full backend suite (about 1,470 tests) passes on 1.48.1, 1.70.1,
+  1.86.0, 1.87.0 and 1.88.0.
 - Its LakeFS-heavy part (186 tests: Super Squash, Reset, Revert, commit
   availability, garbage collection, storage usage, Hugging Face compatibility)
-  passes on every sampled release from 1.48.1 to 1.87.0 except 1.70.0.
+  passes on every sampled release from 1.48.1 to 1.88.0 except 1.70.0.
 - Releases below 1.48.1 fail the Reset tests.
 
 CI runs the suite on 1.86.0 and on 1.48.1, the oldest supported release.

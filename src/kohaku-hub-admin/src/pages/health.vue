@@ -279,7 +279,7 @@ onBeforeUnmount(() => {
               v-if="dep.compatibility && dep.compatibility.status !== 'supported'"
             >
               <span class="meta-label">Note</span>
-              <span class="meta-value">{{ dep.compatibility.message }}</span>
+              <span class="meta-note">{{ dep.compatibility.message }}</span>
             </li>
             <li v-if="dep.detail">
               <span class="meta-label">Detail</span>
@@ -339,6 +339,11 @@ onBeforeUnmount(() => {
   font-size: 13px;
   text-align: right;
   word-break: break-all;
+}
+
+.meta-note {
+  font-size: 13px;
+  text-align: right;
 }
 
 .meta-value.endpoint {

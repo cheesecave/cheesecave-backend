@@ -28,7 +28,7 @@ logger = get_logger("LAKEFS")
 MINIMUM = (1, 48, 1)
 BROKEN = {(1, 70, 0): "cannot store regular files on an S3 endpoint without TLS"}
 RECOMMENDED = (1, 86, 0)  # the bundled image: the last Apache 2.0 release
-TESTED_UP_TO = (1, 87, 0)
+TESTED_UP_TO = (1, 88, 0)
 FIRST_BSL = (1, 87, 0)
 DOCS = "docs/deployment/lakefs.md"
 

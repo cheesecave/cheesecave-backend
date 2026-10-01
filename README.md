@@ -218,7 +218,7 @@ See [docs/API.md](./docs/API.md) for detailed API documentation.
 | below 1.48.1 (incl. 1.48.0) | ❌ Unsupported: Reset would leave a merge commit, so it is disabled |
 | 1.48.1 – 1.86.0, except 1.70.0 | ✅ Supported; **1.86.0 is bundled** |
 | 1.70.0 | ❌ Unsupported: cannot store regular files on an S3 endpoint without TLS |
-| 1.87.0 | ✅ Works, but licensed under the **Business Source License 1.1** instead of Apache 2.0 |
+| 1.87.0 – 1.88.0 | ✅ Works, but licensed under the **Business Source License 1.1** instead of Apache 2.0 |
 | newer | Untested |
 
 - **Pinned, never `latest`:** the Docker bundle, the dev stack and CI all pin

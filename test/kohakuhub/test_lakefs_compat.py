@@ -22,7 +22,8 @@ def _forget_version(monkeypatch):
         ("1.86.0", "supported", "apache-2.0", True),
         ("1.87.0", "supported", "bsl-1.1", True),
         ("v1.87.0", "supported", "bsl-1.1", True),
-        ("1.88.0", "untested", "bsl-1.1", True),
+        ("1.88.0", "supported", "bsl-1.1", True),
+        ("1.89.0", "untested", "bsl-1.1", True),
         ("2.0.0-rc1", "untested", "bsl-1.1", True),
         ("dev", "unknown", None, True),
         (None, "unknown", None, True),
@@ -42,7 +43,7 @@ def test_each_boundary(version, status, license, reset_supported):
 def test_the_messages_say_why():
     assert "Reset would leave a merge commit" in lakefs_compat.assess("1.40.0").message
     assert "without TLS" in lakefs_compat.assess("1.70.0").message
-    assert "newest tested release, 1.87.0" in lakefs_compat.assess("1.90.0").message
+    assert "newest tested release, 1.88.0" in lakefs_compat.assess("1.90.0").message
     assert "Business Source License" in lakefs_compat.assess("1.87.0").message
     assert "Business Source License" not in lakefs_compat.assess("1.86.0").message
 
