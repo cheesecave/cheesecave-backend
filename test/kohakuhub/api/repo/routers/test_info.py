@@ -176,3 +176,12 @@ async def test_revision_info_follows_the_same_contract(client):
     assert set(expanded.json()) == {"_id", "id", "sha", "lastModified"}
     assert all("blobId" in s for s in blobs.json()["siblings"])
     assert invalid.status_code == 400
+
+
+async def test_an_empty_expand_is_no_expand_like_the_hub(client):
+    """``?expand=`` answers everything on the Hub, as without it."""
+    for path in ("/api/models/owner/demo-model", "/api/models/owner/demo-model/revision/main"):
+        response = await client.get(path, params={"expand": ""})
+
+        assert response.status_code == 200
+        assert "siblings" in response.json() and "private" in response.json()

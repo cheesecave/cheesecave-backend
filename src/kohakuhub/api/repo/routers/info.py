@@ -228,6 +228,7 @@ async def get_repo_info(
     check_repo_read_permission(repo_row, user)
 
     # As on the Hub: an unknown ``expand`` property is a 400
+    expand = [prop for prop in expand or [] if prop] or None  # ``expand=``: none, as on the Hub
     if bad := expand_error(repo_type, expand):
         return bad
 

@@ -357,6 +357,7 @@ async def get_revision(
     except Exception as e:
         return hf_server_error(f"Failed to resolve revision: {str(e)}")
 
+    expand = [prop for prop in expand or [] if prop] or None  # ``expand=``: none, as on the Hub
     if bad := expand_error(repo_type.value, expand):
         return bad
 
