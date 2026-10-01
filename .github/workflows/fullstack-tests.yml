@@ -80,7 +80,7 @@ jobs:
           --health-timeout 5s
           --health-retries 10
       lakefs:
-        image: treeverse/lakefs:latest
+        image: treeverse/lakefs:1.86.0 # the bundled release (docs/deployment/lakefs.md)
         env:
           LAKEFS_DATABASE_TYPE: local
           LAKEFS_DATABASE_LOCAL_PATH: /tmp/lakefs/metadata.db
@@ -160,9 +160,18 @@ jobs:
     # makes a test pass only because cache hides the bug), this job goes
     # red. Splitting it out instead of doubling the main matrix saves
     # ~18 GitHub Actions minutes per push.
-    name: backend tests (cache disabled)
+    #
+    # It also runs on the oldest LakeFS release KohakuHub supports, so that
+    # claim stays true (docs/deployment/lakefs.md, kohakuhub.lakefs_compat).
+    name: backend tests (cache disabled, LakeFS ${{ matrix.lakefs }})
     runs-on: ubuntu-latest
     timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        lakefs:
+          - "1.86.0" # bundled
+          - "1.48.1" # oldest supported
     env:
       KOHAKU_HUB_DATABASE_URL: postgresql://hub_test:hub_test_password@127.0.0.1:25432/kohakuhub_test
       KOHAKU_HUB_S3_ENDPOINT: http://127.0.0.1:29001
@@ -210,7 +219,7 @@ jobs:
           --health-timeout 5s
           --health-retries 10
       lakefs:
-        image: treeverse/lakefs:latest
+        image: treeverse/lakefs:${{ matrix.lakefs }}
         env:
           LAKEFS_DATABASE_TYPE: local
           LAKEFS_DATABASE_LOCAL_PATH: /tmp/lakefs/metadata.db

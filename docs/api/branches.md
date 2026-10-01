@@ -20,9 +20,9 @@ available without authentication from `GET /api/site-config`:
 {
   "capabilities": {
     "repository_operations": {
-      "revert": false,
-      "reset": false,
-      "squash": false
+      "revert": true,
+      "reset": true,
+      "squash": true
     }
   }
 }
@@ -51,33 +51,24 @@ The `operation` value is one of `revert`, `reset`, or `squash`. Once enabled,
 the normal authentication, permission, and repository validation requirements
 still apply.
 
-### Defaults and reopening plan
+### Defaults
 
-Revert, Reset, and Super Squash are **disabled by default for now**. Real
-deployments showed silent data corruption, long hangs, and outages in them
-(#99), and #107 records further integrity gaps. The flags exist so these
-operations can be reopened safely, one at a time. The plan:
+Revert, Reset, and Super Squash are **enabled by default**. They were
+disabled while #99 and #107 were fixed (silent data corruption, long hangs and
+outages in real deployments). Each now changes LakeFS metadata only and takes
+about a second, whatever the repository's size.
 
-1. Each operation gets its integrity and recovery fixes from the #99 work
-   plan, plus a canary run in a real deployment.
-2. Operations then become available one by one. An operator can opt in to an
-   individual operation with its flag before the defaults change.
-3. Once all three have passed, the defaults switch to **enabled**. The flags
-   stay as emergency off switches.
-
-To opt in before then, set `KOHAKU_HUB_REPOSITORY_REVERT_ENABLED`,
+Each flag stays as an off switch. Set `KOHAKU_HUB_REPOSITORY_REVERT_ENABLED`,
 `KOHAKU_HUB_REPOSITORY_RESET_ENABLED`, or
-`KOHAKU_HUB_REPOSITORY_SQUASH_ENABLED` to `true`. Alternatively, set
-`repository_revert_enabled`, `repository_reset_enabled`, or
-`repository_squash_enabled` under `[app]` in `config.toml`. Opting in means
-accepting the open issues in #99 and #107, and requires:
+`KOHAKU_HUB_REPOSITORY_SQUASH_ENABLED` to `false`, or the matching
+`repository_*_enabled` key under `[app]` in `config.toml`.
 
-- `db_backend = "postgres"`. Any other backend keeps every operation
-  disabled.
-- Draining backend instances that predate the gates, and deploying the
-  frontend with this change, before enabling a flag.
-- A backup of the repositories and object storage these operations may
-  touch.
+An operation is available only when:
+
+- `db_backend = "postgres"`. Any other backend keeps all three disabled.
+- For Reset, the LakeFS server is 1.48.1 or later. On an older LakeFS, Reset
+  would leave a merge commit instead of one linear commit, so it is disabled
+  and its `503` says so. See [LakeFS compatibility](../deployment/lakefs.md).
 
 ## Branches
 

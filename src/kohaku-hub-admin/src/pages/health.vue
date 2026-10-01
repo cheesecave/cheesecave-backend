@@ -41,6 +41,21 @@ const STATUS_LABEL = {
   unknown: "Unknown",
 };
 
+// Whether KohakuHub supports this LakeFS release (docs/deployment/lakefs.md)
+const COMPAT_TAG_TYPE = {
+  supported: "success",
+  unsupported: "danger",
+  untested: "warning",
+  unknown: "info",
+};
+
+const COMPAT_LABEL = {
+  supported: "Supported",
+  unsupported: "Unsupported",
+  untested: "Untested",
+  unknown: "Unknown",
+};
+
 const DEPENDENCY_LABEL = {
   postgres: "PostgreSQL",
   minio: "MinIO / S3",
@@ -235,6 +250,36 @@ onBeforeUnmount(() => {
               <span class="meta-value endpoint" :title="dep.endpoint || ''">
                 {{ dep.endpoint || "—" }}
               </span>
+            </li>
+            <li
+              v-if="dep.compatibility"
+              :data-testid="`health-compat-${dep.name}`"
+            >
+              <span class="meta-label">Compatibility</span>
+              <span class="meta-value">
+                <el-tag
+                  :type="COMPAT_TAG_TYPE[dep.compatibility.status] || 'info'"
+                  size="small"
+                  :title="dep.compatibility.message"
+                >
+                  {{ COMPAT_LABEL[dep.compatibility.status] || "Unknown" }}
+                </el-tag>
+                <el-tag
+                  v-if="dep.compatibility.license === 'bsl-1.1'"
+                  type="warning"
+                  size="small"
+                  class="ml-1"
+                  title="LakeFS 1.87.0 and later use the Business Source License 1.1, not Apache 2.0"
+                >
+                  BSL 1.1
+                </el-tag>
+              </span>
+            </li>
+            <li
+              v-if="dep.compatibility && dep.compatibility.status !== 'supported'"
+            >
+              <span class="meta-label">Note</span>
+              <span class="meta-value">{{ dep.compatibility.message }}</span>
             </li>
             <li v-if="dep.detail">
               <span class="meta-label">Detail</span>

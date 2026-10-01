@@ -170,6 +170,106 @@ describe("admin health page", () => {
     expect(smtpCard.text()).toContain("SMTP is disabled in configuration");
   });
 
+  function withLakefs(compatibility) {
+    return {
+      ...SAMPLE_PAYLOAD,
+      dependencies: SAMPLE_PAYLOAD.dependencies.map((dep) =>
+        dep.name === "lakefs"
+          ? { ...dep, version: compatibility?.version ?? dep.version, compatibility }
+          : dep,
+      ),
+    };
+  }
+
+  it("shows a supported LakeFS without a note or license tag", async () => {
+    mocks.api.getDependencyHealth.mockResolvedValue(
+      withLakefs({
+        version: "1.86.0",
+        status: "supported",
+        license: "apache-2.0",
+        reset_supported: true,
+        message: "LakeFS 1.86.0 is supported",
+      }),
+    );
+    const wrapper = mountPage();
+    await flushPromises();
+
+    const card = wrapper.get('[data-testid="health-card-lakefs"]');
+    expect(card.get('[data-testid="health-compat-lakefs"]').text()).toContain(
+      "Supported",
+    );
+    expect(card.text()).not.toContain("BSL 1.1");
+    expect(card.text()).not.toContain("Note");
+    // Other dependencies carry no compatibility row
+    expect(wrapper.find('[data-testid="health-compat-postgres"]').exists()).toBe(
+      false,
+    );
+  });
+
+  it("explains an unsupported LakeFS", async () => {
+    const message =
+      "LakeFS 1.40.0 is older than 1.48.1: Reset would leave a merge commit instead of one linear commit, so it is disabled";
+    mocks.api.getDependencyHealth.mockResolvedValue(
+      withLakefs({
+        version: "1.40.0",
+        status: "unsupported",
+        license: "apache-2.0",
+        reset_supported: false,
+        message,
+      }),
+    );
+    const wrapper = mountPage();
+    await flushPromises();
+
+    const card = wrapper.get('[data-testid="health-card-lakefs"]');
+    expect(card.text()).toContain("Unsupported");
+    expect(card.text()).toContain(message);
+  });
+
+  it("tags a BSL-licensed LakeFS", async () => {
+    mocks.api.getDependencyHealth.mockResolvedValue(
+      withLakefs({
+        version: "1.87.0",
+        status: "supported",
+        license: "bsl-1.1",
+        reset_supported: true,
+        message: "LakeFS 1.87.0 is supported; it is licensed under the Business Source License 1.1, not Apache 2.0",
+      }),
+    );
+    const wrapper = mountPage();
+    await flushPromises();
+
+    const card = wrapper.get('[data-testid="health-card-lakefs"]');
+    expect(card.text()).toContain("Supported");
+    expect(card.text()).toContain("BSL 1.1");
+  });
+
+  it("labels an untested or unrecognised status", async () => {
+    mocks.api.getDependencyHealth.mockResolvedValue(
+      withLakefs({
+        version: "1.90.0",
+        status: "untested",
+        license: "bsl-1.1",
+        reset_supported: true,
+        message: "LakeFS 1.90.0 is newer than the newest tested release, 1.87.0",
+      }),
+    );
+    const wrapper = mountPage();
+    await flushPromises();
+    expect(wrapper.get('[data-testid="health-card-lakefs"]').text()).toContain(
+      "Untested",
+    );
+
+    mocks.api.getDependencyHealth.mockResolvedValue(
+      withLakefs({ version: null, status: "mystery", license: null, message: "?" }),
+    );
+    await wrapper.get('[data-testid="health-recheck"]').trigger("click");
+    await flushPromises();
+    expect(wrapper.get('[data-testid="health-compat-lakefs"]').text()).toContain(
+      "Unknown",
+    );
+  });
+
   it("re-fetches when the user clicks Re-check", async () => {
     mocks.api.getDependencyHealth.mockResolvedValue(SAMPLE_PAYLOAD);
     const wrapper = mountPage();

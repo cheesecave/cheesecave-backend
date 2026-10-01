@@ -10,13 +10,12 @@ Deploy KohakuHub for production use.
 
 ## Component Versions
 
-- **LakeFS ≥ v0.54.0** (released 2021-11-08). The bundled docker compose
-  uses `treeverse/lakefs:latest` and is always compatible. If your
-  production stack pins an older LakeFS image, upgrade before rolling out
-  KohakuHub — the file-list `expand=true` endpoint depends on
-  path-filtered `logCommits` (`objects=` / `prefixes=` / `limit=`)
-  introduced in v0.54.0; pre-v0.54 servers silently drop those
-  parameters and would surface wrong `lastCommit` metadata.
+- **LakeFS 1.48.1 – 1.86.0** (not 1.70.0). The bundled docker compose pins
+  `treeverse/lakefs:1.86.0`. If your production stack runs its own LakeFS,
+  check it against [LakeFS Compatibility](lakefs.md) before rolling out
+  KohakuHub. LakeFS 1.87.0 and later are licensed under the Business Source
+  License 1.1, which limits production use to internal use; assess it before
+  upgrading. The Admin portal's Health page shows the running version.
 
 ## SSL & Domain
 

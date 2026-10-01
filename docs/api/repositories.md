@@ -228,9 +228,8 @@ authentication or repository lookup with a stable `operation_disabled` detail:
 
 When enabled, the normal authentication and permission checks still apply.
 
-Squash is disabled by default until its #99 fixes land; see
-[Defaults and reopening plan](branches.md#defaults-and-reopening-plan). #107
-tracks further known issues in Squash.
+Squash is enabled by default and can be switched off; see
+[Defaults](branches.md#defaults).
 
 ---
 

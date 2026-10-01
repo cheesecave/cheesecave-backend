@@ -697,6 +697,25 @@ async def test_lifespan_shutdown_closes_pooled_client(monkeypatch):
     assert live_lakefs._singleton_client is None
 
 
+async def test_lifespan_startup_reads_the_lakefs_version(monkeypatch):
+    """The service logs at startup whether its LakeFS is supported
+    (``kohakuhub.lakefs_compat``)."""
+    import importlib
+
+    main_mod = importlib.import_module("kohakuhub.main")
+    compat = importlib.import_module("kohakuhub.lakefs_compat")
+    learnt = []
+
+    async def _learn():
+        learnt.append(True)
+
+    monkeypatch.setattr(main_mod, "init_storage", lambda: None)
+    monkeypatch.setattr(compat, "learn", _learn)
+
+    async with main_mod.lifespan(object()):
+        assert learnt == [True]
+
+
 @pytest.mark.asyncio
 async def test_close_lakefs_rest_client_resets_singleton(monkeypatch):
     """``close_lakefs_rest_client()`` must close the underlying client and

@@ -2,7 +2,7 @@
 
 Mock-only unit tests live in ``test_lakefs_rest_client.py``; the tests in
 this module talk to the actual LakeFS service stood up by the test
-fixtures (Postgres + MinIO + ``treeverse/lakefs:latest``). They verify
+fixtures (Postgres + MinIO + LakeFS). They verify
 that the pooled client survives realistic workloads against a live server
 without regressing functional behaviour.
 
@@ -254,3 +254,4 @@ async def test_tree_expand_true_end_to_end_through_pool(client):
                 f"lastCommit on {entry['path']} missing key {required!r}: {last!r}"
             )
         assert last["id"], f"empty commit id on {entry['path']}"
+

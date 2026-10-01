@@ -73,6 +73,23 @@ KohakuHub uses a **dual-licensing strategy** to balance open-source principles w
 
 ---
 
+## Third-Party Component: LakeFS
+
+KohakuHub stores repository history in [LakeFS](https://lakefs.io), which runs
+as a separate service and keeps its own license.
+
+- **Up to 1.86.0:** LakeFS is licensed under Apache 2.0. The Docker bundle pins
+  `treeverse/lakefs:1.86.0`.
+- **1.87.0 and later:** LakeFS is licensed under the Business Source License
+  1.1. Production use is limited to the unmodified release and to your
+  organization's internal use. Each release becomes Apache 2.0 four years after
+  its publication.
+
+Assess those terms before upgrading LakeFS past 1.86.0, especially for a hub
+open to outside users. See [LakeFS Compatibility](docs/deployment/lakefs.md).
+
+---
+
 ## Integration Strategy
 
 ### How Dataset Viewer Integrates with KohakuHub

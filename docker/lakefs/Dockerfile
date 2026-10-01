@@ -1,4 +1,5 @@
-FROM treeverse/lakefs:latest
+# The last Apache 2.0 release; supported versions: docs/deployment/lakefs.md
+FROM treeverse/lakefs:1.86.0
 
 USER root
 

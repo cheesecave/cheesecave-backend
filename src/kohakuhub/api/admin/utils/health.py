@@ -20,6 +20,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
+from kohakuhub import lakefs_compat
 from kohakuhub.config import cfg
 from kohakuhub.db import db
 from kohakuhub.logger import get_logger
@@ -414,12 +415,15 @@ async def probe_lakefs(
             latency_ms=_ms_since(start),
         )
 
-    return _ok(
+    result = _ok(
         "lakefs",
         start=start,
         version=version,
         endpoint=endpoint,
     )
+    # Whether KohakuHub supports it (docs/deployment/lakefs.md)
+    result["compatibility"] = lakefs_compat.remember(version).as_dict()
+    return result
 
 
 def _smtp_probe_sync(timeout: float) -> str | None:

@@ -259,6 +259,45 @@ async def test_lakefs_probe_returns_ok_against_live_service(app):
     assert result["name"] == "lakefs"
     assert result["status"] == "ok"
     assert result["endpoint"]
+    assert result["compatibility"]["version"] == result["version"]
+    assert result["compatibility"]["status"] in ("supported", "untested")
+
+
+@pytest.mark.parametrize(
+    "version, status, license",
+    [
+        ("1.40.0", "unsupported", "apache-2.0"),
+        ("1.86.0", "supported", "apache-2.0"),
+        ("1.87.0", "supported", "bsl-1.1"),
+    ],
+)
+async def test_lakefs_probe_tells_whether_the_version_is_supported(
+    app, monkeypatch, version, status, license
+):
+    import httpx as httpx_module
+
+    health_mod = _live_health_module()
+    monkeypatch.setattr(health_mod.lakefs_compat, "_version", None)
+
+    def _handler(request: httpx_module.Request) -> httpx_module.Response:
+        if request.url.path.endswith("/healthcheck"):
+            return httpx_module.Response(204)
+        return httpx_module.Response(200, json={"version": version})
+
+    real_async_client = httpx_module.AsyncClient
+    transport = httpx_module.MockTransport(_handler)
+    monkeypatch.setattr(
+        health_mod.httpx,
+        "AsyncClient",
+        lambda *_a, **kw: real_async_client(transport=transport, timeout=kw.get("timeout")),
+    )
+
+    result = await health_mod.probe_lakefs()
+
+    assert result["compatibility"]["status"] == status
+    assert result["compatibility"]["license"] == license
+    # The process now knows the server it talks to
+    assert health_mod.lakefs_compat.known().version == version
 
 
 async def test_smtp_probe_disabled_by_default_in_tests(app):
@@ -478,6 +517,7 @@ async def test_lakefs_probe_keeps_ok_when_only_version_lookup_fails(
     result = await health_mod.probe_lakefs()
     assert result["status"] == "ok"
     assert result["version"] is None
+    assert result["compatibility"]["status"] == "unknown"
 
 
 async def test_smtp_probe_reports_ok_when_enabled_and_banner_is_returned(
