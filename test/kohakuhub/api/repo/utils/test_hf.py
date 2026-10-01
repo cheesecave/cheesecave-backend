@@ -302,12 +302,12 @@ async def test_the_manifest_cache_keeps_to_its_budget(lister, monkeypatch):
         await hf_utils.hf_siblings_json(repo, "lake", commit, with_metadata=False)
 
     # Each manifest is 29 bytes: the oldest went
-    assert list(hf_utils._manifests) == [("lake", "c2"), ("lake", "c3")]
+    assert list(hf_utils._manifests) == [("lake", "c2", False), ("lake", "c3", False)]
 
     monkeypatch.setattr(hf_utils, "MANIFEST_CACHE_BYTES", 10)
     lister(_page([("big-file-name.txt", 1, "")]))
     await hf_utils.hf_siblings_json(repo, "lake", "c4", with_metadata=False)
-    assert ("lake", "c4") not in hf_utils._manifests  # larger than the whole budget
+    assert ("lake", "c4", False) not in hf_utils._manifests  # larger than the whole budget
 
 
 async def test_blob_siblings_follow_the_linked_object(lister, monkeypatch):
@@ -330,7 +330,26 @@ async def test_blob_siblings_follow_the_linked_object(lister, monkeypatch):
          "lfs": {"sha256": LFS_SHA, "size": 125162496, "pointerSize": 134}},
         {"rfilename": "unrecorded.txt", "size": 3},
     ]
-    assert not hf_utils._manifests  # only name lists are cached
+    # Kept per commit too, apart from the name-only list
+    assert list(hf_utils._manifests) == [("lake", "c1", True)]
+
+
+async def test_blob_siblings_are_built_once_per_commit_too(lister, monkeypatch):
+    import asyncio
+
+    client = lister(_page([("model.bin", 9, LFS_ADDRESS)]), _page([("model.bin", 9, LFS_ADDRESS)]))
+    loads = []
+    monkeypatch.setattr(hf_utils, "_regular_blob_ids", lambda repo: loads.append(1) or {})
+    repo = SimpleNamespace(id=1)
+
+    blobs = await asyncio.gather(
+        *(hf_utils.hf_siblings_json(repo, "lake", "c1", with_metadata=True) for _ in range(3))
+    )
+    names = await hf_utils.hf_siblings_json(repo, "lake", "c1", with_metadata=False)
+
+    assert len(set(blobs)) == 1 and "blobId" in blobs[0]
+    assert json.loads(names) == [{"rfilename": "model.bin"}]
+    assert len(client.calls) == 2 and loads == [1]  # one listing for each form
 
 
 async def test_blob_siblings_without_file_rows_still_answer(lister, monkeypatch):

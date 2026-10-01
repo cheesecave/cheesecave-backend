@@ -1612,3 +1612,74 @@ async def test_list_repo_tree_link_header_preserves_name_prefix(monkeypatch):
     link_header = response.headers["link"]
     assert "name_prefix=conf" in link_header
     assert "cursor=page-2" in link_header
+
+
+COMMIT = "a" * 64
+
+
+class _CountingLog:
+    """log_commits answering one commit per path, counting calls."""
+
+    def __init__(self, fail=()):
+        self.calls = []
+        self.fail = set(fail)
+
+    async def log_commits(self, **kwargs):
+        target = (kwargs.get("objects") or kwargs.get("prefixes"))[0]
+        self.calls.append((kwargs["ref"], target))
+        await asyncio.sleep(0)
+        if target in self.fail:
+            raise RuntimeError("lakefs busy")
+        return {"results": [{"id": f"c-{target}", "message": target, "creation_date": 1}]}
+
+
+@pytest.fixture
+def last_commit_log(monkeypatch):
+    tree_api._last_commits.clear()
+    client = _CountingLog()
+    monkeypatch.setattr(tree_api, "get_lakefs_rest_client", lambda: client)
+    yield client
+    tree_api._last_commits.clear()
+
+
+@pytest.mark.asyncio
+async def test_last_commits_at_a_commit_are_looked_up_once(last_commit_log):
+    """A path's last commit at a commit never changes: many users opening one
+    directory cost LakeFS one path-filtered log per path (#101)."""
+    targets = [{"path": "meta", "type": "directory"}, {"path": "README.md", "type": "file"}]
+
+    results = await asyncio.gather(
+        *(tree_api.resolve_last_commits_for_paths("lake", COMMIT, targets) for _ in range(5))
+    )
+    again = await tree_api.resolve_last_commits_for_paths("lake", COMMIT, targets)
+
+    assert all(r == again for r in results)
+    assert again["meta"]["id"] == "c-meta/" and again["README.md"]["id"] == "c-README.md"
+    assert sorted(last_commit_log.calls) == [(COMMIT, "README.md"), (COMMIT, "meta/")]
+
+
+@pytest.mark.asyncio
+async def test_last_commits_on_a_branch_or_after_a_failure_are_asked_again(last_commit_log):
+    targets = [{"path": "README.md", "type": "file"}]
+
+    await tree_api.resolve_last_commits_for_paths("lake", "main", targets)
+    await tree_api.resolve_last_commits_for_paths("lake", "main", targets)
+    assert len(last_commit_log.calls) == 2  # a branch moves: never kept
+
+    last_commit_log.fail.add("README.md")
+    assert await tree_api.resolve_last_commits_for_paths("lake", COMMIT, targets) == {"README.md": None}
+    last_commit_log.fail.clear()
+    assert (await tree_api.resolve_last_commits_for_paths("lake", COMMIT, targets))["README.md"]["id"]
+    assert len(last_commit_log.calls) == 4  # the failure was not kept
+
+
+@pytest.mark.asyncio
+async def test_last_commit_cache_keeps_to_its_size(last_commit_log, monkeypatch):
+    monkeypatch.setattr(tree_api, "LAST_COMMIT_CACHE_ENTRIES", 2)
+
+    for path in ("a", "b", "c"):
+        await tree_api.resolve_last_commits_for_paths("lake", COMMIT, [{"path": path, "type": "file"}])
+    await tree_api.resolve_last_commits_for_paths("lake", COMMIT, [{"path": "b", "type": "file"}])
+
+    assert [key[-1] for key in tree_api._last_commits] == ["c", "b"]
+    assert len(last_commit_log.calls) == 3
