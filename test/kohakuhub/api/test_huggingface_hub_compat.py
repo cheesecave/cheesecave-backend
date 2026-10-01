@@ -663,3 +663,139 @@ async def test_hf_move_repo_refuses_a_name_that_normalizes_to_another_repo(
         lambda: api.repo_info(repo_id="owner/Issue108-Norm", repo_type="model")
     )
     assert renamed.id == "owner/Issue108-Norm"
+
+
+async def test_hf_api_repo_info_matches_the_hub_contract(live_server_url, hf_api_token):
+    """What huggingface_hub reads back, as on the Hub: names only by default,
+    blob fields with ``files_metadata``, only the asked properties with
+    ``expand`` (on releases that have it)."""
+    import inspect
+
+    api = HfApi(endpoint=live_server_url, token=hf_api_token)
+
+    default = await asyncio.to_thread(lambda: api.model_info("owner/demo-model"))
+    assert {s.rfilename for s in default.siblings} >= {"README.md", "weights/model.safetensors"}
+    assert all(s.size is None and s.lfs is None and s.blob_id is None for s in default.siblings)
+    assert default.sha and default.private is False
+
+    detailed = await asyncio.to_thread(
+        lambda: api.model_info("owner/demo-model", files_metadata=True)
+    )
+    by_name = {s.rfilename: s for s in detailed.siblings}
+    assert by_name["README.md"].blob_id and by_name["README.md"].size > 0
+    weights = by_name["weights/model.safetensors"]
+    assert weights.lfs is not None and weights.blob_id
+    assert weights.lfs.size == weights.size
+
+    if "expand" not in inspect.signature(api.model_info).parameters:
+        return  # this huggingface_hub predates expand
+    expanded = await asyncio.to_thread(
+        lambda: api.model_info("owner/demo-model", expand=["sha", "lastModified", "likes"])
+    )
+    assert expanded.sha == default.sha and expanded.last_modified is not None
+    assert expanded.siblings is None
+
+
+async def test_hf_snapshot_download_lists_files_from_the_name_only_default(
+    live_server_url, hf_api_token, tmp_path
+):
+    """snapshot_download enumerates files from repo_info's default sibling list
+    (and asserts it is present on huggingface_hub < 0.36)."""
+    local = await asyncio.to_thread(
+        lambda: snapshot_download(
+            "owner/demo-model",
+            endpoint=live_server_url,
+            token=hf_api_token,
+            cache_dir=str(tmp_path / "cache"),
+        )
+    )
+    files = {p.relative_to(local).as_posix() for p in Path(local).rglob("*") if p.is_file()}
+    assert {"README.md", "weights/model.safetensors"} <= files
+
+
+async def test_hf_paths_info_expands_a_directory_with_its_last_commit(live_server_url, hf_api_token):
+    api = HfApi(endpoint=live_server_url, token=hf_api_token)
+
+    (entry,) = await asyncio.to_thread(
+        lambda: api.get_paths_info("owner/demo-model", ["weights"], expand=True)
+    )
+
+    assert entry.path == "weights" and entry.last_commit is not None
+
+
+async def test_hf_dataset_info_default_and_files_metadata(live_server_url, member_hf_api_token):
+    api = HfApi(endpoint=live_server_url, token=member_hf_api_token)
+
+    default = await asyncio.to_thread(lambda: api.dataset_info("acme-labs/private-dataset"))
+    detailed = await asyncio.to_thread(
+        lambda: api.dataset_info("acme-labs/private-dataset", files_metadata=True)
+    )
+
+    assert default.private is True
+    assert [s.rfilename for s in default.siblings] == [s.rfilename for s in detailed.siblings]
+    assert all(s.size is None and s.blob_id is None for s in default.siblings)
+    train = next(s for s in detailed.siblings if s.rfilename == "data/train.jsonl")
+    assert train.size > 0 and train.blob_id
+
+
+async def test_hf_repo_info_pinned_to_a_commit(live_server_url, hf_api_token, tmp_path):
+    """A revision goes through /revision/{rev}: the same contract."""
+    import inspect
+
+    api = HfApi(endpoint=live_server_url, token=hf_api_token)
+    head = await asyncio.to_thread(lambda: api.model_info("owner/demo-model"))
+    sha = (await asyncio.to_thread(lambda: api.list_repo_commits("owner/demo-model")))[0].commit_id
+
+    pinned = await asyncio.to_thread(lambda: api.model_info("owner/demo-model", revision=sha))
+    detailed = await asyncio.to_thread(
+        lambda: api.model_info("owner/demo-model", revision=sha, files_metadata=True)
+    )
+    assert {s.rfilename for s in pinned.siblings} == {s.rfilename for s in head.siblings}
+    assert all(s.size is None for s in pinned.siblings)
+    weights = next(s for s in detailed.siblings if s.rfilename == "weights/model.safetensors")
+    assert weights.lfs is not None and weights.blob_id
+
+    local = await asyncio.to_thread(
+        lambda: snapshot_download(
+            "owner/demo-model", revision=sha, endpoint=live_server_url,
+            token=hf_api_token, cache_dir=str(tmp_path / "cache"),
+        )
+    )
+    assert (Path(local) / "README.md").is_file()
+
+    if "expand" not in inspect.signature(api.model_info).parameters:
+        return
+    expanded = await asyncio.to_thread(
+        lambda: api.model_info("owner/demo-model", revision=sha, expand=["sha"])
+    )
+    assert expanded.sha and expanded.siblings is None
+
+
+async def test_hf_unknown_expand_property_raises_a_bad_request(live_server_url, hf_api_token):
+    import inspect
+
+    from huggingface_hub.utils import HfHubHTTPError
+
+    api = HfApi(endpoint=live_server_url, token=hf_api_token)
+    if "expand" not in inspect.signature(api.model_info).parameters:
+        pytest.skip("this huggingface_hub predates expand")
+
+    with pytest.raises(HfHubHTTPError) as raised:
+        await asyncio.to_thread(lambda: api.model_info("owner/demo-model", expand=["bogus"]))
+
+    assert raised.value.response.status_code == 400
+
+
+async def test_hf_list_repo_tree_expands_directories(live_server_url, hf_api_token):
+    import inspect
+
+    from huggingface_hub.hf_api import RepoFolder
+
+    api = HfApi(endpoint=live_server_url, token=hf_api_token)
+    if "expand" not in inspect.signature(api.list_repo_tree).parameters:
+        pytest.skip("this huggingface_hub predates expand")
+
+    entries = await asyncio.to_thread(lambda: list(api.list_repo_tree("owner/demo-model", expand=True)))
+
+    folder = next(e for e in entries if isinstance(e, RepoFolder) and e.path == "weights")
+    assert folder.last_commit is not None

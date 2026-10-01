@@ -156,7 +156,7 @@ def test_helper_functions_cover_path_formatting_links_and_file_records(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_fetch_page_and_directory_stats_cover_pagination(monkeypatch):
+async def test_fetch_page_lists_one_level(monkeypatch):
     page_client = _FakeLakeFSClient(
         list_responses=[
             {
@@ -185,35 +185,6 @@ async def test_fetch_page_and_directory_stats_cover_pagination(monkeypatch):
             "after": "",
         }
     ]
-
-    directory_client = _FakeLakeFSClient(
-        list_responses=[
-            {
-                "results": [
-                    {"path_type": "object", "size_bytes": 4, "mtime": 10},
-                    {"path_type": "common_prefix", "size_bytes": 999, "mtime": 999},
-                ],
-                "pagination": {"has_more": True, "next_offset": "page-2"},
-            },
-            {
-                "results": [
-                    {"path_type": "object", "size_bytes": 6, "mtime": 20},
-                ],
-                "pagination": {"has_more": False},
-            },
-        ]
-    )
-    monkeypatch.setattr(tree_api, "get_lakefs_client", lambda: directory_client)
-
-    total_size, latest_mtime = await tree_api._calculate_directory_stats(
-        "lake",
-        "main",
-        "docs",
-    )
-    assert total_size == 10
-    assert latest_mtime == 20
-    assert directory_client.list_calls[0]["prefix"] == "docs/"
-    assert directory_client.list_calls[1]["after"] == "page-2"
 
 
 def test_make_tree_item_covers_file_directory_and_lfs_payload(monkeypatch):
@@ -642,12 +613,6 @@ async def test_process_single_path_covers_file_directory_missing_and_errors(monk
         lambda error: isinstance(error, _NotFoundError),
     )
 
-    async def _fake_directory_stats(*args, **kwargs):
-        if kwargs["directory_path"] == "docs-error":
-            raise RuntimeError("stats failed")
-        return (15, 1713657620)
-
-    monkeypatch.setattr(tree_api, "_calculate_directory_stats", _fake_directory_stats)
     semaphore = asyncio.Semaphore(1)
 
     file_result = await tree_api._process_single_path(
@@ -681,13 +646,16 @@ async def test_process_single_path_covers_file_directory_missing_and_errors(monk
         semaphore,
         expand=True,
     )
+    # As on the Hub, a directory has no size, expanded or not: nothing under
+    # it is listed beyond the first entry
     assert directory_result == {
         "type": "directory",
         "path": "docs",
         "oid": "tree-oid",
-        "size": 15,
-        "lastModified": tree_api._format_last_modified(1713657620),
+        "size": 0,
+        "lastModified": tree_api._format_last_modified(1713657610),
     }
+    assert [c["prefix"] for c in client.list_calls if c["prefix"] == "docs/"] == ["docs/"]
 
     assert (
         await tree_api._process_single_path(

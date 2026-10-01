@@ -4,12 +4,17 @@ This module provides utilities for making Kohaku Hub compatible with
 `huggingface_hub` client behavior.
 """
 
+import asyncio
+import hashlib
+import json
+from collections import OrderedDict
 from typing import Optional
 
 from fastapi import HTTPException
 from fastapi.responses import Response
 from peewee import PeeweeException
 
+from kohakuhub.db import File
 from kohakuhub.logger import get_logger
 from kohakuhub.utils.lakefs import ref_in_history
 
@@ -388,101 +393,222 @@ def hf_range_not_satisfiable(
     )
 
 
-async def collect_hf_siblings(
-    repo_row,
-    repo_type: str,
-    repo_id: str,
-    revision: str,
-    *,
-    with_metadata: bool = True,
-) -> list[dict]:
-    """Collect repository files using the schema expected by `huggingface_hub`.
+# The properties the Hub accepts in a repository info ``expand``, per type
+# (its own validation message, 2026-10). ``storage`` is KohakuHub's: the
+# repository's quota usage.
+_EXPAND_COMMON = {
+    "author", "cardData", "createdAt", "disabled", "lastModified", "likes", "private",
+    "resourceGroup", "sha", "siblings", "tags", "trendingScore", "usedStorage", "xetEnabled",
+    "storage",
+}
+EXPAND_PROPERTIES = {
+    "model": frozenset(_EXPAND_COMMON | {
+        "baseModels", "childrenModelCount", "config", "downloads", "downloadsAllTime",
+        "evalResults", "gated", "gguf", "inference", "inferenceProviderMapping",
+        "library_name", "mask_token", "model-index", "pipeline_tag", "safetensors",
+        "spaces", "transformersInfo", "widgetData",
+    }),
+    "dataset": frozenset(_EXPAND_COMMON | {
+        "citation", "description", "downloads", "downloadsAllTime", "gated", "mainSize",
+        "paperswithcode_id",
+    }),
+    "space": frozenset(_EXPAND_COMMON | {
+        "datasets", "models", "region", "runtime", "sdk", "subdomain",
+    }),
+}
 
-    Args:
-        with_metadata: When False, emit only ``rfilename`` per file — no
-            ``size``, no ``lfs`` block — and skip the File-table load entirely.
-            This is what the ``blobs`` query parameter maps to; HF's own default
-            response is name-only, and on a large repo the metadata is what
-            makes this expensive (4000 files: 0.102s and 449KB with it, 0.037s
-            and 160KB without).
+# Name-only sibling lists, per (LakeFS repository, commit): a commit's file
+# list never changes. ponytail: per process, by bytes; share it through
+# Valkey if several workers keep rebuilding the same big lists.
+MANIFEST_CACHE_BYTES = 256 * 1024 * 1024
+_manifests: "OrderedDict[tuple[str, str], str]" = OrderedDict()
+_building: dict[tuple[str, str], asyncio.Task] = {}
+
+
+def repo_info_fields(
+    repo_row, repo_type: str, sha: Optional[str], last_modified: Optional[str], storage: bool
+) -> dict:
+    """The repository info fields KohakuHub has values for (``siblings`` aside).
+
+    ``storage`` (KohakuHub's quota usage) is computed only when asked: it
+    reads the namespace's quota.
     """
-    from kohakuhub.db_operations import get_repo_file_sha256_map, should_use_lfs
-    from kohakuhub.utils.lakefs import get_lakefs_client, resolve_lakefs_repo
+    repo_id = f"{repo_row.namespace}/{repo_row.name}"
+    fields = {
+        "_id": repo_row.id,
+        "id": repo_id,
+        "modelId": repo_id if repo_type == "model" else None,
+        "author": repo_row.namespace,
+        "sha": sha,
+        "lastModified": last_modified,
+        "createdAt": format_hf_datetime(repo_row.created_at),
+        "private": repo_row.private,
+        "disabled": False,
+        "gated": False,
+        "downloads": repo_row.downloads,
+        "downloadsAllTime": repo_row.downloads,
+        "likes": repo_row.likes_count,
+        "tags": [],
+        "pipeline_tag": None,
+        "library_name": None,
+        "usedStorage": repo_row.used_bytes,
+        "spaces": [],
+        "models": [],
+        "datasets": [],
+    }
+    if storage:
+        from kohakuhub.api.quota.util import get_repo_storage_info
 
-    lakefs_repo = resolve_lakefs_repo(repo_row)
+        try:
+            data = get_repo_storage_info(repo_row)
+            fields["storage"] = {
+                key: data[key]
+                for key in ("quota_bytes", "used_bytes", "available_bytes", "percentage_used",
+                            "effective_quota_bytes", "is_inheriting")
+            }
+        except Exception as e:  # the rest of the page still answers
+            logger.warning(f"Failed to get storage info for {repo_id}: {e}")
+    return fields
+
+
+def expand_error(repo_type: str, expand: Optional[list[str]]) -> Optional[Response]:
+    """The Hub's 400 for a property it does not know, else ``None``."""
+    allowed = EXPAND_PROPERTIES[repo_type]
+    for prop in expand or []:
+        if prop not in allowed:
+            options = "|".join(f'"{p}"' for p in sorted(allowed))
+            return hf_bad_request(f'Invalid option "{prop}" in expand: expected one of {options}')
+    return None
+
+
+def hf_repo_info_response(
+    fields: dict, expand: Optional[list[str]], siblings: Optional[str]
+) -> Response:
+    """A repository info body as the Hub shapes it.
+
+    Without ``expand``: every field, and ``siblings`` when given. With it:
+    ``_id`` and ``id``, then only the asked properties (``None`` for those
+    KohakuHub has no value for). ``siblings`` is already JSON, so a big list
+    is not walked again by the response encoder.
+    """
+    if expand:
+        body = {"_id": fields["_id"], "id": fields["id"]}
+        body.update((prop, fields.get(prop)) for prop in expand if prop != "siblings")
+    else:
+        body = fields
+    text = json.dumps(body)
+    if siblings is not None:
+        text = f'{text[:-1]}{", " if body else ""}"siblings": {siblings}}}'
+    return Response(content=text, media_type="application/json")
+
+
+def git_blob_id(content: bytes) -> str:
+    """Git's blob id: the Hub's ``blobId``."""
+    return hashlib.sha1(b"blob %d\0" % len(content) + content).hexdigest()
+
+
+def lfs_pointer(sha256: str, size: int) -> bytes:
+    """The git-lfs pointer file git stores for an LFS file."""
+    return f"version https://git-lfs.github.com/spec/v1\noid sha256:{sha256}\nsize {size}\n".encode()
+
+
+async def list_repo_objects(lakefs_repo: str, ref: str) -> list[tuple[str, int, str]]:
+    """Every object at ``ref``: (path, size, physical address)."""
+    from kohakuhub.utils.lakefs import get_lakefs_client
+
     client = get_lakefs_client()
-    all_results = []
+    objects = []
     after = ""
-
     while True:
         result = await client.list_objects(
-            repository=lakefs_repo,
-            ref=revision,
-            prefix="",
-            delimiter="",
-            amount=1000,
-            after=after,
+            repository=lakefs_repo, ref=ref, prefix="", delimiter="", amount=1000, after=after
         )
-
+        page = result if isinstance(result, list) else result.get("results", [])
+        objects.extend(
+            (obj["path"], obj.get("size_bytes") or 0, obj.get("physical_address") or "")
+            for obj in page
+            if obj.get("path_type") == "object"
+        )
         if isinstance(result, list):
-            all_results.extend(result)
-            break
-
-        all_results.extend(result.get("results", []))
+            return objects
         pagination = result.get("pagination", {})
-        if not pagination.get("has_more"):
-            break
-
         after = pagination.get("next_offset")
-        if not after:
-            break
+        if not pagination.get("has_more") or not after:
+            return objects
 
-    file_objects = [obj for obj in all_results if obj.get("path_type") == "object"]
 
-    if not with_metadata:
-        # Name-only: no File rows needed, no size/lfs fields emitted.
-        return [{"rfilename": obj["path"]} for obj in file_objects]
+def _regular_blob_ids(repo_row) -> dict[str, str]:
+    """Git blob ids of the repository's live regular files (``File.sha256``)."""
+    rows = File.select(File.path_in_repo, File.sha256).where(
+        (File.repository == repo_row.id) & (File.lfs == False) & (File.is_deleted == False)  # noqa: E712
+    )
+    return {row.path_in_repo: row.sha256 for row in rows}
 
-    # One query for the whole repo instead of one per LFS file: at 4000 files
-    # the per-path loop costs 2.137s against 0.102s for this whole function.
-    try:
-        file_sha256 = get_repo_file_sha256_map(repo_row)
-    except PeeweeException as e:
-        # Keep serving the listing rather than failing the repo page, but say so
-        # loudly: unlike the previous per-path lookup, one failure here drops the
-        # stored sha256 for *every* file, and the LakeFS checksum substituted
-        # below is an ETag-shaped value rather than a sha256. Degrading silently
-        # would hand clients plausible-but-wrong LFS oids at HTTP 200.
-        logger.warning(
-            f"Could not load File rows for {repo_id}; LFS sha256 falls back to"
-            f" LakeFS checksums for every file: {e}"
-        )
-        file_sha256 = {}
+
+def _names_json(objects: list[tuple[str, int, str]]) -> str:
+    return json.dumps([{"rfilename": path} for path, _, _ in objects])
+
+
+def _blobs_json(objects: list[tuple[str, int, str]], blob_ids: dict[str, str]) -> str:
+    from kohakuhub.lfs_gc import lfs_oid
 
     siblings = []
-    for obj in file_objects:
-        path = obj["path"]
-        size = obj.get("size_bytes", 0)
-        sibling = {
-            "rfilename": path,
-            "size": size,
-        }
-
-        if should_use_lfs(repo_row, path, size):
-            # Pre-existing fallback, unchanged: a path with no File row uses
-            # the LakeFS checksum, even though that field is documented as
-            # "typically ETag" and can carry a `sha256:` prefix. Whether that
-            # is the right value is a separate correctness question.
-            checksum = file_sha256.get(path) or obj.get("checksum", "")
-            sibling["lfs"] = {
-                "sha256": checksum,
-                "size": size,
-                "pointerSize": 134,
-            }
-
+    for path, size, address in objects:
+        sibling = {"rfilename": path}
+        oid = lfs_oid(address)
+        if oid:
+            pointer = lfs_pointer(oid, size)
+            sibling["blobId"] = git_blob_id(pointer)
+        elif path in blob_ids:
+            sibling["blobId"] = blob_ids[path]
+        sibling["size"] = size
+        if oid:
+            sibling["lfs"] = {"sha256": oid, "size": size, "pointerSize": len(pointer)}
         siblings.append(sibling)
+    return json.dumps(siblings)
 
-    return siblings
+
+def _remember(key: tuple[str, str], manifest: str) -> None:
+    if len(manifest) > MANIFEST_CACHE_BYTES:
+        return
+    _manifests[key] = manifest
+    while sum(map(len, _manifests.values())) > MANIFEST_CACHE_BYTES:
+        _manifests.popitem(last=False)
+
+
+async def _build_names(key: tuple[str, str]) -> str:
+    manifest = await asyncio.to_thread(_names_json, await list_repo_objects(*key))
+    _remember(key, manifest)
+    return manifest
+
+
+async def hf_siblings_json(repo_row, lakefs_repo: str, commit: str, *, with_metadata: bool) -> str:
+    """The Hub's ``siblings`` at ``commit``, as JSON.
+
+    Name-only (the Hub's default): one listing per commit, shared by
+    concurrent requests and kept in ``_manifests``. With ``blobs``: ``blobId``
+    and ``size`` for every file, and ``lfs`` for the files LakeFS links to a
+    global LFS object, whose address carries their sha256. The JSON is built
+    off the event loop: a big repository's would hold up every other request.
+    """
+    if with_metadata:
+        objects = await list_repo_objects(lakefs_repo, commit)
+        try:
+            blob_ids = _regular_blob_ids(repo_row)
+        except PeeweeException as e:
+            logger.warning(f"Could not load File rows for {repo_row.full_id}; regular files get no blobId: {e}")
+            blob_ids = {}
+        return await asyncio.to_thread(_blobs_json, objects, blob_ids)
+
+    key = (lakefs_repo, commit)
+    if key in _manifests:
+        _manifests.move_to_end(key)
+        return _manifests[key]
+    task = _building.get(key)
+    if task is None or task.get_loop() is not asyncio.get_running_loop():
+        task = _building[key] = asyncio.ensure_future(_build_names(key))
+        task.add_done_callback(lambda t: _building.pop(key, None) if _building.get(key) is t else None)
+    return await asyncio.shield(task)
 
 
 def format_hf_datetime(dt) -> Optional[str]:

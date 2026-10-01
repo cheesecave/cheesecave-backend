@@ -4,7 +4,7 @@ import httpx
 
 
 async def test_get_repo_info_returns_siblings_and_lfs_metadata(client):
-    response = await client.get("/api/models/owner/demo-model")
+    response = await client.get("/api/models/owner/demo-model", params={"blobs": "true"})
 
     assert response.status_code == 200
     payload = response.json()
@@ -59,62 +59,120 @@ async def test_user_overview_endpoint_groups_by_type(owner_client):
     assert any(repo["id"] == "owner/demo-model" for repo in payload["models"])
 
 
-async def test_get_repo_info_default_still_includes_size_and_lfs(client):
-    """The default response must not change shape.
+def _pointer(sha256: str, size: int) -> bytes:
+    return f"version https://git-lfs.github.com/spec/v1\noid sha256:{sha256}\nsize {size}\n".encode()
 
-    `blobs` defaults to True so existing consumers keep the metadata they get
-    today; only callers that explicitly opt out see the lighter form.
-    """
+
+def _git_blob_id(content: bytes) -> str:
+    import hashlib
+
+    return hashlib.sha1(b"blob %d\0" % len(content) + content).hexdigest()
+
+
+async def test_get_repo_info_default_lists_names_only_like_the_hub(client):
+    """Without ``blobs``, the Hub lists ``rfilename`` only, and
+    ``huggingface_hub`` sends no ``blobs`` unless ``files_metadata=True``."""
     response = await client.get("/api/models/owner/demo-model")
 
     assert response.status_code == 200
     siblings = response.json()["siblings"]
-    assert siblings, "expected the baseline repo to report siblings"
-    assert all("size" in sibling for sibling in siblings)
-    lfs_sibling = next(
-        s for s in siblings if s["rfilename"] == "weights/model.safetensors"
-    )
-    assert "lfs" in lfs_sibling and lfs_sibling["lfs"]["size"] > 0
-    # Assert the sha256 *value*, not merely its presence: if the bulk File load
-    # silently returned nothing, every sibling would still carry `size` and
-    # `lfs.size` while the sha256 quietly changed to the LakeFS checksum. That
-    # is exactly the byte-identity this parameter is meant to preserve.
-    from kohakuhub.db_operations import get_repository, get_repo_file_sha256_map
-
-    repo_row = get_repository("model", "owner", "demo-model")
-    stored = get_repo_file_sha256_map(repo_row)
-    assert stored.get("weights/model.safetensors"), (
-        "baseline fixture should have a stored sha256 for the LFS file"
-    )
-    assert lfs_sibling["lfs"]["sha256"] == stored["weights/model.safetensors"]
+    assert {"README.md", "weights/model.safetensors"} <= {s["rfilename"] for s in siblings}
+    assert all(set(sibling) == {"rfilename"} for sibling in siblings)
 
 
 async def test_get_repo_info_blobs_false_returns_names_only(client):
-    """`blobs=false` drops the per-file metadata that makes large repos expensive.
-
-    This is the wire parameter `huggingface_hub` uses for `files_metadata` —
-    every version in the CI matrix maps `files_metadata=True` to
-    `params["blobs"] = True` — so opting out is expressible by any HF client.
-    The path list stays, because HF's default response includes `rfilename`.
-    """
     response = await client.get("/api/models/owner/demo-model", params={"blobs": "false"})
 
     assert response.status_code == 200
-    siblings = response.json()["siblings"]
-    assert siblings, "paths must still be listed"
-    names = {s["rfilename"] for s in siblings}
-    assert {"README.md", "weights/model.safetensors"} <= names
-    for sibling in siblings:
-        assert set(sibling) == {"rfilename"}, (
-            f"blobs=false must emit rfilename only, got {sorted(sibling)}"
-        )
+    assert all(set(s) == {"rfilename"} for s in response.json()["siblings"])
 
 
-async def test_get_repo_info_blobs_true_matches_the_default(client):
-    """Explicit `blobs=true` and the default must agree, so the parameter is
-    additive rather than a second code path with its own behaviour."""
-    default = await client.get("/api/models/owner/demo-model")
-    explicit = await client.get("/api/models/owner/demo-model", params={"blobs": "true"})
+async def test_get_repo_info_blobs_true_carries_the_hub_blob_fields(client):
+    """``blobs=true`` (``files_metadata=True``): every file has ``blobId`` and
+    ``size``; an LFS file adds ``lfs``, read from the object LakeFS links, and
+    its ``blobId`` is the git blob id of its pointer file, as on the Hub."""
+    from kohakuhub.db import File
+    from kohakuhub.db_operations import get_repository
 
-    assert default.status_code == explicit.status_code == 200
-    assert default.json()["siblings"] == explicit.json()["siblings"]
+    response = await client.get("/api/models/owner/demo-model", params={"blobs": "true"})
+
+    assert response.status_code == 200
+    siblings = {s["rfilename"]: s for s in response.json()["siblings"]}
+    repo = get_repository("model", "owner", "demo-model")
+    rows = {f.path_in_repo: f for f in File.select().where(File.repository == repo)}
+
+    readme = siblings["README.md"]
+    assert set(readme) == {"rfilename", "blobId", "size"}
+    assert readme["blobId"] == rows["README.md"].sha256  # its git blob id
+    assert readme["size"] == rows["README.md"].size
+
+    weights = siblings["weights/model.safetensors"]
+    sha256, size = rows["weights/model.safetensors"].sha256, rows["weights/model.safetensors"].size
+    assert weights["lfs"] == {"sha256": sha256, "size": size, "pointerSize": len(_pointer(sha256, size))}
+    assert weights["blobId"] == _git_blob_id(_pointer(sha256, size))
+    assert weights["size"] == size
+
+
+async def test_get_repo_info_expand_returns_only_what_was_asked(client):
+    response = await client.get(
+        "/api/models/owner/demo-model", params=[("expand", "sha"), ("expand", "lastModified")]
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert set(body) == {"_id", "id", "sha", "lastModified"}
+    assert len(body["sha"]) == 40 and body["id"] == "owner/demo-model"
+
+
+async def test_get_repo_info_expand_siblings_and_blobs(client):
+    names = await client.get("/api/models/owner/demo-model", params={"expand": "siblings"})
+    with_blobs = await client.get(
+        "/api/models/owner/demo-model", params={"expand": "sha", "blobs": "true"}
+    )
+
+    assert set(names.json()) == {"_id", "id", "siblings"}
+    assert all(set(s) == {"rfilename"} for s in names.json()["siblings"])
+    # As on the Hub, blobs=true adds the detailed file list to an expand
+    assert set(with_blobs.json()) == {"_id", "id", "sha", "siblings"}
+    assert all("blobId" in s for s in with_blobs.json()["siblings"])
+
+
+async def test_get_repo_info_expand_page_fields(owner_client):
+    """The fields the repository page asks for, KohakuHub's ``storage`` included."""
+    fields = ["sha", "lastModified", "createdAt", "private", "downloads", "likes",
+              "tags", "usedStorage", "gated", "author", "disabled", "storage"]
+    response = await owner_client.get(
+        "/api/models/owner/demo-model", params=[("expand", f) for f in fields]
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert set(body) == {"_id", "id", *fields}
+    assert body["private"] is False and body["author"] == "owner"
+    assert isinstance(body["usedStorage"], int) and body["usedStorage"] > 0
+    assert body["storage"]["used_bytes"] == body["usedStorage"]
+
+
+async def test_get_repo_info_expand_rejects_an_unknown_property(client):
+    response = await client.get("/api/models/owner/demo-model", params={"expand": "bogus"})
+
+    assert response.status_code == 400
+    assert "bogus" in response.headers["x-error-message"]
+    # Properties of another repository type are unknown too
+    dataset_only = await client.get("/api/models/owner/demo-model", params={"expand": "citation"})
+    assert dataset_only.status_code == 400
+
+
+async def test_revision_info_follows_the_same_contract(client):
+    base = "/api/models/owner/demo-model/revision/main"
+    default = await client.get(base)
+    expanded = await client.get(base, params=[("expand", "sha"), ("expand", "lastModified")])
+    blobs = await client.get(base, params={"blobs": "true"})
+    invalid = await client.get(base, params={"expand": "bogus"})
+
+    assert default.status_code == 200
+    assert "_id" in default.json()
+    assert all(set(s) == {"rfilename"} for s in default.json()["siblings"])
+    assert set(expanded.json()) == {"_id", "id", "sha", "lastModified"}
+    assert all("blobId" in s for s in blobs.json()["siblings"])
+    assert invalid.status_code == 400

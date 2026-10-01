@@ -1412,6 +1412,19 @@ async function checkIfNamespaceIsOrg() {
   }
 }
 
+// What this page shows of repo info. Not the whole-repository file list:
+// the file list comes from the paginated tree (#101).
+const REPO_PAGE_FIELDS = [
+  "sha",
+  "lastModified",
+  "createdAt",
+  "private",
+  "downloads",
+  "likes",
+  "tags",
+  "storage",
+];
+
 async function loadRepoInfo() {
   loading.value = true;
   error.value = null;
@@ -1421,6 +1434,7 @@ async function loadRepoInfo() {
       props.repoType,
       props.namespace,
       props.name,
+      REPO_PAGE_FIELDS,
     );
     repoInfo.value = data;
     likesCount.value = data.likes || 0;
@@ -1740,7 +1754,17 @@ async function probeMissingIndexedTarSiblings(entries, requestId) {
   );
 }
 
-async function loadReadme() {
+let readmeInFlight = null;
+
+function loadReadme() {
+  // The fileTree watcher and the card tab's mount both ask for it
+  readmeInFlight ??= fetchReadme().finally(() => {
+    readmeInFlight = null;
+  });
+  return readmeInFlight;
+}
+
+async function fetchReadme() {
   readmeLoading.value = true;
   readmeErrorClassification.value = null;
   try {
@@ -2163,7 +2187,8 @@ watch(
 
 // Lifecycle
 onMounted(async () => {
-  await loadRepoInfo();
+  // The tab's own data does not depend on repo info: load both at once
+  const info = loadRepoInfo();
 
   if (activeTab.value === "files") {
     await loadFileTree();
@@ -2175,5 +2200,6 @@ onMounted(async () => {
   } else if (activeTab.value === "commits") {
     await loadCommits();
   }
+  await info;
 });
 </script>

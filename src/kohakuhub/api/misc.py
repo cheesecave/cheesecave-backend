@@ -1,5 +1,8 @@
 """Utility API endpoints for Kohaku Hub."""
 
+import os
+from pathlib import Path
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 import yaml
@@ -15,6 +18,36 @@ from kohakuhub.api.operation_capabilities import (
 logger = get_logger("UTILS")
 
 router = APIRouter()
+
+
+def _checkout_sha(start: Path) -> str | None:
+    """The commit of the git checkout above ``start``, read from ``.git``."""
+    for directory in (start, *start.parents):
+        git = directory / ".git"
+        if git.is_dir():
+            head = (git / "HEAD").read_text().strip()
+            if not head.startswith("ref: "):
+                return head
+            ref = head[5:]
+            if (git / ref).is_file():
+                return (git / ref).read_text().strip()
+            packed = git / "packed-refs"
+            for line in packed.read_text().splitlines() if packed.is_file() else []:
+                sha, _, name = line.partition(" ")
+                if name == ref:
+                    return sha
+            return None
+    return None
+
+
+def build_identity(start: Path | None = None) -> dict:
+    """Which code this is: set by the image build (``--build-arg
+    KOHAKU_HUB_GIT_SHA=...``), else read from the checkout it runs from."""
+    return {
+        "git_sha": os.environ.get("KOHAKU_HUB_GIT_SHA")
+        or _checkout_sha(start or Path(__file__).resolve().parent),
+        "build_time": os.environ.get("KOHAKU_HUB_BUILD_TIME") or None,
+    }
 
 
 @router.get("/version")
@@ -34,6 +67,7 @@ def get_version():
         "api": "kohakuhub",
         "version": "0.0.1",
         "name": cfg.app.site_name,
+        "build": build_identity(),
     }
 
 

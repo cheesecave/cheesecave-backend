@@ -9,7 +9,7 @@ from enum import Enum
 from typing import Optional
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import RedirectResponse, Response
 
 from kohakuhub.config import cfg
@@ -23,7 +23,6 @@ from kohakuhub.db_operations import (
     should_use_lfs,
 )
 from kohakuhub.logger import get_logger
-from kohakuhub.utils.datetime_utils import safe_strftime
 from kohakuhub.auth.dependencies import get_current_user, get_optional_user
 from kohakuhub.auth.permissions import (
     check_repo_read_permission,
@@ -44,8 +43,11 @@ from kohakuhub.api.utils.downloads import (
 )
 from kohakuhub.api.repo.utils.hf import (
     HFErrorCode,
-    collect_hf_siblings,
+    expand_error,
+    hf_repo_info_response,
     hf_repo_not_found,
+    hf_siblings_json,
+    repo_info_fields,
     ensure_revision_in_history,
     hf_revision_not_found,
     hf_server_error,
@@ -312,9 +314,9 @@ async def get_revision(
     name: str,
     revision: str,
     request: Request,
-    expand: Optional[str] = None,
+    expand: Optional[list[str]] = Query(None),
     fallback: bool = True,
-    blobs: bool = True,
+    blobs: bool = False,
     user: User | None = Depends(get_optional_user),
 ):
     """Get revision information for a repository.
@@ -323,7 +325,7 @@ async def get_revision(
         repo_type: Type of repository
         repo_id: Full repository ID
         revision: Branch name or commit hash
-        expand: Optional fields to expand
+        expand: Properties to return, as on the Hub (all of them by default)
         user: Current authenticated user (optional)
 
     Returns:
@@ -355,58 +357,46 @@ async def get_revision(
     except Exception as e:
         return hf_server_error(f"Failed to resolve revision: {str(e)}")
 
-    # Format last modified date
+    if bad := expand_error(repo_type.value, expand):
+        return bad
+
     last_modified = None
     if commit_info and commit_info.get("creation_date"):
         last_modified = datetime.fromtimestamp(commit_info["creation_date"]).strftime(
             "%Y-%m-%dT%H:%M:%S.%fZ"
         )
 
-    siblings = []
-    try:
-        # huggingface_hub sends `blobs` to this route too — it is the same
-        # params dict as the no-revision form — so the opt-out has to work here
-        # or a revision-pinned call could never use it.
-        siblings = await collect_hf_siblings(
-            repo_row,
-            repo_type.value,
-            repo_id,
-            commit_id or revision,
-            with_metadata=blobs,
-        )
-    except Exception as e:
-        logger.warning(f"Failed to collect siblings for {repo_id}@{revision}: {e}")
+    # The same contract as the repository info route (see there)
+    siblings = None
+    if not expand or "siblings" in expand or blobs:
+        siblings = "[]"
+        try:
+            siblings = await hf_siblings_json(
+                repo_row, lakefs_repo, commit_id, with_metadata=blobs
+            )
+        except Exception as e:
+            logger.warning(f"Failed to collect siblings for {repo_id}@{revision}: {e}")
 
-    # Format created_at
-    created_at = safe_strftime(repo_row.created_at, "%Y-%m-%dT%H:%M:%S.%fZ")
-
-    return {
-        "id": repo_id,
-        "author": repo_row.namespace,
-        "sha": commit_id,
-        "lastModified": last_modified,
-        "createdAt": created_at,
-        "private": repo_row.private,
-        "disabled": False,
-        "downloads": repo_row.downloads,
-        "likes": repo_row.likes_count,
-        "gated": False,
-        "tags": [],
-        "pipeline_tag": None,
-        "library_name": None,
-        "siblings": siblings,
-        "spaces": [],
-        "models": [],
-        "datasets": [],
-        "files": [],  # Client will call /tree for file list
-        "type": repo_type.value,
-        "revision": revision,
-        "commit": {
-            "oid": commit_id,
-            "date": commit_info.get("creation_date") if commit_info else None,
-        },
-        "xetEnabled": False,
-    }
+    fields = repo_info_fields(
+        repo_row,
+        repo_type.value,
+        commit_id,
+        last_modified,
+        storage=bool(user) and bool(expand) and "storage" in expand,
+    )
+    fields.update(
+        {
+            "files": [],  # Client will call /tree for file list
+            "type": repo_type.value,
+            "revision": revision,
+            "commit": {
+                "oid": commit_id,
+                "date": commit_info.get("creation_date") if commit_info else None,
+            },
+            "xetEnabled": False,
+        }
+    )
+    return hf_repo_info_response(fields, expand, siblings)
 
 
 # ========== Download Endpoints ==========

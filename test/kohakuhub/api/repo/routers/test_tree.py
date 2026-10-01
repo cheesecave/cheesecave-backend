@@ -138,3 +138,17 @@ async def test_tree_pagination_follows_link_next_header(owner_client):
     assert len(paths) == 55
     assert "bulk/entry_00.txt" in paths
     assert "bulk/entry_54.txt" in paths
+
+
+async def test_paths_info_expanded_directory_has_no_size_like_the_hub(client):
+    """The Hub sizes no directory, with ``expand`` or without: it only adds
+    ``lastCommit``. Summing a directory would list everything under it."""
+    response = await client.post(
+        "/api/models/owner/demo-model/paths-info/main",
+        data={"paths": ["weights"], "expand": "true"},
+    )
+
+    assert response.status_code == 200
+    (entry,) = response.json()
+    assert entry["type"] == "directory" and entry["size"] == 0
+    assert entry["lastCommit"]["id"]
