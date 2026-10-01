@@ -270,7 +270,6 @@ The accepted `expand` properties are the Hub's for each repository type (for mod
   "disabled": false,
   "gated": false,
   "downloads": 150,
-  "downloadsAllTime": 150,
   "likes": 25,
   "tags": [],
   "pipeline_tag": null,

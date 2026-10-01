@@ -330,11 +330,12 @@ async def test_blob_siblings_follow_the_linked_object(lister, monkeypatch):
          "lfs": {"sha256": LFS_SHA, "size": 125162496, "pointerSize": 134}},
         {"rfilename": "unrecorded.txt", "size": 3},
     ]
-    # Kept per commit too, apart from the name-only list
-    assert list(hf_utils._manifests) == [("lake", "c1", True)]
+    # Not kept: blobIds come from File rows, which a commit records after
+    # LakeFS has the commit; a list built in between would keep stale ids
+    assert not hf_utils._manifests
 
 
-async def test_blob_siblings_are_built_once_per_commit_too(lister, monkeypatch):
+async def test_concurrent_blob_requests_share_one_build(lister, monkeypatch):
     import asyncio
 
     client = lister(_page([("model.bin", 9, LFS_ADDRESS)]), _page([("model.bin", 9, LFS_ADDRESS)]))
@@ -350,6 +351,7 @@ async def test_blob_siblings_are_built_once_per_commit_too(lister, monkeypatch):
     assert len(set(blobs)) == 1 and "blobId" in blobs[0]
     assert json.loads(names) == [{"rfilename": "model.bin"}]
     assert len(client.calls) == 2 and loads == [1]  # one listing for each form
+    assert list(hf_utils._manifests) == [("lake", "c1", False)]
 
 
 async def test_blob_siblings_without_file_rows_still_answer(lister, monkeypatch):
@@ -411,6 +413,8 @@ def test_repo_info_response_with_expand_is_only_what_was_asked():
     fields = {"_id": 1, "id": "a/b", "sha": "s", "private": False, "storage": None}
 
     asked = hf_utils.hf_repo_info_response(fields, ["sha", "sha", "cardData"], None)
+    all_time = hf_utils.hf_repo_info_response({**fields, "downloads": 7}, ["downloadsAllTime"], None)
+    assert json.loads(all_time.body)["downloadsAllTime"] == 7  # only expanded, as on the Hub
     with_siblings = hf_utils.hf_repo_info_response(fields, ["siblings"], "[]")
 
     assert json.loads(asked.body) == {"_id": 1, "id": "a/b", "sha": "s", "cardData": None}

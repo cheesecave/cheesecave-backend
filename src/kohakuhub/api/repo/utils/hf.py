@@ -417,7 +417,10 @@ EXPAND_PROPERTIES = {
     }),
 }
 
-# Sibling lists, per (LakeFS repository, commit, with blob fields): a
+# Properties the Hub returns only when expanded, from another field
+_EXPAND_ONLY = {"downloadsAllTime": "downloads"}
+
+# Name-only sibling lists, per (LakeFS repository, commit, False): a
 # commit's file list never changes. ponytail: per process, by bytes; share it through
 # Valkey if several workers keep rebuilding the same big lists.
 MANIFEST_CACHE_BYTES = 256 * 1024 * 1024
@@ -446,7 +449,6 @@ def repo_info_fields(
         "disabled": False,
         "gated": False,
         "downloads": repo_row.downloads,
-        "downloadsAllTime": repo_row.downloads,
         "likes": repo_row.likes_count,
         "tags": [],
         "pipeline_tag": None,
@@ -493,7 +495,9 @@ def hf_repo_info_response(
     """
     if expand:
         body = {"_id": fields["_id"], "id": fields["id"]}
-        body.update((prop, fields.get(prop)) for prop in expand if prop != "siblings")
+        body.update(
+            (prop, fields.get(_EXPAND_ONLY.get(prop, prop))) for prop in expand if prop != "siblings"
+        )
     else:
         body = fields
     text = json.dumps(body)
@@ -591,9 +595,10 @@ async def _build(repo_row, key: tuple[str, str, bool]) -> str:
         except PeeweeException as e:
             logger.warning(f"Could not load File rows for {repo_row.full_id}; regular files get no blobId: {e}")
             blob_ids = {}
-        manifest = await asyncio.to_thread(_blobs_json, objects, blob_ids)
-    else:
-        manifest = await asyncio.to_thread(_names_json, objects)
+        # Shared by concurrent requests, not kept: regular files' blobIds are
+        # File rows, which a commit records after LakeFS has it
+        return await asyncio.to_thread(_blobs_json, objects, blob_ids)
+    manifest = await asyncio.to_thread(_names_json, objects)
     _remember(key, manifest)
     return manifest
 
@@ -603,9 +608,9 @@ async def hf_siblings_json(repo_row, lakefs_repo: str, commit: str, *, with_meta
 
     Name-only by default; with ``blobs``, ``blobId`` and ``size`` for every
     file, and ``lfs`` for the files LakeFS links to a global LFS object, whose
-    address carries their sha256. Either is listed once per commit, shared by
-    concurrent requests and kept in ``_manifests``, and its JSON is built off
-    the event loop: a big repository's would hold up every other request.
+    address carries their sha256. Concurrent requests share one build, the
+    name-only list is kept in ``_manifests``, and the JSON is built off the
+    event loop: a big repository's would hold up every other request.
     """
     key = (lakefs_repo, commit, with_metadata)
     if key in _manifests:
