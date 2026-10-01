@@ -665,6 +665,23 @@ async def test_hf_move_repo_refuses_a_name_that_normalizes_to_another_repo(
     assert renamed.id == "owner/Issue108-Norm"
 
 
+def _sibs(info) -> dict:
+    """``info.siblings`` by name, as plain dicts: huggingface_hub < 0.21 keeps
+    the raw JSON, later releases ``RepoSibling`` objects."""
+
+    def plain(sibling):
+        if isinstance(sibling, dict):
+            return {"size": sibling.get("size"), "blob_id": sibling.get("blobId"), "lfs": sibling.get("lfs")}
+        lfs = sibling.lfs
+        if lfs is not None and not isinstance(lfs, dict):
+            lfs = {"size": lfs.size, "sha256": lfs.sha256}
+        return {"size": sibling.size, "blob_id": sibling.blob_id, "lfs": lfs}
+
+    return {
+        (s["rfilename"] if isinstance(s, dict) else s.rfilename): plain(s) for s in info.siblings or []
+    }
+
+
 async def test_hf_api_repo_info_matches_the_hub_contract(live_server_url, hf_api_token):
     """What huggingface_hub reads back, as on the Hub: names only by default,
     blob fields with ``files_metadata``, only the asked properties with
@@ -674,18 +691,19 @@ async def test_hf_api_repo_info_matches_the_hub_contract(live_server_url, hf_api
     api = HfApi(endpoint=live_server_url, token=hf_api_token)
 
     default = await asyncio.to_thread(lambda: api.model_info("owner/demo-model"))
-    assert {s.rfilename for s in default.siblings} >= {"README.md", "weights/model.safetensors"}
-    assert all(s.size is None and s.lfs is None and s.blob_id is None for s in default.siblings)
+    names = _sibs(default)
+    assert set(names) >= {"README.md", "weights/model.safetensors"}
+    assert all(v == {"size": None, "blob_id": None, "lfs": None} for v in names.values())
     assert default.sha and default.private is False
 
     detailed = await asyncio.to_thread(
         lambda: api.model_info("owner/demo-model", files_metadata=True)
     )
-    by_name = {s.rfilename: s for s in detailed.siblings}
-    assert by_name["README.md"].blob_id and by_name["README.md"].size > 0
+    by_name = _sibs(detailed)
+    assert by_name["README.md"]["blob_id"] and by_name["README.md"]["size"] > 0
     weights = by_name["weights/model.safetensors"]
-    assert weights.lfs is not None and weights.blob_id
-    assert weights.lfs.size == weights.size
+    assert weights["lfs"] is not None and weights["blob_id"]
+    assert weights["lfs"]["size"] == weights["size"]
 
     if "expand" not in inspect.signature(api.model_info).parameters:
         return  # this huggingface_hub predates expand
@@ -732,10 +750,10 @@ async def test_hf_dataset_info_default_and_files_metadata(live_server_url, membe
     )
 
     assert default.private is True
-    assert [s.rfilename for s in default.siblings] == [s.rfilename for s in detailed.siblings]
-    assert all(s.size is None and s.blob_id is None for s in default.siblings)
-    train = next(s for s in detailed.siblings if s.rfilename == "data/train.jsonl")
-    assert train.size > 0 and train.blob_id
+    assert list(_sibs(default)) == list(_sibs(detailed))
+    assert all(v["size"] is None and v["blob_id"] is None for v in _sibs(default).values())
+    train = _sibs(detailed)["data/train.jsonl"]
+    assert train["size"] > 0 and train["blob_id"]
 
 
 async def test_hf_repo_info_pinned_to_a_commit(live_server_url, hf_api_token, tmp_path):
@@ -750,10 +768,10 @@ async def test_hf_repo_info_pinned_to_a_commit(live_server_url, hf_api_token, tm
     detailed = await asyncio.to_thread(
         lambda: api.model_info("owner/demo-model", revision=sha, files_metadata=True)
     )
-    assert {s.rfilename for s in pinned.siblings} == {s.rfilename for s in head.siblings}
-    assert all(s.size is None for s in pinned.siblings)
-    weights = next(s for s in detailed.siblings if s.rfilename == "weights/model.safetensors")
-    assert weights.lfs is not None and weights.blob_id
+    assert set(_sibs(pinned)) == set(_sibs(head))
+    assert all(v["size"] is None for v in _sibs(pinned).values())
+    weights = _sibs(detailed)["weights/model.safetensors"]
+    assert weights["lfs"] is not None and weights["blob_id"]
 
     local = await asyncio.to_thread(
         lambda: snapshot_download(
