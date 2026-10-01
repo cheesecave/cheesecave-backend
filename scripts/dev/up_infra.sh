@@ -185,7 +185,7 @@ ensure_lakefs() {
     -e LAKEFS_LISTEN_ADDRESS=0.0.0.0:28000 \
     -v "${LAKEFS_DATA_DIR}:/var/lakefs/data" \
     -v "${LAKEFS_CACHE_DIR}:/lakefs/data/cache" \
-    treeverse/lakefs:latest >/dev/null
+    treeverse/lakefs:1.86.0 >/dev/null  # docs/deployment/lakefs.md
 
   echo "Created ${LAKEFS_CONTAINER}"
 }

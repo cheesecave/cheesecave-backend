@@ -141,11 +141,12 @@ class AppConfig(BaseModel):
     db_backend: str = "sqlite"
     # Optional features
     disable_dataset_viewer: bool = False
-    # Dangerous repository history operations stay disabled until their
-    # integrity and recovery gates have passed.
-    repository_revert_enabled: bool = False
-    repository_reset_enabled: bool = False
-    repository_squash_enabled: bool = False
+    # Repository history operations (#99); each can be switched off. They
+    # are only available with db_backend = "postgres", and Reset only with
+    # a LakeFS it works with (kohakuhub.lakefs_compat).
+    repository_revert_enabled: bool = True
+    repository_reset_enabled: bool = True
+    repository_squash_enabled: bool = True
     database_url: str = "sqlite:///./hub.db"
     database_key: str = (
         ""  # Encryption key for external tokens (generate with: openssl rand -hex 32)

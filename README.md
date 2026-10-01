@@ -73,7 +73,7 @@ Self-hosted HuggingFace alternative with Git-like versioning for AI models and d
 
 ### Deploy with Docker
 
-> **Prereq:** LakeFS ≥ v0.54.0 (2021-11-08). The bundled `treeverse/lakefs:latest` image is always compatible; only relevant if you self-pin an older LakeFS image.
+> **LakeFS:** the bundle pins `treeverse/lakefs:1.86.0`. If you run your own LakeFS, use 1.48.1 – 1.86.0 (not 1.70.0); see [LakeFS Compatibility](#lakefs-compatibility).
 
 ```bash
 git clone https://github.com/KohakuBlueleaf/KohakuHub.git
@@ -194,13 +194,13 @@ See [docs/Git.md](./docs/Git.md) for complete Git clone documentation and implem
 
 **Stack:**
 - **FastAPI** - HuggingFace-compatible API
-- **LakeFS** (≥ v0.54.0) - Git-like versioning (branches, commits, diffs) via REST API
+- **LakeFS** (1.48.1 – 1.86.0, see [compatibility](#lakefs-compatibility)) - Git-like versioning (branches, commits, diffs) via REST API
 - **MinIO/S3** - Object storage with deduplication
 - **PostgreSQL/SQLite** - Metadata database (synchronous with db.atomic() transactions)
 - **Vue 3** - Modern web interface
 
 **Implementation Notes:**
-- **LakeFS:** Uses REST API directly (lakefs_rest_client.py), providing pure async operations. Minimum supported version is **v0.54.0** (released 2021-11-08) — the file-list `expand=true` path uses `logCommits`'s `objects=` / `prefixes=` / `limit=` filters, introduced in that release. Pre-v0.54 servers silently ignore those parameters and would surface incorrect `lastCommit` values; the docker bundle pins `treeverse/lakefs:latest` so default deployments are always compatible.
+- **LakeFS:** Uses REST API directly (lakefs_rest_client.py), providing pure async operations. Supported releases: 1.48.1 – 1.86.0 (not 1.70.0); see [LakeFS Compatibility](#lakefs-compatibility).
 - **Database:** Synchronous operations with Peewee ORM and `db.atomic()` for transaction safety. Supports multi-worker deployment (4-8 workers) for horizontal scaling.
 
 **Data Flow:**
@@ -210,6 +210,27 @@ See [docs/Git.md](./docs/Git.md) for complete Git clone documentation and implem
 4. Downloads → 302 redirect to S3 presigned URL (no proxy)
 
 See [docs/API.md](./docs/API.md) for detailed API documentation.
+
+## LakeFS Compatibility
+
+| LakeFS | Status |
+| --- | --- |
+| below 1.48.1 (incl. 1.48.0) | ❌ Unsupported: Reset would leave a merge commit, so it is disabled |
+| 1.48.1 – 1.86.0, except 1.70.0 | ✅ Supported; **1.86.0 is bundled** |
+| 1.70.0 | ❌ Unsupported: cannot store regular files on an S3 endpoint without TLS |
+| 1.87.0 – 1.88.0 | ✅ Works, but licensed under the **Business Source License 1.1** instead of Apache 2.0 |
+| newer | Untested |
+
+- **Pinned, never `latest`:** the Docker bundle, the dev stack and CI all pin
+  `treeverse/lakefs:1.86.0`. It is the last Apache 2.0 release. CI also runs on
+  1.48.1, the oldest supported.
+- **BSL 1.1:** it limits production use to an organization's internal use,
+  which a public hub may not fit. Assess it before upgrading past 1.86.0.
+- **Checking a running deployment:** the Admin portal's Health page shows the
+  LakeFS version and whether it is supported.
+
+Details and how each boundary was found:
+[docs/deployment/lakefs.md](./docs/deployment/lakefs.md).
 
 ## Configuration
 
@@ -309,6 +330,7 @@ python scripts/test_auth.py
 
 - [docs/setup.md](./docs/setup.md) - Setup and installation guide
 - [docs/deployment.md](./docs/deployment.md) - Deployment architecture
+- [docs/deployment/lakefs.md](./docs/deployment/lakefs.md) - Supported LakeFS releases and LakeFS's license change
 - [docs/ports.md](./docs/ports.md) - Port configuration reference
 - [docs/API.md](./docs/API.md) - API endpoints and workflows
 - [docs/CLI.md](./docs/CLI.md) - Command-line tool usage
@@ -330,7 +352,7 @@ python scripts/test_auth.py
 
 While core features are stable for alpha release, some advanced features are still in development:
 
-- Repository transfer/squash/delete are experimental/not stable
+- Repository delete is experimental
 - Some HuggingFace API endpoints may be incomplete
     - Feel free to open issue in this case, but remember to provide full information and minimal reproduction!
 

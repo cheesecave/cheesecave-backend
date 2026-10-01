@@ -70,6 +70,11 @@ async def lifespan(app: FastAPI):
 
     init_storage()
 
+    # Logs whether this LakeFS is supported; asked again later if unreachable
+    from kohakuhub import lakefs_compat
+
+    await lakefs_compat.learn()
+
     # Initialize L2 cache (Valkey) — silent if disabled or unreachable.
     # Runs the boot-time flush coordinator so Mode-B namespaces are wiped
     # whenever Valkey's run_id has changed since the last seen value

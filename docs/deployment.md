@@ -2,13 +2,9 @@
 
 ## Component Version Requirements
 
-- **LakeFS ≥ v0.54.0** (released 2021-11-08). The file-list `expand=true`
-  endpoint uses path-filtered `logCommits` queries (`objects=` / `prefixes=`
-  / `limit=` parameters) introduced in that release; pre-v0.54 servers
-  silently ignore those parameters and would return incorrect `lastCommit`
-  metadata. The shipped docker bundle pins `treeverse/lakefs:latest` so the
-  default deployment is always compatible — only manual self-deployments
-  that pin an older LakeFS image need to upgrade.
+- **LakeFS 1.48.1 – 1.86.0** (not 1.70.0); the shipped docker bundle pins
+  `treeverse/lakefs:1.86.0`. 1.87.0 works but is licensed under the Business
+  Source License 1.1. See [LakeFS Compatibility](deployment/lakefs.md).
 - PostgreSQL ≥ 13 or SQLite (latest).
 - MinIO (latest) or any S3-compatible blob store.
 

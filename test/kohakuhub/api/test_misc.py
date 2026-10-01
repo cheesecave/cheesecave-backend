@@ -16,10 +16,11 @@ async def test_version_site_config_and_yaml_validation(client):
     site_config_response = await client.get("/api/site-config")
     assert site_config_response.status_code == 200
     assert "site_name" in site_config_response.json()
+    # Enabled by default (#99), on PostgreSQL with a supported LakeFS
     assert site_config_response.json()["capabilities"]["repository_operations"] == {
-        "revert": False,
-        "reset": False,
-        "squash": False,
+        "revert": True,
+        "reset": True,
+        "squash": True,
     }
 
     valid_yaml_response = await client.post(
@@ -220,3 +221,68 @@ async def test_whoami_v2_bearer_and_cookie_agree(app, owner_client, hf_api_token
         {org["name"] for org in cookie_payload["orgs"]}
         == {org["name"] for org in bearer_payload["orgs"]}
     )
+
+
+def _with_lakefs(monkeypatch, version):
+    """Make this process believe it talks to LakeFS ``version``."""
+    import importlib
+
+    compat = importlib.import_module("kohakuhub.lakefs_compat")
+    monkeypatch.setattr(compat, "_version", compat.parse(version))
+    return importlib.import_module("kohakuhub.api.operation_capabilities")
+
+
+def test_reset_is_off_on_a_lakefs_too_old_for_it(monkeypatch):
+    capabilities = _with_lakefs(monkeypatch, "1.47.0")
+    monkeypatch.setattr(capabilities.cfg.app, "db_backend", "postgres")
+    for field in ("revert", "reset", "squash"):
+        monkeypatch.setattr(capabilities.cfg.app, f"repository_{field}_enabled", True)
+
+    assert capabilities.get_repository_operation_capabilities() == {
+        "revert": True,
+        "reset": False,
+        "squash": True,
+    }
+    with pytest.raises(capabilities.HTTPException) as refused:
+        capabilities.ensure_repository_operation_enabled("reset")
+    assert refused.value.status_code == 503
+    assert "LakeFS 1.47.0 is older than 1.48.1" in refused.value.detail["message"]
+    assert "docs/deployment/lakefs.md" in refused.value.detail["error"]
+
+    # Switched off by configuration: that is the reason given
+    monkeypatch.setattr(capabilities.cfg.app, "repository_reset_enabled", False)
+    with pytest.raises(capabilities.HTTPException) as refused:
+        capabilities.ensure_repository_operation_enabled("reset")
+    assert refused.value.detail["message"] == "Repository Reset is temporarily disabled"
+    monkeypatch.setattr(capabilities.cfg.app, "repository_reset_enabled", True)
+
+    _with_lakefs(monkeypatch, "1.48.1")
+    assert capabilities.get_repository_operation_capabilities()["reset"] is True
+
+
+async def test_the_reset_endpoint_says_why_on_an_old_lakefs(client, monkeypatch):
+    _with_lakefs(monkeypatch, "1.40.0")
+
+    site = (await client.get("/api/site-config")).json()
+    response = await client.post(
+        "/api/models/owner/demo-model/branch/main/reset", json={"ref": "main"}
+    )
+
+    assert site["capabilities"]["repository_operations"]["reset"] is False
+    assert response.status_code == 503
+    assert response.json()["detail"]["code"] == "operation_disabled"
+    assert "Reset would leave a merge commit" in response.json()["detail"]["message"]
+
+
+async def test_the_reset_gate_learns_the_lakefs_version_first(client, monkeypatch):
+    import importlib
+
+    compat = importlib.import_module("kohakuhub.lakefs_compat")
+    monkeypatch.setattr(compat, "_version", None)
+
+    response = await client.post(
+        "/api/models/owner/demo-model/branch/main/reset", json={"ref": "main"}
+    )
+
+    assert compat.known().status in ("supported", "untested")  # the real LakeFS
+    assert response.status_code != 503

@@ -105,10 +105,8 @@ The Docker Compose setup includes the following services:
   [Background Tasks](../development/background-tasks.md).
 - **postgres**: PostgreSQL database for metadata (port `5432`).
 - **lakefs**: LakeFS for data versioning (port `28000`). Pinned to
-  `treeverse/lakefs:latest`; **minimum supported LakeFS is v0.54.0**
-  (2021-11-08) because the file-list `expand=true` path uses
-  `logCommits`'s `objects=` / `prefixes=` / `limit=` filters introduced
-  in that release.
+  `treeverse/lakefs:1.86.0`; supported releases are 1.48.1 – 1.86.0, except
+  1.70.0. See [LakeFS Compatibility](lakefs.md).
 - **minio**: MinIO for S3-compatible object storage (ports `29000` and `29001`).
 
 ### Running several workers

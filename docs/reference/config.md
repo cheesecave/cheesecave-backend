@@ -18,9 +18,9 @@ By default, the application looks for `config.toml` in the current working direc
 | `KOHAKU_HUB_API_BASE` | The base path for the API. | `/api` |
 | `KOHAKU_HUB_SITE_NAME` | The name of the site, displayed in the UI. | `KohakuHub` |
 | `KOHAKU_HUB_DEBUG_LOG_PAYLOADS`| If `true`, logs request and response payloads for debugging. | `false` |
-| `KOHAKU_HUB_REPOSITORY_REVERT_ENABLED` | Enables Revert only when `db_backend` is exactly `postgres`. Disabled by default until its integrity, recovery and canary gates pass; see [Defaults and reopening plan](../api/branches.md#defaults-and-reopening-plan). | `false` |
-| `KOHAKU_HUB_REPOSITORY_RESET_ENABLED` | Enables Reset only when `db_backend` is exactly `postgres`. Disabled by default until its integrity, recovery and canary gates pass; see [Defaults and reopening plan](../api/branches.md#defaults-and-reopening-plan). | `false` |
-| `KOHAKU_HUB_REPOSITORY_SQUASH_ENABLED` | Enables Super Squash only when `db_backend` is exactly `postgres`. Disabled by default until its integrity, recovery and canary gates pass; see [Defaults and reopening plan](../api/branches.md#defaults-and-reopening-plan). | `false` |
+| `KOHAKU_HUB_REPOSITORY_REVERT_ENABLED` | Enables Revert, effective only when `db_backend` is exactly `postgres`. Set `false` to switch it off; see [Defaults](../api/branches.md#defaults). | `true` |
+| `KOHAKU_HUB_REPOSITORY_RESET_ENABLED` | Enables Reset, effective only when `db_backend` is exactly `postgres` and LakeFS is 1.48.1 or later ([LakeFS compatibility](../deployment/lakefs.md)). Set `false` to switch it off; see [Defaults](../api/branches.md#defaults). | `true` |
+| `KOHAKU_HUB_REPOSITORY_SQUASH_ENABLED` | Enables Super Squash, effective only when `db_backend` is exactly `postgres`. Set `false` to switch it off; see [Defaults](../api/branches.md#defaults). | `true` |
 
 ## Database Settings
 

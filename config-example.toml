@@ -77,13 +77,12 @@ api_base = "/api"
 db_backend = "postgres"  # or "sqlite"
 database_url = "postgresql://hub:hubpass@127.0.0.1:25432/hubdb"
 auto_migrate = false  # Auto-confirm database migrations (set true for Docker)
-# Dangerous repository history operations are disabled by default while the
-# #99 integrity fixes land; they will default to enabled once all have passed.
-# Opting in early requires postgres; see docs/api/branches.md
-# ("Defaults and reopening plan").
-repository_revert_enabled = false
-repository_reset_enabled = false
-repository_squash_enabled = false
+# Repository history operations, enabled by default; set false to switch one
+# off. They need db_backend = "postgres", and Reset needs LakeFS >= 1.48.1
+# (docs/deployment/lakefs.md). See docs/api/branches.md.
+repository_revert_enabled = true
+repository_reset_enabled = true
+repository_squash_enabled = true
 # LFS Configuration (sizes in decimal: 1MB = 1,000,000 bytes)
 lfs_threshold_bytes = 5_000_000  # 5MB - files larger use LFS
 lfs_multipart_threshold_bytes = 100_000_000  # 100MB - files larger use multipart upload

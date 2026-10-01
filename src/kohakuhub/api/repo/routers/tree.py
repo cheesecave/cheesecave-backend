@@ -301,10 +301,8 @@ async def resolve_last_commits_for_paths(
     invoke ``log_commits(..., first_parent=True)`` directly.
 
     LakeFS version requirement: the ``objects=`` / ``prefixes=`` / ``limit=``
-    parameters used here were introduced in LakeFS v0.54.0 (released
-    2021-11-08). KohakuHub's docker bundle pins ``treeverse/lakefs:latest``
-    so default deployments are always compatible; operators self-deploying
-    against older LakeFS servers must upgrade to v0.54.0 or newer.
+    parameters used here were introduced in LakeFS v0.54.0, well below the
+    oldest supported release (``kohakuhub.lakefs_compat``).
     """
     if not targets:
         return {}

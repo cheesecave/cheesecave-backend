@@ -188,9 +188,9 @@ def test_load_config_uses_defaults_when_file_is_missing(monkeypatch):
     assert cfg.s3.endpoint == "http://localhost:9000"
     assert cfg.lakefs.endpoint == "http://localhost:8000"
     assert cfg.app.base_url == "http://localhost:48888"
-    assert cfg.app.repository_revert_enabled is False
-    assert cfg.app.repository_reset_enabled is False
-    assert cfg.app.repository_squash_enabled is False
+    assert cfg.app.repository_revert_enabled is True
+    assert cfg.app.repository_reset_enabled is True
+    assert cfg.app.repository_squash_enabled is True
     hub_config.load_config.cache_clear()
 
 
