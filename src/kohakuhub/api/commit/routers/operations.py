@@ -26,6 +26,7 @@ from kohakuhub.auth.dependencies import get_current_user
 from kohakuhub.auth.permissions import check_repo_write_permission
 from kohakuhub.utils.lakefs import get_lakefs_client, resolve_lakefs_repo
 from kohakuhub.utils.s3 import get_object_metadata, object_exists
+from kohakuhub.api.repo.utils import operation_lock
 from kohakuhub.api.repo.utils.gc import track_lfs_object
 from kohakuhub.lfs_gc import (
     LfsObjectUnavailable,
@@ -34,7 +35,7 @@ from kohakuhub.lfs_gc import (
     record_evicted_versions,
 )
 from kohakuhub.storage_cleanup import enqueue_lfs_collection, record_head_change
-from kohakuhub.api.repo.utils.hf import HFErrorCode
+from kohakuhub.api.repo.utils.hf import HFErrorCode, ensure_revision_in_history
 
 logger = get_logger("FILE")
 router = APIRouter()
@@ -617,6 +618,8 @@ async def process_copy_file(
         raise HTTPException(
             400, detail={"error": f"Missing srcPath for copyFile operation"}
         )
+    # Nothing is copied out of history a squash removed
+    await ensure_revision_in_history(get_lakefs_client(), repo, lakefs_repo, src_revision)
 
     logger.info(
         f"Copying file: {src_path} -> {dest_path} (from revision: {src_revision})"
@@ -808,6 +811,7 @@ async def commit(
         raise HTTPException(404, detail={"error": "Repository not found"})
 
     check_repo_write_permission(repo_row, user)
+    operation_lock.ensure_free(repo_row)
 
     lakefs_repo = resolve_lakefs_repo(repo_row)
     client = get_lakefs_client()
@@ -948,12 +952,17 @@ async def commit(
     logger.info(f"Commit message: {commit_msg}")
 
     try:
-        commit_result = await client.commit(
-            repository=lakefs_repo,
-            branch=revision,
-            message=commit_msg,
-            metadata={"description": commit_desc} if commit_desc else None,
-        )
+        # A history operation holding the repository goes first; the staged
+        # changes then land on top of what it left (operation_lock)
+        async with operation_lock.writing(repo_row):
+            commit_result = await client.commit(
+                repository=lakefs_repo,
+                branch=revision,
+                message=commit_msg,
+                metadata={"description": commit_desc} if commit_desc else None,
+            )
+    except HTTPException:
+        raise  # refused while an operation holds the repository
     except Exception as e:
         raise HTTPException(500, detail={"error": f"Commit failed: {str(e)}"})
 

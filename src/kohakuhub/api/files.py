@@ -46,6 +46,7 @@ from kohakuhub.api.repo.utils.hf import (
     HFErrorCode,
     collect_hf_siblings,
     hf_repo_not_found,
+    ensure_revision_in_history,
     hf_revision_not_found,
     hf_server_error,
 )
@@ -348,7 +349,7 @@ async def get_revision(
 
     # Resolve revision (supports both branch names and commit hashes)
     try:
-        commit_id, commit_info = await resolve_revision(client, lakefs_repo, revision)
+        commit_id, commit_info = await resolve_revision(client, lakefs_repo, revision, repo_row)
     except ValueError:
         return hf_revision_not_found(repo_id, revision)
     except Exception as e:
@@ -441,6 +442,7 @@ async def _get_file_metadata(
 
     lakefs_repo = resolve_lakefs_repo(repo_row)
     client = get_lakefs_client()
+    await ensure_revision_in_history(client, repo_row, lakefs_repo, revision)
 
     try:
         # Get object metadata from LakeFS

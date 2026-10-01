@@ -753,7 +753,7 @@ async def test_list_repo_tree_covers_success_pagination_and_error_paths(monkeypa
     monkeypatch.setattr(tree_api, "get_repository", lambda *args: repo)
     monkeypatch.setattr(tree_api, "check_repo_read_permission", lambda repo_arg, user: True)
     monkeypatch.setattr(tree_api, "resolve_lakefs_repo", lambda repo: "lake-repo")
-    async def _resolve_revision(client, lakefs_repo, revision):
+    async def _resolve_revision(client, lakefs_repo, revision, repo=None):
         return ("resolved-main", "branch")
 
     monkeypatch.setattr(tree_api, "resolve_revision", _resolve_revision)
@@ -859,7 +859,7 @@ async def test_list_repo_tree_covers_success_pagination_and_error_paths(monkeypa
     ) == {"missing": "owner/demo", "type": "model"}
 
     monkeypatch.setattr(tree_api, "get_repository", lambda *args: repo)
-    async def _raise_resolve_revision(client, lakefs_repo, revision):
+    async def _raise_resolve_revision(client, lakefs_repo, revision, repo=None):
         raise RuntimeError("bad revision")
 
     monkeypatch.setattr(tree_api, "resolve_revision", _raise_resolve_revision)
@@ -958,7 +958,7 @@ async def test_list_repo_tree_handles_last_commit_lookup_failures(monkeypatch):
     monkeypatch.setattr(tree_api, "get_repository", lambda *args: repo)
     monkeypatch.setattr(tree_api, "check_repo_read_permission", lambda repo_arg, user: True)
     monkeypatch.setattr(tree_api, "resolve_lakefs_repo", lambda repo: "lake-repo")
-    async def _resolve_revision(client, lakefs_repo, revision):
+    async def _resolve_revision(client, lakefs_repo, revision, repo=None):
         return ("resolved-main", "branch")
 
     monkeypatch.setattr(tree_api, "resolve_revision", _resolve_revision)
@@ -1076,7 +1076,7 @@ async def test_get_paths_info_covers_limits_success_and_error_paths(monkeypatch)
     )["bad_request"]
 
     monkeypatch.setattr(tree_api, "resolve_lakefs_repo", lambda repo: "lake-repo")
-    async def _resolve_revision(client, lakefs_repo, revision):
+    async def _resolve_revision(client, lakefs_repo, revision, repo=None):
         return ("resolved-main", "branch")
 
     monkeypatch.setattr(tree_api, "resolve_revision", _resolve_revision)
@@ -1143,7 +1143,7 @@ async def test_get_paths_info_covers_limits_success_and_error_paths(monkeypatch)
         },
     ]
 
-    async def _raise_resolve_revision(client, lakefs_repo, revision):
+    async def _raise_resolve_revision(client, lakefs_repo, revision, repo=None):
         raise RuntimeError("bad revision")
 
     monkeypatch.setattr(tree_api, "resolve_revision", _raise_resolve_revision)
@@ -1223,7 +1223,7 @@ async def test_get_paths_info_handles_last_commit_lookup_failures(monkeypatch):
     monkeypatch.setattr(tree_api, "get_repository", lambda *args: repo)
     monkeypatch.setattr(tree_api, "check_repo_read_permission", lambda repo_arg, user: True)
     monkeypatch.setattr(tree_api, "resolve_lakefs_repo", lambda repo: "lake-repo")
-    async def _resolve_revision(client, lakefs_repo, revision):
+    async def _resolve_revision(client, lakefs_repo, revision, repo=None):
         return ("resolved-main", "branch")
 
     monkeypatch.setattr(tree_api, "resolve_revision", _resolve_revision)
@@ -1315,7 +1315,7 @@ async def test_list_repo_tree_name_prefix_pushes_lakefs_prefix(monkeypatch):
     monkeypatch.setattr(tree_api, "check_repo_read_permission", lambda repo_arg, user: True)
     monkeypatch.setattr(tree_api, "resolve_lakefs_repo", lambda repo: "lake-repo")
 
-    async def _resolve_revision(client, lakefs_repo, revision):
+    async def _resolve_revision(client, lakefs_repo, revision, repo=None):
         return ("resolved-main", "branch")
 
     monkeypatch.setattr(tree_api, "resolve_revision", _resolve_revision)
@@ -1377,7 +1377,7 @@ async def test_list_repo_tree_name_prefix_root_path(monkeypatch):
     monkeypatch.setattr(tree_api, "check_repo_read_permission", lambda repo_arg, user: True)
     monkeypatch.setattr(tree_api, "resolve_lakefs_repo", lambda repo: "lake-repo")
 
-    async def _resolve_revision(client, lakefs_repo, revision):
+    async def _resolve_revision(client, lakefs_repo, revision, repo=None):
         return ("resolved-main", "branch")
 
     monkeypatch.setattr(tree_api, "resolve_revision", _resolve_revision)
@@ -1416,7 +1416,7 @@ async def test_list_repo_tree_name_prefix_validation(monkeypatch):
     monkeypatch.setattr(tree_api, "check_repo_read_permission", lambda repo_arg, user: True)
     monkeypatch.setattr(tree_api, "resolve_lakefs_repo", lambda repo: "lake-repo")
 
-    async def _resolve_revision(client, lakefs_repo, revision):
+    async def _resolve_revision(client, lakefs_repo, revision, repo=None):
         return ("resolved-main", "branch")
 
     monkeypatch.setattr(tree_api, "resolve_revision", _resolve_revision)
@@ -1470,7 +1470,7 @@ async def test_list_repo_tree_blank_name_prefix_is_byte_identical(monkeypatch):
     monkeypatch.setattr(tree_api, "check_repo_read_permission", lambda repo_arg, user: True)
     monkeypatch.setattr(tree_api, "resolve_lakefs_repo", lambda repo: "lake-repo")
 
-    async def _resolve_revision(client, lakefs_repo, revision):
+    async def _resolve_revision(client, lakefs_repo, revision, repo=None):
         return ("resolved-main", "branch")
 
     monkeypatch.setattr(tree_api, "resolve_revision", _resolve_revision)
@@ -1519,7 +1519,7 @@ async def test_list_repo_tree_empty_with_name_prefix_returns_200(monkeypatch):
     monkeypatch.setattr(tree_api, "check_repo_read_permission", lambda repo_arg, user: True)
     monkeypatch.setattr(tree_api, "resolve_lakefs_repo", lambda repo: "lake-repo")
 
-    async def _resolve_revision(client, lakefs_repo, revision):
+    async def _resolve_revision(client, lakefs_repo, revision, repo=None):
         return ("resolved-main", "branch")
 
     monkeypatch.setattr(tree_api, "resolve_revision", _resolve_revision)
@@ -1564,7 +1564,7 @@ async def test_list_repo_tree_empty_path_with_cursor_no_404(monkeypatch):
     monkeypatch.setattr(tree_api, "check_repo_read_permission", lambda repo_arg, user: True)
     monkeypatch.setattr(tree_api, "resolve_lakefs_repo", lambda repo: "lake-repo")
 
-    async def _resolve_revision(client, lakefs_repo, revision):
+    async def _resolve_revision(client, lakefs_repo, revision, repo=None):
         return ("resolved-main", "branch")
 
     monkeypatch.setattr(tree_api, "resolve_revision", _resolve_revision)
@@ -1609,7 +1609,7 @@ async def test_list_repo_tree_link_header_preserves_name_prefix(monkeypatch):
     monkeypatch.setattr(tree_api, "check_repo_read_permission", lambda repo_arg, user: True)
     monkeypatch.setattr(tree_api, "resolve_lakefs_repo", lambda repo: "lake-repo")
 
-    async def _resolve_revision(client, lakefs_repo, revision):
+    async def _resolve_revision(client, lakefs_repo, revision, repo=None):
         return ("resolved-main", "branch")
 
     monkeypatch.setattr(tree_api, "resolve_revision", _resolve_revision)

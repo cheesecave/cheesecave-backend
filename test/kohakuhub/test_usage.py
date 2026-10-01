@@ -589,9 +589,11 @@ async def test_random_changes_leave_no_drift(u, owner_client):
 
 
 def _migration():
+    """023 as the newest migration (later ones make it skip itself)."""
     spec = importlib.util.spec_from_file_location("migration_023", MIGRATION)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    module.should_skip_due_to_future_migrations = lambda *args: False
     return module
 
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 import base64
 import importlib
 import json
@@ -12,6 +13,19 @@ import pytest
 from fastapi import HTTPException
 
 import kohakuhub.api.commit.routers.operations as commit_ops
+
+
+@asynccontextmanager
+async def _no_lock(repo):
+    yield
+
+
+@pytest.fixture(autouse=True)
+def _repository_not_held(monkeypatch):
+    """No history operation holds the fake repositories (the lock itself is
+    tested against the real database in test_super_squash.py)."""
+    monkeypatch.setattr(commit_ops.operation_lock, "ensure_free", lambda repo: None)
+    monkeypatch.setattr(commit_ops.operation_lock, "writing", _no_lock)
 
 
 class _Expr:

@@ -182,9 +182,10 @@
                   Squash repository history
                 </h3>
                 <p class="text-sm text-gray-600 mb-3">
-                  This will clear all commit history and optimize storage by
-                  removing old versions. Only the current state will be
-                  preserved. This action cannot be undone.
+                  This will clear all commit history and delete the other
+                  branches and tags; only the current state will be preserved.
+                  Old versions are removed in the background. This action cannot
+                  be undone.
                 </p>
                 <el-button type="warning" @click="handleSquashRepo">
                   Squash Repository
@@ -814,7 +815,7 @@ async function handleSquashRepo() {
   if (!squashEnabled.value) return;
   try {
     await ElMessageBox.confirm(
-      `This will clear all commit history for ${repoId.value} and optimize storage. Only the current state will be preserved. This action cannot be undone!`,
+      `This will clear all commit history for ${repoId.value} and delete its other branches and tags. Only the current state will be preserved; old versions are removed in the background. This action cannot be undone!`,
       "Squash Repository",
       {
         type: "warning",
@@ -836,7 +837,7 @@ async function handleSquashRepo() {
     );
 
     const loading = ElMessage({
-      message: "Squashing repository... This may take a few minutes.",
+      message: "Squashing repository...",
       type: "info",
       duration: 0,
     });

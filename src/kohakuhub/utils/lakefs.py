@@ -4,6 +4,7 @@ import hashlib
 import re
 import secrets
 
+import httpx
 import numpy as np
 
 from kohakuhub.lakefs_rest_client import LakeFSRestClient, get_lakefs_rest_client
@@ -18,8 +19,81 @@ def get_lakefs_client() -> LakeFSRestClient:
     return get_lakefs_rest_client()
 
 
+# (LakeFS repository, history root, commit) -> whether the commit is in the
+# history. Descending from the root is a fact about immutable commits; being
+# reached from a branch or tag is kept too, as a repository never squashed
+# keeps reading the commits of a deleted branch by id
+_descends: dict[tuple[str, str, str], bool] = {}
+DESCENDS_KEPT = 100_000
+HEADS_PAGE = 1000
+
+
+async def _heads(client: LakeFSRestClient, lakefs_repo: str) -> list[str]:
+    """The commits every branch and tag points at."""
+    heads = []
+    for list_refs in (client.list_branches, client.list_tags):
+        after = None
+        while True:
+            page = await list_refs(repository=lakefs_repo, after=after, amount=HEADS_PAGE)
+            heads += [ref["commit_id"] for ref in page["results"]]
+            if not page["pagination"]["has_more"]:
+                break
+            after = page["pagination"]["next_offset"]
+    return heads
+
+
+async def in_history(client: LakeFSRestClient, repo, lakefs_repo: str, commit_id: str) -> bool:
+    """Whether ``commit_id`` is still in the repository's history.
+
+    After a repository squash, the commits its commit (``history_root``)
+    does not reach are gone: LakeFS keeps them until its own garbage
+    collection, but nothing may read or restore them. A commit a branch or
+    tag reaches counts as in it too, such as one squashed alone later
+    (Hugging Face's ``super_squash_history``) or one a squash could not
+    finish dropping.
+    """
+    root = getattr(repo, "history_root", None)
+    if not root or commit_id == root:
+        return True
+    key = (lakefs_repo, root, commit_id)
+    if key not in _descends:
+        if len(_descends) >= DESCENDS_KEPT:
+            _descends.clear()
+        base = await client.find_merge_base(repository=lakefs_repo, left=commit_id, right=root)
+        reached = base == root
+        for head in [] if reached else await _heads(client, lakefs_repo):
+            if head == commit_id or await client.find_merge_base(
+                repository=lakefs_repo, left=commit_id, right=head
+            ) == commit_id:
+                reached = True
+                break
+        _descends[key] = reached
+    return _descends[key]
+
+
+async def ref_in_history(client: LakeFSRestClient, repo, lakefs_repo: str, ref: str) -> bool:
+    """Whether ``ref`` (a branch, a tag or a commit id) is in the repository's
+    history (``in_history``). A ref LakeFS does not know counts as in it: the
+    caller reports it missing its own way."""
+    if not getattr(repo, "history_root", None):
+        return True
+    try:
+        await client.get_branch(repository=lakefs_repo, branch=ref)
+        return True
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code not in (400, 404):  # an expression, or no such branch
+            raise
+    try:
+        commit = await client.get_commit(repository=lakefs_repo, commit_id=ref)
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code in (400, 404):  # not a ref, or none such
+            return True
+        raise
+    return await in_history(client, repo, lakefs_repo, commit["id"])
+
+
 async def resolve_revision(
-    client: LakeFSRestClient, lakefs_repo: str, revision: str
+    client: LakeFSRestClient, lakefs_repo: str, revision: str, repo=None
 ) -> tuple[str, dict | None]:
     """Resolve a revision (branch name or commit hash) to commit ID and info.
 
@@ -36,7 +110,8 @@ async def resolve_revision(
         Tuple of (commit_id, commit_info dict or None)
 
     Raises:
-        ValueError: If revision cannot be resolved as either branch or commit
+        ValueError: If revision cannot be resolved as either branch or commit,
+            or names a commit a squash of ``repo`` removed (``in_history``)
     """
     # Try resolving as a branch first
     try:
@@ -62,12 +137,14 @@ async def resolve_revision(
         commit_info = await client.get_commit(
             repository=lakefs_repo, commit_id=revision
         )
-        return commit_info["id"], commit_info
     except Exception as commit_error:
         # Neither branch nor commit found
         raise ValueError(
             f"Revision '{revision}' not found as branch or commit"
         ) from commit_error
+    if not await in_history(client, repo, lakefs_repo, commit_info["id"]):
+        raise ValueError(f"Revision '{revision}' not found as branch or commit")
+    return commit_info["id"], commit_info
 
 
 def _base36_encode(num: int) -> str:

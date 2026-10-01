@@ -18,6 +18,7 @@ from kohakuhub.auth.permissions import check_repo_read_permission
 from kohakuhub.utils.lakefs import resolve_lakefs_repo
 from kohakuhub.api.commit.availability import mark_lfs_statuses
 from kohakuhub.api.repo.utils.hf import (
+    ensure_revision_in_history,
     format_hf_datetime,
     hf_repo_not_found,
     hf_server_error,
@@ -90,6 +91,7 @@ async def list_commits(
     check_repo_read_permission(repo_row, user)
 
     lakefs_repo = resolve_lakefs_repo(repo_row)
+    await ensure_revision_in_history(get_lakefs_rest_client(), repo_row, lakefs_repo, branch)
 
     try:
         # Get commits from LakeFS using REST API
@@ -214,6 +216,7 @@ async def get_commit_detail(
     check_repo_read_permission(repo_row, user)
 
     lakefs_repo = resolve_lakefs_repo(repo_row)
+    await ensure_revision_in_history(get_lakefs_rest_client(), repo_row, lakefs_repo, commit_id)
 
     try:
         # Get commit from LakeFS
@@ -285,6 +288,7 @@ async def get_commit_diff(
     check_repo_read_permission(repo_row, user)
 
     lakefs_repo = resolve_lakefs_repo(repo_row)
+    await ensure_revision_in_history(get_lakefs_rest_client(), repo_row, lakefs_repo, commit_id)
 
     try:
         # Get commit from LakeFS

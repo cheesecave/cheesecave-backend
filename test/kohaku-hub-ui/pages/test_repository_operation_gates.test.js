@@ -92,7 +92,8 @@ describe("repository operation capability consumers", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.spyOn(axios, "get").mockImplementation((url) => {
-      if (url.endsWith("/diff")) return Promise.resolve({ data: { files: [] } });
+      if (url.endsWith("/diff"))
+        return Promise.resolve({ data: { files: [] } });
       return Promise.resolve({
         data: {
           commit_id: "commit-1",
@@ -104,13 +105,17 @@ describe("repository operation capability consumers", () => {
       });
     });
     mocks.authStore.isAuthenticated = true;
-    mocks.settingsAPI.getSiteConfig.mockResolvedValue({ data: enabledConfig() });
+    mocks.settingsAPI.getSiteConfig.mockResolvedValue({
+      data: enabledConfig(),
+    });
     mocks.settingsAPI.revertBranch.mockResolvedValue({ data: {} });
     mocks.settingsAPI.resetBranch.mockResolvedValue({ data: {} });
     mocks.settingsAPI.squashRepo.mockResolvedValue({ data: {} });
     mocks.repoAPI.getInfo.mockResolvedValue({ data: { private: false } });
     mocks.repoAPI.getCommitOperations.mockResolvedValue({ data: {} });
-    mocks.repoAPI.getCommitUnavailableFiles.mockResolvedValue({ data: { files: [] } });
+    mocks.repoAPI.getCommitUnavailableFiles.mockResolvedValue({
+      data: { files: [] },
+    });
   });
 
   it("hides commit actions when capability loading fails", async () => {
@@ -180,5 +185,44 @@ describe("repository operation capability consumers", () => {
 
     expect(wrapper.text()).toContain("Squash repository history");
     expect(wrapper.text()).toContain("Squash Repository");
+  });
+
+  it("squashes after two confirmations and says so", async () => {
+    mocks.settingsAPI.getSiteConfig.mockResolvedValueOnce({
+      data: enabledConfig({ squash: true }),
+    });
+    // See test_cache_page.test.js: element-plus is spied on, not mocked.
+    const elementPlus = await vi.importActual("element-plus");
+    const confirm = vi
+      .spyOn(elementPlus.ElMessageBox, "confirm")
+      .mockResolvedValue("confirm");
+    vi.spyOn(elementPlus.ElMessageBox, "prompt").mockResolvedValue({
+      value: "demo",
+    });
+    const success = vi
+      .spyOn(elementPlus.ElMessage, "success")
+      .mockImplementation(() => {});
+    vi.useFakeTimers({ toFake: ["setTimeout"] });
+    try {
+      const wrapper = mountPage(SettingsPage);
+      await flushPromises();
+      await wrapper
+        .findAll("button")
+        .find((button) => button.text() === "Squash Repository")
+        .trigger("click");
+      await flushPromises();
+
+      expect(confirm.mock.calls[0][0]).toContain(
+        "old versions are removed in the background",
+      );
+      expect(mocks.settingsAPI.squashRepo).toHaveBeenCalledWith({
+        repo: "owner/demo",
+        type: "model",
+      });
+      expect(success).toHaveBeenCalledWith("Repository squashed successfully");
+    } finally {
+      vi.useRealTimers();
+      vi.restoreAllMocks();
+    }
   });
 });

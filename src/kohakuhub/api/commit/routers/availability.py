@@ -13,7 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from kohakuhub.api.commit import availability
-from kohakuhub.api.repo.utils.hf import hf_repo_not_found
+from kohakuhub.api.repo.utils.hf import ensure_revision_in_history, hf_repo_not_found
 from kohakuhub.auth.dependencies import get_optional_user
 from kohakuhub.auth.permissions import check_repo_read_permission, check_repo_write_permission
 from kohakuhub.db import User
@@ -85,6 +85,7 @@ async def commit_operations(
     check_repo_read_permission(repo, user)
     lakefs_repo = resolve_lakefs_repo(repo)
     client = get_lakefs_client()
+    await ensure_revision_in_history(client, repo, lakefs_repo, commit_id)
     head = await _branch_head(client, lakefs_repo, branch)
     commit = await _commit(client, lakefs_repo, commit_id)
     if commit is None:
@@ -129,6 +130,7 @@ async def commits_operations(
     check_repo_read_permission(repo, user)
     lakefs_repo = resolve_lakefs_repo(repo)
     client = get_lakefs_client()
+    await ensure_revision_in_history(client, repo, lakefs_repo, branch)
     head = await _branch_head(client, lakefs_repo, branch)
     caps, can_write = availability.capabilities(), _can_write(repo, user)
     response = {"branch": branch, "head": head, "can_write": can_write, "operations": caps}
@@ -171,6 +173,7 @@ async def commit_unavailable_files(
     check_repo_read_permission(repo, user)
     lakefs_repo = resolve_lakefs_repo(repo)
     client = get_lakefs_client()
+    await ensure_revision_in_history(client, repo, lakefs_repo, commit_id)
     head = await _branch_head(client, lakefs_repo, branch)
     commit = await _commit(client, lakefs_repo, commit_id)
     if commit is None:

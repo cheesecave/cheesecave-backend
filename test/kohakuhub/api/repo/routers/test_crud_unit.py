@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 import json
 from types import SimpleNamespace
 
@@ -154,6 +155,19 @@ def _async_return(value):
     return _inner()
 
 
+@asynccontextmanager
+async def _no_lock(repo):
+    yield
+
+
+@pytest.fixture(autouse=True)
+def _repository_not_held(monkeypatch):
+    """No history operation holds the fake repositories (the lock itself is
+    tested against the real database in test_super_squash.py)."""
+    monkeypatch.setattr(repo_crud.operation_lock, "ensure_free", lambda repo: None)
+    monkeypatch.setattr(repo_crud.operation_lock, "writing", _no_lock)
+
+
 @pytest.fixture(autouse=True)
 def _reset_repo_model():
     _FakeRepositoryModel.reset()
@@ -252,158 +266,6 @@ async def test_delete_repo_covers_admin_validation_not_found_and_failures(monkey
     assert db_failure.status_code == 500
 
 
-@pytest.mark.asyncio
-async def test_migrate_lakefs_repository_covers_noop_missing_source_success_and_cleanup(monkeypatch):
-    client = _FakeClient()
-    from_repo = SimpleNamespace(full_id="owner/from")
-    deleted_prefixes = []
-    monkeypatch.setattr(repo_crud, "get_lakefs_client", lambda: client)
-    monkeypatch.setattr(repo_crud, "get_repository", lambda repo_type, namespace, name: from_repo if name in {"from", "same"} else None)
-    monkeypatch.setattr(repo_crud, "get_file", lambda repo, path: SimpleNamespace(lfs=path.endswith(".bin")) if path != "missing.txt" else None)
-    monkeypatch.setattr(repo_crud, "should_use_lfs", lambda repo, path, size: path.endswith(".bin"))
-    monkeypatch.setattr(repo_crud, "delete_objects_with_prefix", lambda bucket, prefix: deleted_prefixes.append((bucket, prefix)) or _async_return(2))
-    monkeypatch.setattr(repo_crud.cfg.s3, "bucket", "hub-storage")
-
-    monkeypatch.setattr(
-        repo_crud, "allocate_lakefs_repo_name", lambda *a, **k: _async_return("owner-to")
-    )
-
-    with pytest.raises(HTTPException) as missing_source:
-        await repo_crud._migrate_lakefs_repository(
-            "model",
-            "owner/missing",
-            "owner/to",
-            from_lakefs_repo="owner-missing",
-        )
-    assert missing_source.value.status_code == 404
-
-    client.list_payloads = [
-        {
-            "results": [
-                {"path_type": "object", "path": "README.md", "size_bytes": 3, "checksum": "sha256:readme", "physical_address": "s3://bucket/repo/README.md"},
-                {"path_type": "object", "path": "weights.bin", "size_bytes": 12, "checksum": "sha256:weights", "physical_address": "s3://bucket/lfs/weights"},
-            ],
-            "pagination": {"has_more": False},
-        }
-    ]
-    created = await repo_crud._migrate_lakefs_repository(
-        "model",
-        "owner/from",
-        "owner/to",
-        from_lakefs_repo="owner-from",
-    )
-    assert created == "owner-to"
-    method_names = [name for name, _kwargs in client.calls]
-    assert "create_repository" in method_names
-    assert "link_physical_address" in method_names
-    assert "upload_object" in method_names
-    assert deleted_prefixes[-1] == ("hub-storage", "owner-from/")
-
-    client.raise_on["create_repository"] = RuntimeError("migration broke")
-    with pytest.raises(HTTPException) as migration_error:
-        await repo_crud._migrate_lakefs_repository(
-            "model",
-            "owner/from",
-            "owner/to",
-            from_lakefs_repo="owner-from",
-        )
-    assert migration_error.value.status_code == 500
-
-
-@pytest.mark.asyncio
-async def test_migrate_lakefs_repository_aborts_without_deleting_source_on_object_failure(monkeypatch):
-    """One object failing to migrate must abort the migration (#107).
-
-    Skipping it used to commit the partial copy and then delete the source
-    LakeFS repository and S3 prefix, losing the object for good.
-    """
-    client = _FakeClient()
-    from_repo = SimpleNamespace(full_id="owner/from")
-    deleted_prefixes = []
-    monkeypatch.setattr(repo_crud, "get_lakefs_client", lambda: client)
-    monkeypatch.setattr(repo_crud, "get_repository", lambda repo_type, namespace, name: from_repo)
-    monkeypatch.setattr(repo_crud, "get_file", lambda repo, path: SimpleNamespace(lfs=False))
-    monkeypatch.setattr(repo_crud, "delete_objects_with_prefix", lambda bucket, prefix: deleted_prefixes.append(prefix) or _async_return(0))
-    client.list_payloads = [
-        {
-            "results": [
-                {"path_type": "object", "path": "README.md", "size_bytes": 3, "checksum": "c1", "physical_address": "s3://b/r/README.md"},
-                {"path_type": "object", "path": "config.json", "size_bytes": 4, "checksum": "c2", "physical_address": "s3://b/r/config.json"},
-            ],
-            "pagination": {"has_more": False},
-        }
-    ]
-    client.raise_on["upload_object"] = RuntimeError("s3 hiccup")
-    monkeypatch.setattr(
-        repo_crud, "allocate_lakefs_repo_name", lambda *a, **k: _async_return("owner-to")
-    )
-
-    with pytest.raises(HTTPException) as failure:
-        await repo_crud._migrate_lakefs_repository(
-            "model",
-            "owner/from",
-            "owner/to",
-            from_lakefs_repo="owner-from",
-        )
-
-    assert failure.value.status_code == 500
-    assert "README.md" in failure.value.detail["error"]
-    calls = [(name, kwargs.get("repository")) for name, kwargs in client.calls]
-    assert ("commit", "owner-to") not in calls
-    assert ("delete_repository", "owner-from") not in calls
-    assert ("delete_repository", "owner-to") in calls  # the half-built target is removed
-    assert deleted_prefixes == []
-
-
-@pytest.mark.asyncio
-async def test_migrate_lakefs_repository_fails_cleanly_without_a_usable_target_id(monkeypatch):
-    """If no LakeFS id can be created for the target, the migration stops before
-    touching anything: no target to clean up, and the source stays intact."""
-    client = _FakeClient()
-    client.list_payloads = [{"results": [], "pagination": {"has_more": False}}]
-    client.raise_on["create_repository"] = RuntimeError(
-        'LakeFS API error 409: {"message":"error creating repository: not unique"}'
-    )
-    monkeypatch.setattr(repo_crud, "get_lakefs_client", lambda: client)
-    monkeypatch.setattr(repo_crud, "get_repository", lambda *_a: SimpleNamespace(full_id="owner/from"))
-    monkeypatch.setattr(repo_crud, "allocate_lakefs_repo_name", lambda *a, **k: _async_return("owner-to"))
-
-    with pytest.raises(HTTPException) as failure:
-        await repo_crud._migrate_lakefs_repository(
-            "model", "owner/from", "owner/to", from_lakefs_repo="owner-from"
-        )
-
-    assert failure.value.status_code == 500
-    assert "No usable LakeFS repository id" in failure.value.detail["error"]
-    assert not [call for call in client.calls if call[0] == "delete_repository"]
-
-
-@pytest.mark.asyncio
-async def test_migrate_lakefs_repository_failure_survives_target_cleanup_errors(monkeypatch):
-    """Removing the half-built target is best effort: its own failure must not
-    replace the migration error the caller needs to see."""
-    client = _FakeClient()
-    client.list_payloads = [
-        {
-            "results": [{"path_type": "object", "path": "a.txt", "size_bytes": 1, "checksum": "c", "physical_address": "p"}],
-            "pagination": {"has_more": False},
-        }
-    ]
-    client.raise_on["upload_object"] = RuntimeError("s3 hiccup")
-    client.raise_on["delete_repository"] = RuntimeError("lakefs down")
-    monkeypatch.setattr(repo_crud, "get_lakefs_client", lambda: client)
-    monkeypatch.setattr(repo_crud, "get_repository", lambda *_a: SimpleNamespace(full_id="owner/from"))
-    monkeypatch.setattr(repo_crud, "get_file", lambda repo, path: SimpleNamespace(lfs=False))
-    monkeypatch.setattr(repo_crud, "allocate_lakefs_repo_name", lambda *a, **k: _async_return("owner-to"))
-
-    with pytest.raises(HTTPException) as failure:
-        await repo_crud._migrate_lakefs_repository(
-            "model", "owner/from", "owner/to", from_lakefs_repo="owner-from"
-        )
-
-    assert "failed to migrate" in failure.value.detail["error"]
-
-
 def test_update_repository_database_records_covers_same_and_cross_namespace_moves(monkeypatch):
     repo_row = SimpleNamespace(id=1, quota_bytes=100, used_bytes=50, private=False)
     monkeypatch.setattr(repo_crud, "Repository", _FakeRepositoryModel)
@@ -472,7 +334,6 @@ async def test_move_repo_covers_validation_quota_and_metadata_only_success(monke
     monkeypatch.setattr(repo_crud, "Repository", _FakeRepositoryModel)
     _FakeRepositoryModel.reset()
     for name in (
-        "_migrate_lakefs_repository",
         "allocate_lakefs_repo_name",
         "get_lakefs_client",
     ):
@@ -535,88 +396,6 @@ async def test_move_repo_covers_validation_quota_and_metadata_only_success(monke
     assert (update["to_namespace"], update["to_name"], update["moving_namespace"]) == ("other", "to", True)
     # It goes to the account the namespace names
     assert update["to_owner"].username == "other"
-
-
-@pytest.mark.asyncio
-async def test_squash_repo_covers_validation_success_and_recovery(monkeypatch):
-    monkeypatch.setattr(
-        operation_capabilities.cfg.app, "repository_squash_enabled", True
-    )
-    repo_row = SimpleNamespace(
-        id=5,
-        private=False,
-        repo_type="model",
-        full_id="owner/demo-model",
-        lakefs_repo="model:owner/demo-model",
-    )
-    # Step 2 reloads the row under the temporary name and resolves its LakeFS id
-    # from it, so the temp row carries its own identity too.
-    temp_repo = SimpleNamespace(
-        id=6,
-        private=False,
-        repo_type="model",
-        full_id="owner/demo-squash-abc12345",
-        lakefs_repo="model:owner/demo-squash-abc12345",
-    )
-    atomic_state = {}
-    client = _FakeClient()
-    client.repository_exists_values = [True, False, True, False]
-    repo_lookup = {"initial": repo_row, "temp": temp_repo, "final": repo_row}
-
-    def fake_get_repository(repo_type, namespace, name):
-        if name == "demo":
-            return repo_lookup["initial"]
-        if name.startswith("demo-squash-"):
-            return repo_lookup["temp"]
-        return repo_lookup["final"]
-
-    monkeypatch.setattr(repo_crud, "get_repository", fake_get_repository)
-    monkeypatch.setattr(repo_crud, "check_repo_delete_permission", lambda repo, user, is_admin=False: None)
-    # The migration allocates and returns the LakeFS id it created.
-    monkeypatch.setattr(repo_crud, "_migrate_lakefs_repository", lambda **kwargs: _async_return(f"lakefs:{kwargs['to_id']}"))
-    monkeypatch.setattr(repo_crud, "_update_repository_database_records", lambda **kwargs: atomic_state.setdefault("updated", []).append(kwargs))
-    monkeypatch.setattr(repo_crud, "get_lakefs_client", lambda: client)
-    monkeypatch.setattr(repo_crud, "resolve_lakefs_repo", lambda repo: f"{repo.repo_type}:{repo.full_id}")
-    recounts = []
-    monkeypatch.setattr(repo_crud.usage, "enqueue_repository_recount", recounts.append)
-    monkeypatch.setattr(repo_crud, "db", SimpleNamespace(atomic=lambda: _AtomicContext(atomic_state)))
-    monkeypatch.setattr(repo_crud.uuid, "uuid4", lambda: SimpleNamespace(hex="abc12345deadbeef"))
-
-    bad_id = await repo_crud.squash_repo(
-        repo_crud.SquashRepoPayload(repo="bad", type="model"),
-        auth=(SimpleNamespace(username="owner"), False),
-    )
-    assert bad_id.status_code == 400
-
-    monkeypatch.setattr(repo_crud, "get_repository", lambda *_args: None)
-    not_found = await repo_crud.squash_repo(
-        repo_crud.SquashRepoPayload(repo="owner/demo", type="model"),
-        auth=(SimpleNamespace(username="owner"), False),
-    )
-    assert not_found.status_code == 404
-
-    monkeypatch.setattr(repo_crud, "get_repository", fake_get_repository)
-    success = await repo_crud.squash_repo(
-        repo_crud.SquashRepoPayload(repo="owner/demo", type="model"),
-        auth=(SimpleNamespace(username="owner"), False),
-    )
-    assert success["success"] is True
-    # Each hop points the row at the LakeFS repository its migration created.
-    assert [u["to_lakefs_repo"] for u in atomic_state["updated"][-2:]] == [
-        f"lakefs:{atomic_state['updated'][-2]['to_id']}",
-        f"lakefs:{atomic_state['updated'][-1]['to_id']}",
-    ]
-    assert atomic_state["updated"][-1]["to_id"] == atomic_state["updated"][-2]["from_id"]
-    assert recounts == [repo_row.id]  # its main is new: recounted in the background
-
-    monkeypatch.setattr(repo_crud, "_migrate_lakefs_repository", lambda **kwargs: (_ for _ in ()).throw(RuntimeError("squash failed")))
-    with pytest.raises(HTTPException) as squash_error:
-        await repo_crud.squash_repo(
-            repo_crud.SquashRepoPayload(repo="owner/demo", type="model"),
-            auth=(SimpleNamespace(username="owner"), False),
-        )
-    assert squash_error.value.status_code == 500
-    assert recounts[-1] == temp_repo.id  # the row points at the temp copy again: recounted
 
 
 @pytest.mark.asyncio
@@ -1113,80 +892,6 @@ async def test_create_repo_persists_the_allocated_lakefs_repo_id(monkeypatch):
     )
 
 
-@pytest.mark.asyncio
-async def test_migrate_lakefs_repository_waits_for_the_old_repo_to_disappear(monkeypatch):
-    """Stage 2: LakeFS acks DELETE before the repository record is gone, so the
-    freed id stays taken. Waiting here means the common case never has to
-    surface a conflict to the client at all.
-    """
-    client = _FakeClient()
-    # Still present twice, then finally deleted.
-    client.repository_exists_values = [True, True, False]
-    sleeps = []
-
-    async def fake_sleep(seconds):
-        sleeps.append(seconds)
-
-    monkeypatch.setattr(repo_crud.asyncio, "sleep", fake_sleep)
-    monkeypatch.setattr(repo_crud, "get_lakefs_client", lambda: client)
-    monkeypatch.setattr(repo_crud, "get_repository", lambda *_a: SimpleNamespace(full_id="owner/from", lakefs_repo="from-repo"))
-    monkeypatch.setattr(repo_crud, "allocate_lakefs_repo_name", lambda *a, **k: _async_return("to-repo"))
-    monkeypatch.setattr(repo_crud, "delete_objects_with_prefix", lambda bucket, prefix: _async_return(0))
-    monkeypatch.setattr(repo_crud.cfg.s3, "bucket", "hub-storage")
-
-    client.list_payloads = [{"results": [], "pagination": {"has_more": False}}]
-    await repo_crud._migrate_lakefs_repository(
-        "model", "owner/from", "owner/to",
-        from_lakefs_repo="from-repo",
-    )
-
-    exists_calls = [name for name, _ in client.calls if name == "repository_exists"]
-    assert len(exists_calls) == 3, "must poll until the old repository is really gone"
-    assert sleeps, "polling must yield between attempts"
-
-    delete_index = [i for i, (name, _) in enumerate(client.calls) if name == "delete_repository"][0]
-    first_exists_index = [i for i, (name, _) in enumerate(client.calls) if name == "repository_exists"][0]
-    assert delete_index < first_exists_index, "the wait must follow the delete"
-
-
-@pytest.mark.asyncio
-async def test_migrate_lakefs_repository_wait_is_bounded_and_non_fatal(monkeypatch):
-    """A repository whose cleanup outlives the bound (large history) must not
-    fail the move - the rename itself already succeeded.
-    """
-    client = _FakeClient()
-    sleeps = []
-
-    class _NeverDeleted(_FakeClient):
-        async def repository_exists(self, repo_name):
-            self.calls.append(("repository_exists", repo_name))
-            return True
-
-    client = _NeverDeleted()
-
-    async def fake_sleep(seconds):
-        sleeps.append(seconds)
-
-    monkeypatch.setattr(repo_crud.asyncio, "sleep", fake_sleep)
-    monkeypatch.setattr(repo_crud, "get_lakefs_client", lambda: client)
-    monkeypatch.setattr(repo_crud, "get_repository", lambda *_a: SimpleNamespace(full_id="owner/from", lakefs_repo="from-repo"))
-    monkeypatch.setattr(repo_crud, "allocate_lakefs_repo_name", lambda *a, **k: _async_return("to-repo"))
-    monkeypatch.setattr(repo_crud, "delete_objects_with_prefix", lambda bucket, prefix: _async_return(0))
-    monkeypatch.setattr(repo_crud.cfg.s3, "bucket", "hub-storage")
-
-    client.list_payloads = [{"results": [], "pagination": {"has_more": False}}]
-    await repo_crud._migrate_lakefs_repository(
-        "model", "owner/from", "owner/to",
-        from_lakefs_repo="from-repo",
-    )
-
-    exists_calls = [name for name, _ in client.calls if name == "repository_exists"]
-    assert exists_calls, "must have tried"
-    assert len(exists_calls) <= repo_crud.LAKEFS_DELETION_WAIT_MAX_ATTEMPTS, (
-        "the wait must be bounded so a large repo cannot hang the request"
-    )
-
-
 def test_is_lakefs_repo_id_taken_error_prefers_the_structured_status_code():
     """LakeFSRestClient raises httpx.HTTPStatusError, so the status is available
     structurally. Matching "409" in the message alone would misfire on a
@@ -1222,49 +927,6 @@ def test_is_lakefs_repo_id_taken_error_prefers_the_structured_status_code():
         )
         is False
     )
-
-
-@pytest.mark.asyncio
-async def test_wait_for_lakefs_repo_deletion_reports_states_and_survives_probe_errors(
-    monkeypatch,
-):
-    sleeps = []
-
-    class _Client:
-        def __init__(self, values):
-            self.values = list(values)
-            self.calls = 0
-
-        async def repository_exists(self, repo_name):
-            self.calls += 1
-            value = self.values.pop(0)
-            if isinstance(value, Exception):
-                raise value
-            return value
-
-    async def fake_sleep(seconds):
-        sleeps.append(seconds)
-
-    monkeypatch.setattr(repo_crud.asyncio, "sleep", fake_sleep)
-
-    gone = await repo_crud._wait_for_lakefs_repo_deletion(
-        _Client([True, False]), "old-repo"
-    )
-    assert gone is True
-
-    # A probe failure must not fail the move; the data is already migrated.
-    survived = await repo_crud._wait_for_lakefs_repo_deletion(
-        _Client([RuntimeError("lakefs unreachable")]), "old-repo"
-    )
-    assert survived is False
-
-    never = _Client([True] * repo_crud.LAKEFS_DELETION_WAIT_MAX_ATTEMPTS)
-    timed_out = await repo_crud._wait_for_lakefs_repo_deletion(never, "old-repo")
-    assert timed_out is False
-    assert never.calls == repo_crud.LAKEFS_DELETION_WAIT_MAX_ATTEMPTS
-    # One sleep between attempts, none after the final one: 1 for the first
-    # client (it sleeps once, then sees the repo gone) plus MAX - 1 here.
-    assert len(sleeps) == 1 + (repo_crud.LAKEFS_DELETION_WAIT_MAX_ATTEMPTS - 1)
 
 
 @pytest.mark.asyncio
