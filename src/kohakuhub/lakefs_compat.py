@@ -26,7 +26,10 @@ from kohakuhub.logger import get_logger
 logger = get_logger("LAKEFS")
 
 MINIMUM = (1, 48, 1)
-BROKEN = {(1, 70, 0): "cannot store regular files on an S3 endpoint without TLS"}
+BROKEN = {
+    (1, 48, 0): 'is LakeFS\'s own "do not use" release: it squashes every merge by default',
+    (1, 70, 0): "cannot store regular files on an S3 endpoint without TLS",
+}
 RECOMMENDED = (1, 86, 0)  # the bundled image: the last Apache 2.0 release
 TESTED_UP_TO = (1, 88, 0)
 FIRST_BSL = (1, 87, 0)
@@ -68,13 +71,13 @@ def assess(version: str | None) -> Assessment:
         return Assessment(version, "unknown", None, True, "LakeFS version unknown")
     license = "bsl-1.1" if parsed >= FIRST_BSL else "apache-2.0"
     reset_supported = parsed >= MINIMUM
-    if not reset_supported:
+    if parsed in BROKEN:
+        status, message = "unsupported", f"LakeFS {_text(parsed)} {BROKEN[parsed]}"
+    elif not reset_supported:
         status, message = "unsupported", (
             f"LakeFS {_text(parsed)} is older than {_text(MINIMUM)}: "
             "Reset would leave a merge commit instead of one linear commit, so it is disabled"
         )
-    elif parsed in BROKEN:
-        status, message = "unsupported", f"LakeFS {_text(parsed)} {BROKEN[parsed]}"
     elif parsed > TESTED_UP_TO:
         status, message = "untested", (
             f"LakeFS {_text(parsed)} is newer than the newest tested release, {_text(TESTED_UP_TO)}"
