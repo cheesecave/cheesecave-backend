@@ -318,8 +318,13 @@ async def test_blob_siblings_follow_the_linked_object(lister, monkeypatch):
         ("small.parquet", 10, "s3://hub/data/p"),  # a suffix rule would call it LFS
         ("model.bin", 125162496, LFS_ADDRESS),
         ("unrecorded.txt", 3, "s3://hub/data/u"),
+        ("copied.txt", 5, "s3://hub/data/c"),  # its row keeps a LakeFS checksum, not a git blob id
     ]))
-    monkeypatch.setattr(hf_utils, "_regular_blob_ids", lambda repo: {"README.md": "aa" * 20, "small.parquet": "bb" * 20})
+    monkeypatch.setattr(
+        hf_utils,
+        "_regular_blob_ids",
+        lambda repo: {"README.md": "aa" * 20, "small.parquet": "bb" * 20, "copied.txt": "d41d8cd98f00b204e9800998ecf8427e"},
+    )
 
     siblings = json.loads(await hf_utils.hf_siblings_json(SimpleNamespace(id=1), "lake", "c1", with_metadata=True))
 
@@ -329,6 +334,7 @@ async def test_blob_siblings_follow_the_linked_object(lister, monkeypatch):
         {"rfilename": "model.bin", "blobId": "90e59f00f62c654b1a88a5f127dff14df4611cdc", "size": 125162496,
          "lfs": {"sha256": LFS_SHA, "size": 125162496, "pointerSize": 134}},
         {"rfilename": "unrecorded.txt", "size": 3},
+        {"rfilename": "copied.txt", "size": 5},
     ]
     # Not kept: blobIds come from File rows, which a commit records after
     # LakeFS has the commit; a list built in between would keep stale ids

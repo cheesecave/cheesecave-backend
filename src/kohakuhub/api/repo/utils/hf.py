@@ -7,6 +7,7 @@ This module provides utilities for making Kohaku Hub compatible with
 import asyncio
 import hashlib
 import json
+import re
 from collections import OrderedDict
 from typing import Optional
 
@@ -541,6 +542,10 @@ async def list_repo_objects(lakefs_repo: str, ref: str) -> list[tuple[str, int, 
             return objects
 
 
+# Some write paths keep a LakeFS checksum in File.sha256: not a blobId
+_GIT_BLOB_ID = re.compile(r"^[0-9a-f]{40}$")
+
+
 def _regular_blob_ids(repo_row) -> dict[str, str]:
     """Git blob ids of the repository's live regular files (``File.sha256``)."""
     rows = File.select(File.path_in_repo, File.sha256).where(
@@ -571,8 +576,8 @@ def _blobs_json(objects: list[tuple[str, int, str]], blob_ids: dict[str, str]) -
                 f'{{"rfilename": {name}, "blobId": "{git_blob_id(pointer)}", "size": {size}, '
                 f'"lfs": {{"sha256": "{oid}", "size": {size}, "pointerSize": {len(pointer)}}}}}'
             )
-        elif path in blob_ids:
-            entries.append(f'{{"rfilename": {name}, "blobId": {dumps(blob_ids[path])}, "size": {size}}}')
+        elif _GIT_BLOB_ID.match(blob_ids.get(path, "")):
+            entries.append(f'{{"rfilename": {name}, "blobId": "{blob_ids[path]}", "size": {size}}}')
         else:
             entries.append(f'{{"rfilename": {name}, "size": {size}}}')
     return "[" + ", ".join(entries) + "]"
