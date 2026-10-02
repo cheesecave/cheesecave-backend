@@ -23,6 +23,8 @@
 // Anything missing or shape-violating raises IndexedTarFormatError so
 // the modal can fall back to the shared <ErrorState>.
 
+import { mediaKind, mediaMime } from "@/utils/media-types";
+
 const SUPPORTED_TOP_LEVEL_KEYS = ["filesize", "hash", "hash_lfs", "files"];
 
 export class IndexedTarFetchError extends Error {
@@ -394,9 +396,9 @@ export function compareTarHash(indexPayload, tarTreeEntry) {
 }
 
 /**
- * Best-effort MIME type derived from a path extension. Mirrors the
- * extension list used by the standalone blob page so an inline preview
- * inside the tar uses the same renderer as the file would standalone.
+ * Best-effort MIME type derived from a path extension. Media types come
+ * from utils/media-types, as on the standalone blob page, so an inline
+ * preview inside the tar uses the same renderer as the file would standalone.
  */
 export function guessMimeType(path) {
   if (typeof path !== "string") return "application/octet-stream";
@@ -422,29 +424,11 @@ export function guessMimeType(path) {
     ts: "text/typescript",
     py: "text/x-python",
     pdf: "application/pdf",
-    jpg: "image/jpeg",
-    jpeg: "image/jpeg",
-    png: "image/png",
-    gif: "image/gif",
-    webp: "image/webp",
-    svg: "image/svg+xml",
-    bmp: "image/bmp",
-    ico: "image/x-icon",
-    mp4: "video/mp4",
-    webm: "video/webm",
-    mov: "video/quicktime",
-    avi: "video/x-msvideo",
-    mp3: "audio/mpeg",
-    wav: "audio/wav",
-    ogg: "audio/ogg",
-    flac: "audio/flac",
-    m4a: "audio/mp4",
-    aac: "audio/aac",
     safetensors: "application/octet-stream",
     parquet: "application/octet-stream",
     tar: "application/x-tar",
   };
-  return map[ext] || "application/octet-stream";
+  return mediaMime(path) || map[ext] || "application/octet-stream";
 }
 
 /**
@@ -486,10 +470,8 @@ export function classifyMember(path) {
     }
   }
 
-  if (["jpg", "jpeg", "png", "gif", "webp", "svg", "bmp", "ico"].includes(ext))
-    return "image";
-  if (["mp4", "webm", "ogg", "mov", "avi"].includes(ext)) return "video";
-  if (["mp3", "wav", "flac", "m4a", "aac"].includes(ext)) return "audio";
+  const kind = mediaKind(path);
+  if (kind) return kind; // image | video | audio
   if (ext === "pdf") return "pdf";
   if (ext === "md" || ext === "markdown") return "markdown";
   if (ext === "safetensors") return "safetensors";

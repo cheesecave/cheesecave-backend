@@ -184,11 +184,17 @@
         <!-- Image Preview -->
         <div v-else-if="isImage" class="text-center">
           <img
+            v-if="!imageFailed"
             :src="fileUrl"
             :alt="fileName"
             class="max-w-full h-auto mx-auto"
             style="max-height: 800px"
+            @error="imageFailed = true"
           />
+          <p v-else class="py-10 text-sm text-gray-600 dark:text-gray-400">
+            This browser cannot display this image. Use the download button
+            above to open it locally.
+          </p>
         </div>
 
         <!-- Video Preview -->
@@ -306,6 +312,7 @@ import CodeViewer from "@/components/common/CodeViewer.vue";
 import ErrorState from "@/components/common/ErrorState.vue";
 import TarBrowserPanel from "@/components/repo/preview/TarBrowserPanel.vue";
 import { hasIndexSibling, tarSidecarPath } from "@/utils/indexed-tar";
+import { mediaKind } from "@/utils/media-types";
 import { copyToClipboard } from "@/utils/clipboard";
 import { normalizeCatchAllParam } from "@/utils/repo-paths";
 import {
@@ -435,21 +442,11 @@ const lineCount = computed(() => {
   return fileContent.value ? fileContent.value.split("\n").length : 0;
 });
 
-const isImage = computed(() => {
-  return ["jpg", "jpeg", "png", "gif", "webp", "svg", "bmp", "ico"].includes(
-    fileExtension.value,
-  );
-});
-
-const isVideo = computed(() => {
-  return ["mp4", "webm", "ogg", "mov", "avi"].includes(fileExtension.value);
-});
-
-const isAudio = computed(() => {
-  return ["mp3", "wav", "ogg", "flac", "m4a", "aac"].includes(
-    fileExtension.value,
-  );
-});
+const isImage = computed(() => mediaKind(fileName.value) === "image");
+const isVideo = computed(() => mediaKind(fileName.value) === "video");
+const isAudio = computed(() => mediaKind(fileName.value) === "audio");
+// Set when the browser cannot decode the image (see utils/media-types)
+const imageFailed = ref(false);
 
 const isPDF = computed(() => {
   return fileExtension.value === "pdf";
@@ -602,6 +599,7 @@ async function loadFile() {
 async function loadFileInfo() {
   loading.value = true;
   errorClassification.value = null;
+  imageFailed.value = false;
   isIndexedTar.value = false;
   indexedTarTreeEntry.value = null;
 

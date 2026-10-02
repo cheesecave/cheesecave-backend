@@ -1,4 +1,5 @@
 <script setup>
+import { looksLikeImageUrl } from "@/utils/media-types";
 import { ref, computed, watch } from "vue";
 import { ElMessage } from "element-plus";
 import DatasetViewer from "@/components/DatasetViewer/DatasetViewer.vue";
@@ -84,24 +85,7 @@ function formatValue(value) {
 
 // Check if value is an image URL
 function isImageUrl(value) {
-  if (!value) return false;
-  const str = String(value);
-  if (str.startsWith("data:image/")) return true;
-  if (str.startsWith("http://") || str.startsWith("https://")) {
-    const lowerStr = str.toLowerCase();
-    const imageExtensions = [
-      ".jpg",
-      ".jpeg",
-      ".png",
-      ".gif",
-      ".webp",
-      ".bmp",
-      ".svg",
-      ".ico",
-    ];
-    return imageExtensions.some((ext) => lowerStr.includes(ext));
-  }
-  return false;
+  return looksLikeImageUrl(value);
 }
 
 // Check if value is a video URL

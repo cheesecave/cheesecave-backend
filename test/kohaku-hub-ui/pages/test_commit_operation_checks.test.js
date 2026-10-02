@@ -349,3 +349,42 @@ describe("commit page operation checks", () => {
     ).toBe(false);
   });
 });
+
+describe("commit page media diff", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    mocks.repoAPI.getCommitUnavailableFiles.mockResolvedValue({ data: { files: [] } });
+    mocks.repoAPI.getCommitOperations.mockResolvedValue(
+      checks({ available: true, files: 1 }, { available: true, files: 1 }),
+    );
+    mocks.settingsAPI.getSiteConfig.mockResolvedValue({
+      data: { capabilities: { repository_operations: { revert: false, reset: false, squash: false } } },
+    });
+  });
+
+  it("compares an added AVIF as an image, and leaves a TIFF to the binary note", async () => {
+    vi.spyOn(axios, "get").mockImplementation((url) =>
+      Promise.resolve({
+        data: url.endsWith("/diff")
+          ? {
+              files: [
+                { path: "art/cover.avif", type: "added", is_lfs: false, size_bytes: 10 },
+                { path: "art/scan.tiff", type: "added", is_lfs: false, size_bytes: 10 },
+                { path: "art/op.mp4", type: "added", is_lfs: false, size_bytes: 10, diff: "x" },
+              ],
+            }
+          : { commit_id: "commit-1", message: "Add art", author: "owner", date: 1 },
+      }),
+    );
+
+    const wrapper = mountPage();
+    await flushPromises();
+
+    expect(wrapper.text().match(/Image Comparison/g)).toHaveLength(1);
+    expect(wrapper.find('img[src*="art/cover.avif"]').exists()).toBe(true);
+    expect(wrapper.find('img[src*="art/scan.tiff"]').exists()).toBe(false);
+    // The TIFF and the video (despite its diff text) are binary files
+    expect(wrapper.text().match(/Binary File/g)).toHaveLength(2);
+  });
+});

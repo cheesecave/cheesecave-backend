@@ -453,6 +453,29 @@ describe("TarBrowserPanel · listing + navigation", () => {
     expect(localStorage.getItem("kohaku-tar-view-mode")).toBe("list");
   });
 
+  it("centres every grid icon in the same square box a thumbnail fills", async () => {
+    const archive = buildArchive([
+      ["data/rows.json", text("{}")],
+      ["voice.ogg", text("OggS")],
+      ["clip.mkv", text("mkv")],
+      ["notes.txt", text("hi")],
+    ]);
+    serveArchive(archive);
+    const wrapper = mountPanel();
+    await flushPromises();
+
+    const cards = wrapper.findAll(".grid-cols-2 > div");
+    expect(cards).toHaveLength(4);
+    for (const card of cards) {
+      const box = card.find(".aspect-square");
+      expect(box.exists()).toBe(true);
+      expect(box.classes()).toEqual(
+        expect.arrayContaining(["items-center", "justify-center"]),
+      );
+      expect(box.find('[class*="i-carbon-"]').exists()).toBe(true);
+    }
+  });
+
   it("persists a page-size change to localStorage", async () => {
     const archive = buildArchive([["a.txt", text("a")]]);
     serveArchive(archive);
@@ -532,6 +555,25 @@ describe("TarBrowserPanel · member preview routing", () => {
     const img = wrapper.find('img[alt="pic.png"]');
     expect(img.exists()).toBe(true);
     expect(img.attributes("src")).toBe("blob:mock/abc");
+  });
+
+  it("previews an .avif member as an image, and says so when the browser cannot decode it", async () => {
+    const archive = buildArchive([["cover.avif", new Uint8Array([0, 0, 0, 0x1c, 0x66, 0x74, 0x79, 0x70])]]);
+    serveArchive(archive);
+
+    const wrapper = mountPanel();
+    await flushPromises();
+    await wrapper
+      .findAll(".cursor-pointer")
+      .find((w) => w.text().startsWith("cover.avif"))
+      .trigger("click");
+    await flushPromises();
+
+    const img = wrapper.find('img[alt="cover.avif"]');
+    expect(img.exists()).toBe(true);
+    await img.trigger("error");
+    expect(wrapper.find('img[alt="cover.avif"]').exists()).toBe(false);
+    expect(wrapper.text()).toContain("This browser cannot display this image");
   });
 
   it("does not auto-open the inner FilePreviewDialog when a parquet member is clicked", async () => {

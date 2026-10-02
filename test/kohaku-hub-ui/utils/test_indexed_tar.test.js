@@ -576,6 +576,13 @@ describe("classifyMember + guessMimeType", () => {
     expect(classifyMember("a.parquet")).toBe("parquet");
     expect(classifyMember("a.json")).toBe("text");
     expect(classifyMember("a.bin")).toBe("binary");
+    expect(classifyMember("cover.avif")).toBe("image");
+    expect(classifyMember("anim.apng")).toBe("image");
+    expect(classifyMember("scraped.JFIF")).toBe("image");
+    // Voice lines in .ogg are audio, as on the blob page
+    expect(classifyMember("voice.ogg")).toBe("audio");
+    expect(classifyMember("voice.opus")).toBe("audio");
+    expect(classifyMember("clip.mkv")).toBe("video");
   });
 
   it("recognises extension-less README / LICENSE / Dockerfile by basename", () => {
@@ -596,6 +603,10 @@ describe("classifyMember + guessMimeType", () => {
     expect(guessMimeType("a.jpg")).toBe("image/jpeg");
     expect(guessMimeType("a.pdf")).toBe("application/pdf");
     expect(guessMimeType("a.unknown")).toBe("application/octet-stream");
+    expect(guessMimeType("a.avif")).toBe("image/avif");
+    expect(guessMimeType("a.apng")).toBe("image/apng");
+    expect(guessMimeType("a.jfif")).toBe("image/jpeg");
+    expect(guessMimeType("a.json")).toBe("application/json");
   });
 });
 

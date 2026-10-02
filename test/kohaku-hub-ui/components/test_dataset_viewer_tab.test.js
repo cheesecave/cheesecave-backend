@@ -123,5 +123,17 @@ describe("DatasetViewerTab", () => {
       fileUrl: "http://localhost:3000/datasets/open-media-lab/multimodal-benchmark-suite/resolve/main/parquet/train-00000-of-00001.parquet",
       fileName: "parquet/train-00000-of-00001.parquet",
     });
+
+    // A row whose cell links an AVIF image shows it in the row details
+    const viewer = wrapper.findComponent({ name: "DatasetViewerStub" });
+    viewer.vm.$emit("data-loaded", {
+      columns: ["image", "rating"],
+      rows: [["https://cdn.example.com/posts/1.avif", 3]],
+    });
+    viewer.vm.$emit("row-selected", 0);
+    await flushPromises();
+    expect(wrapper.find('img[alt="Preview"]').attributes("src")).toBe(
+      "https://cdn.example.com/posts/1.avif",
+    );
   });
 });

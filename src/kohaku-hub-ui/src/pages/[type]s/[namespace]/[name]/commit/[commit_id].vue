@@ -639,6 +639,7 @@
 </template>
 
 <script setup>
+import { mediaKind } from "@/utils/media-types";
 import axios from "axios";
 import dayjs from "dayjs";
 import relativeTime from "dayjs/plugin/relativeTime";
@@ -928,36 +929,15 @@ function viewFile(path) {
 
 function isBinaryFile(path) {
   // Check file extension to determine if it's a binary file
+  if (mediaKind(path)) return true; // images, video, audio (utils/media-types)
   const ext = path.split(".").pop()?.toLowerCase();
 
   const binaryExtensions = new Set([
-    // Images
-    "png",
-    "jpg",
-    "jpeg",
-    "gif",
-    "bmp",
-    "webp",
-    "ico",
-    "svg",
+    // Media formats browsers do not preview
     "tiff",
     "tif",
-    // Videos
-    "mp4",
-    "avi",
-    "mov",
     "wmv",
     "flv",
-    "webm",
-    "mkv",
-    "m4v",
-    // Audio
-    "mp3",
-    "wav",
-    "flac",
-    "aac",
-    "m4a",
-    "ogg",
     "wma",
     // Archives
     "zip",
@@ -1002,20 +982,7 @@ function isBinaryFile(path) {
 }
 
 function isImageFile(path) {
-  const ext = path.split(".").pop()?.toLowerCase();
-  const imageExtensions = new Set([
-    "png",
-    "jpg",
-    "jpeg",
-    "gif",
-    "bmp",
-    "webp",
-    "ico",
-    "svg",
-    "tiff",
-    "tif",
-  ]);
-  return imageExtensions.has(ext);
+  return mediaKind(path) === "image";
 }
 
 function getImageUrl(path, commitId) {
