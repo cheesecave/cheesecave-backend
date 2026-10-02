@@ -35,6 +35,11 @@ body.dark {
 }
 
 /* Element Plus customizations */
+.el-button .el-icon > [class*="i-carbon-"] {
+  width: 1em;
+  height: 1em;
+}
+
 .el-table {
   font-size: 14px;
 }

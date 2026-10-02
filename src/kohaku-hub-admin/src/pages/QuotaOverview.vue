@@ -62,7 +62,10 @@ onMounted(() => {
         <h1 class="text-3xl font-bold text-gray-900 dark:text-gray-100">
           Quota Overview
         </h1>
-        <el-button @click="loadOverview" :icon="'Refresh'" :loading="loading">
+        <el-button @click="loadOverview" :loading="loading">
+          <template #icon>
+            <span class="i-carbon-renew" aria-hidden="true" />
+          </template>
           Refresh
         </el-button>
       </div>

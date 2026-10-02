@@ -415,30 +415,40 @@ onMounted(() => {
           Quick Actions
         </h2>
         <div class="flex gap-4 flex-wrap">
-          <el-button
-            type="primary"
-            @click="$router.push('/users')"
-            :icon="'User'"
-          >
+          <el-button type="primary" @click="$router.push('/users')">
+            <template #icon>
+              <span class="i-carbon-user-multiple" aria-hidden="true" />
+            </template>
             Manage Users
           </el-button>
-          <el-button
-            type="success"
-            @click="$router.push('/repositories')"
-            :icon="'DataBase'"
-          >
+          <el-button type="success" @click="$router.push('/repositories')">
+            <template #icon>
+              <span class="i-carbon-data-base" aria-hidden="true" />
+            </template>
             View Repositories
           </el-button>
-          <el-button @click="$router.push('/commits')" :icon="'GitCommit'">
+          <el-button @click="$router.push('/commits')">
+            <template #icon>
+              <span class="i-carbon-commit" aria-hidden="true" />
+            </template>
             View Commits
           </el-button>
-          <el-button @click="$router.push('/storage')" :icon="'Storage'">
+          <el-button @click="$router.push('/storage')">
+            <template #icon>
+              <span class="i-carbon-data-volume" aria-hidden="true" />
+            </template>
             Browse Storage
           </el-button>
-          <el-button @click="$router.push('/quotas')" :icon="'DataVolume'">
+          <el-button @click="$router.push('/quotas')">
+            <template #icon>
+              <span class="i-carbon-meter" aria-hidden="true" />
+            </template>
             Manage Quotas
           </el-button>
-          <el-button @click="loadStats" :icon="'Renew'">
+          <el-button @click="loadStats">
+            <template #icon>
+              <span class="i-carbon-renew" aria-hidden="true" />
+            </template>
             Refresh Stats
           </el-button>
         </div>

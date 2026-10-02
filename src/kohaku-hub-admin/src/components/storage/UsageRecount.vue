@@ -99,6 +99,9 @@ onBeforeUnmount(() => clearTimeout(timer));
         </div>
         <div class="flex gap-2">
           <el-button data-testid="usage-recount-refresh" @click="load()">
+            <template #icon>
+              <span class="i-carbon-renew" aria-hidden="true" />
+            </template>
             Refresh
           </el-button>
           <el-button
@@ -108,6 +111,9 @@ onBeforeUnmount(() => clearTimeout(timer));
             data-testid="usage-recount-start"
             @click="start()"
           >
+            <template #icon>
+              <span class="i-carbon-renew" aria-hidden="true" />
+            </template>
             {{ active ? "Running" : "Start recount" }}
           </el-button>
         </div>

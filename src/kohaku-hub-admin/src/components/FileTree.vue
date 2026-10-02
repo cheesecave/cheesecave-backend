@@ -126,7 +126,10 @@ watch(selectedRef, () => {
             <div class="i-carbon-branch" />
           </template>
         </el-input>
-        <el-button size="small" @click="loadFiles" :icon="'Refresh'">
+        <el-button size="small" @click="loadFiles">
+          <template #icon>
+            <span class="i-carbon-renew" aria-hidden="true" />
+          </template>
           Refresh
         </el-button>
       </div>
