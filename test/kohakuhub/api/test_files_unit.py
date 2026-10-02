@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -208,7 +209,10 @@ async def test_preupload_batch_load_is_limited_to_sha256_paths(monkeypatch):
 async def test_preupload_and_revision_cover_validation_quota_and_resolution_errors(
     monkeypatch,
 ):
-    repo = SimpleNamespace(private=True, created_at=None, namespace="alice", downloads=1, likes_count=2)
+    repo = SimpleNamespace(
+        id=1, private=True, created_at=None, namespace="alice", name="demo",
+        downloads=1, likes_count=2, used_bytes=0,
+    )
 
     monkeypatch.setattr(files_api, "check_repo_write_permission", lambda repo_row, user: None)
     monkeypatch.setattr(files_api, "get_organization", lambda namespace: None)
@@ -313,6 +317,8 @@ async def test_preupload_and_revision_cover_validation_quota_and_resolution_erro
         "main",
         request=None,
         user=None,
+        expand=None,
+        blobs=False,
     )
     assert revision_not_found.status_code == 404
 
@@ -320,7 +326,16 @@ async def test_preupload_and_revision_cover_validation_quota_and_resolution_erro
     monkeypatch.setattr(files_api, "get_repository", lambda repo_type, namespace, name: repo)
     client = _FakeClient()
     monkeypatch.setattr(files_api, "get_lakefs_client", lambda: client)
-    monkeypatch.setattr(files_api, "safe_strftime", lambda value, fmt: "2024-01-01T00:00:00.000000Z")
+    sibling_calls = []
+
+    async def _siblings(repo_row, lakefs_repo, commit, *, with_metadata):
+        sibling_calls.append((commit, with_metadata))
+        if with_metadata:
+            raise RuntimeError("listing failed")
+        return '[{"rfilename": "a.txt"}]'
+
+    monkeypatch.setattr(files_api, "resolve_lakefs_repo", lambda repo_row: "lake")
+    monkeypatch.setattr(files_api, "hf_siblings_json", _siblings)
     monkeypatch.setattr(files_api, "resolve_revision", _async_return(value=("commit-1", {"creation_date": 1})))
     success = await files_api.get_revision.__wrapped__(
         files_api.RepoType.model,
@@ -329,11 +344,29 @@ async def test_preupload_and_revision_cover_validation_quota_and_resolution_erro
         "main",
         request=None,
         user=None,
+        expand=None,
+        blobs=False,
     )
-    assert success["sha"] == "commit-1"
-    assert success["lastModified"] == files_api.datetime.fromtimestamp(1).strftime(
+    body = json.loads(success.body)
+    assert body["sha"] == "commit-1" and body["revision"] == "main"
+    assert body["lastModified"] == files_api.datetime.fromtimestamp(1).strftime(
         "%Y-%m-%dT%H:%M:%S.%fZ"
     )
+    assert body["siblings"] == [{"rfilename": "a.txt"}] and "storage" not in body
+
+    expanded = await files_api.get_revision.__wrapped__(
+        files_api.RepoType.model, "alice", "demo", "main",
+        request=None, user=SimpleNamespace(username="alice"), expand=["sha", "storage"], blobs=True,
+    )
+    # A failed listing still answers; storage is computed because it was asked
+    assert set(json.loads(expanded.body)) == {"_id", "id", "sha", "storage", "siblings"}
+    assert json.loads(expanded.body)["siblings"] == []
+    assert sibling_calls == [("commit-1", False), ("commit-1", True)]
+    invalid = await files_api.get_revision.__wrapped__(
+        files_api.RepoType.model, "alice", "demo", "main",
+        request=None, user=None, expand=["bogus"], blobs=False,
+    )
+    assert invalid.status_code == 400
 
     async def _raise_value_error(*args, **kwargs):
         raise ValueError("missing revision")
@@ -349,6 +382,8 @@ async def test_preupload_and_revision_cover_validation_quota_and_resolution_erro
         "main",
         request=None,
         user=None,
+        expand=None,
+        blobs=False,
     )
     assert missing_revision.revision == "main"
 
@@ -360,6 +395,8 @@ async def test_preupload_and_revision_cover_validation_quota_and_resolution_erro
         "main",
         request=None,
         user=None,
+        expand=None,
+        blobs=False,
     )
     assert failed_revision.status_code == 500
 
@@ -387,6 +424,8 @@ async def test_preupload_and_revision_cover_validation_quota_and_resolution_erro
             "main",
             request=None,
             user=None,
+            expand=None,
+            blobs=False,
         )
 
     def _raise_conflict(repo_row, user):
@@ -401,6 +440,8 @@ async def test_preupload_and_revision_cover_validation_quota_and_resolution_erro
             "main",
             request=None,
             user=None,
+            expand=None,
+            blobs=False,
         )
     assert propagated_revision_error.value.status_code == 409
 

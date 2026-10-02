@@ -286,3 +286,39 @@ async def test_the_reset_gate_learns_the_lakefs_version_first(client, monkeypatc
 
     assert compat.known().status in ("supported", "untested")  # the real LakeFS
     assert response.status_code != 503
+
+
+def test_build_identity_comes_from_the_image_then_the_checkout(monkeypatch, tmp_path):
+    """``/api/version`` tells which code a deployment runs (#101)."""
+    import importlib
+
+    misc = importlib.import_module("kohakuhub.api.misc")
+    monkeypatch.setenv("KOHAKU_HUB_GIT_SHA", "abc123")
+    monkeypatch.setenv("KOHAKU_HUB_BUILD_TIME", "2026-10-02T00:00:00Z")
+    assert misc.build_identity() == {"git_sha": "abc123", "build_time": "2026-10-02T00:00:00Z"}
+
+    # A checkout: HEAD names a branch whose ref holds the commit
+    monkeypatch.delenv("KOHAKU_HUB_GIT_SHA")
+    monkeypatch.delenv("KOHAKU_HUB_BUILD_TIME")
+    git = tmp_path / ".git"
+    (git / "refs" / "heads").mkdir(parents=True)
+    (git / "HEAD").write_text("ref: refs/heads/main\n")
+    (git / "refs" / "heads" / "main").write_text("def456\n")
+    assert misc.build_identity(tmp_path / "src" / "pkg") == {"git_sha": "def456", "build_time": None}
+
+    # A detached HEAD, a packed ref, then no checkout at all
+    (git / "HEAD").write_text("0123abcd\n")
+    assert misc.build_identity(tmp_path)["git_sha"] == "0123abcd"
+    (git / "HEAD").write_text("ref: refs/heads/dev\n")
+    (git / "packed-refs").write_text("# pack-refs\n789fed refs/heads/dev\n")
+    assert misc.build_identity(tmp_path)["git_sha"] == "789fed"
+    (git / "packed-refs").write_text("# nothing for dev\n")
+    assert misc.build_identity(tmp_path)["git_sha"] is None
+    assert misc.build_identity(tmp_path.parent / "no-checkout")["git_sha"] is None
+
+
+async def test_version_reports_the_build(client):
+    response = await client.get("/api/version")
+
+    assert response.json()["api"] == "kohakuhub"
+    assert set(response.json()["build"]) == {"git_sha", "build_time"}

@@ -71,6 +71,17 @@ To start all services in detached mode, run:
 docker-compose up -d --build
 ```
 
+To have `GET /api/version` report which code the deployment runs (its `build.git_sha` and `build.build_time`), pass them when building:
+
+```bash
+docker-compose build \
+  --build-arg KOHAKU_HUB_GIT_SHA=$(git rev-parse HEAD) \
+  --build-arg KOHAKU_HUB_BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+docker-compose up -d
+```
+
+Without them, `build.git_sha` is read from the checkout when the service runs from one, and is `null` otherwise.
+
 ## Security Configuration
 
 It is **critical** to change the default secrets before deploying to production.

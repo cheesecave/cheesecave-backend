@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
@@ -225,10 +226,12 @@ async def test_get_repo_info_covers_invalid_type_not_found_siblings_and_storage_
     repo_row = SimpleNamespace(
         id=1,
         namespace="alice",
+        name="demo",
         created_at=now,
         private=False,
         downloads=12,
         likes_count=3,
+        used_bytes=20,
     )
 
     monkeypatch.setattr(
@@ -244,51 +247,35 @@ async def test_get_repo_info_covers_invalid_type_not_found_siblings_and_storage_
     monkeypatch.setattr(repo_info, "check_repo_read_permission", lambda repo, user: None)
     monkeypatch.setattr(repo_info, "resolve_lakefs_repo", lambda repo: "model:owner/repo")
     monkeypatch.setattr(repo_info, "get_lakefs_client", lambda: client)
-    monkeypatch.setattr(repo_info, "format_hf_datetime", lambda value: "2024-01-02T00:00:00.000000Z")
+    sibling_calls = []
 
-    async def fake_collect_hf_siblings(
-        repo, repo_type, repo_id, revision, *, with_metadata=True
-    ):
+    async def fake_siblings(repo, lakefs_repo, commit, *, with_metadata):
+        sibling_calls.append((commit, with_metadata))
         if client.list_error:
             raise client.list_error
+        return '[{"rfilename": "README.md"}]'
 
-        return [
-            {"rfilename": "README.md", "size": 4},
-            {
-                "rfilename": "weights.bin",
-                "size": 8,
-                "lfs": {"sha256": "db-sha", "size": 8, "pointerSize": 134},
-            },
-            {
-                "rfilename": "broken.bin",
-                "size": 9,
-                "lfs": {"sha256": "sha256:broken", "size": 9, "pointerSize": 134},
-            },
-        ]
+    monkeypatch.setattr(repo_info, "hf_siblings_json", fake_siblings)
 
-    monkeypatch.setattr(repo_info, "collect_hf_siblings", fake_collect_hf_siblings)
+    async def call(user=None, expand=None, blobs=False):
+        response = await repo_info.get_repo_info.__wrapped__(
+            "alice", "demo", request=_request("/api/models/alice/demo"),
+            user=user, expand=expand, blobs=blobs,
+        )
+        ok = getattr(response, "status_code", 200) == 200 and hasattr(response, "body")
+        return json.loads(response.body) if ok else response
 
     invalid_type = await repo_info.get_repo_info.__wrapped__(
-        "alice",
-        "demo",
-        request=_request("/api/unknown/alice/demo"),
-        user=None,
+        "alice", "demo", request=_request("/api/unknown/alice/demo"), user=None, expand=None
     )
     assert invalid_type.status_code == 404
 
     monkeypatch.setattr(repo_info, "get_repository", lambda repo_type, namespace, name: None)
-    not_found = await repo_info.get_repo_info.__wrapped__(
-        "alice",
-        "demo",
-        request=_request("/api/models/alice/demo"),
-        user=None,
-    )
-    assert not_found.status_code == 404
+    assert (await call()).status_code == 404
 
     monkeypatch.setattr(repo_info, "get_repository", lambda repo_type, namespace, name: repo_row)
     monkeypatch.setattr(
-        repo_info,
-        "get_repo_storage_info",
+        "kohakuhub.api.quota.util.get_repo_storage_info",
         lambda repo: {
             "quota_bytes": 100,
             "used_bytes": 20,
@@ -298,46 +285,38 @@ async def test_get_repo_info_covers_invalid_type_not_found_siblings_and_storage_
             "is_inheriting": False,
         },
     )
-    info = await repo_info.get_repo_info.__wrapped__(
-        "alice",
-        "demo",
-        request=_request("/api/models/alice/demo"),
-        user=SimpleNamespace(username="alice"),
-    )
-    assert info["id"] == "alice/demo"
+    info = await call(user=SimpleNamespace(username="alice"))
+    assert info["id"] == "alice/demo" and info["usedStorage"] == 20
     assert info["storage"]["quota_bytes"] == 100
-    assert info["siblings"][1]["lfs"]["sha256"] == "db-sha"
-    assert info["siblings"][2]["lfs"]["sha256"] == "sha256:broken"
+    assert info["siblings"] == [{"rfilename": "README.md"}]
+    assert sibling_calls[-1] == ("commit-1234567890abcdef", False)
+
+    # Only the asked fields: no file list, no quota lookup
+    sibling_calls.clear()
+    page = await call(user=SimpleNamespace(username="alice"), expand=["sha", "private"])
+    assert set(page) == {"_id", "id", "sha", "private"} and not sibling_calls
+    with_blobs = await call(expand=["sha"], blobs=True)
+    assert with_blobs["siblings"] and sibling_calls[-1] == ("commit-1234567890abcdef", True)
+    assert (await call(expand=["bogus"])).status_code == 400
 
     client.commit_error = RuntimeError("commit fail")
-    monkeypatch.setattr(repo_info, "get_repo_storage_info", lambda repo: (_ for _ in ()).throw(RuntimeError("quota fail")))
-    info_without_storage = await repo_info.get_repo_info.__wrapped__(
-        "alice",
-        "demo",
-        request=_request("/api/models/alice/demo"),
-        user=SimpleNamespace(username="alice"),
+    monkeypatch.setattr(
+        "kohakuhub.api.quota.util.get_repo_storage_info",
+        lambda repo: (_ for _ in ()).throw(RuntimeError("quota fail")),
     )
+    info_without_storage = await call(user=SimpleNamespace(username="alice"))
     assert "storage" not in info_without_storage
+    assert info_without_storage["lastModified"] is None
 
     client.commit_error = None
     client.list_error = RuntimeError("list fail")
-    info_without_siblings = await repo_info.get_repo_info.__wrapped__(
-        "alice",
-        "demo",
-        request=_request("/api/models/alice/demo"),
-        user=None,
-    )
-    assert info_without_siblings["siblings"] == []
+    assert (await call())["siblings"] == []
 
     client.branch_error = RuntimeError("missing branch")
     client.list_error = None
-    info_without_sha = await repo_info.get_repo_info.__wrapped__(
-        "alice",
-        "demo",
-        request=_request("/api/models/alice/demo"),
-        user=None,
-    )
+    info_without_sha = await call()
     assert info_without_sha["sha"] is None
+    assert info_without_sha["siblings"] == []
     client.branch_error = None
 
     repo_row.private = True

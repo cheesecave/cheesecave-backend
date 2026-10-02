@@ -156,7 +156,7 @@ def test_helper_functions_cover_path_formatting_links_and_file_records(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_fetch_page_and_directory_stats_cover_pagination(monkeypatch):
+async def test_fetch_page_lists_one_level(monkeypatch):
     page_client = _FakeLakeFSClient(
         list_responses=[
             {
@@ -185,35 +185,6 @@ async def test_fetch_page_and_directory_stats_cover_pagination(monkeypatch):
             "after": "",
         }
     ]
-
-    directory_client = _FakeLakeFSClient(
-        list_responses=[
-            {
-                "results": [
-                    {"path_type": "object", "size_bytes": 4, "mtime": 10},
-                    {"path_type": "common_prefix", "size_bytes": 999, "mtime": 999},
-                ],
-                "pagination": {"has_more": True, "next_offset": "page-2"},
-            },
-            {
-                "results": [
-                    {"path_type": "object", "size_bytes": 6, "mtime": 20},
-                ],
-                "pagination": {"has_more": False},
-            },
-        ]
-    )
-    monkeypatch.setattr(tree_api, "get_lakefs_client", lambda: directory_client)
-
-    total_size, latest_mtime = await tree_api._calculate_directory_stats(
-        "lake",
-        "main",
-        "docs",
-    )
-    assert total_size == 10
-    assert latest_mtime == 20
-    assert directory_client.list_calls[0]["prefix"] == "docs/"
-    assert directory_client.list_calls[1]["after"] == "page-2"
 
 
 def test_make_tree_item_covers_file_directory_and_lfs_payload(monkeypatch):
@@ -642,12 +613,6 @@ async def test_process_single_path_covers_file_directory_missing_and_errors(monk
         lambda error: isinstance(error, _NotFoundError),
     )
 
-    async def _fake_directory_stats(*args, **kwargs):
-        if kwargs["directory_path"] == "docs-error":
-            raise RuntimeError("stats failed")
-        return (15, 1713657620)
-
-    monkeypatch.setattr(tree_api, "_calculate_directory_stats", _fake_directory_stats)
     semaphore = asyncio.Semaphore(1)
 
     file_result = await tree_api._process_single_path(
@@ -681,13 +646,16 @@ async def test_process_single_path_covers_file_directory_missing_and_errors(monk
         semaphore,
         expand=True,
     )
+    # As on the Hub, a directory has no size, expanded or not: nothing under
+    # it is listed beyond the first entry
     assert directory_result == {
         "type": "directory",
         "path": "docs",
         "oid": "tree-oid",
-        "size": 15,
-        "lastModified": tree_api._format_last_modified(1713657620),
+        "size": 0,
+        "lastModified": tree_api._format_last_modified(1713657610),
     }
+    assert [c["prefix"] for c in client.list_calls if c["prefix"] == "docs/"] == ["docs/"]
 
     assert (
         await tree_api._process_single_path(
@@ -1644,3 +1612,74 @@ async def test_list_repo_tree_link_header_preserves_name_prefix(monkeypatch):
     link_header = response.headers["link"]
     assert "name_prefix=conf" in link_header
     assert "cursor=page-2" in link_header
+
+
+COMMIT = "a" * 64
+
+
+class _CountingLog:
+    """log_commits answering one commit per path, counting calls."""
+
+    def __init__(self, fail=()):
+        self.calls = []
+        self.fail = set(fail)
+
+    async def log_commits(self, **kwargs):
+        target = (kwargs.get("objects") or kwargs.get("prefixes"))[0]
+        self.calls.append((kwargs["ref"], target))
+        await asyncio.sleep(0)
+        if target in self.fail:
+            raise RuntimeError("lakefs busy")
+        return {"results": [{"id": f"c-{target}", "message": target, "creation_date": 1}]}
+
+
+@pytest.fixture
+def last_commit_log(monkeypatch):
+    tree_api._last_commits.clear()
+    client = _CountingLog()
+    monkeypatch.setattr(tree_api, "get_lakefs_rest_client", lambda: client)
+    yield client
+    tree_api._last_commits.clear()
+
+
+@pytest.mark.asyncio
+async def test_last_commits_at_a_commit_are_looked_up_once(last_commit_log):
+    """A path's last commit at a commit never changes: many users opening one
+    directory cost LakeFS one path-filtered log per path (#101)."""
+    targets = [{"path": "meta", "type": "directory"}, {"path": "README.md", "type": "file"}]
+
+    results = await asyncio.gather(
+        *(tree_api.resolve_last_commits_for_paths("lake", COMMIT, targets) for _ in range(5))
+    )
+    again = await tree_api.resolve_last_commits_for_paths("lake", COMMIT, targets)
+
+    assert all(r == again for r in results)
+    assert again["meta"]["id"] == "c-meta/" and again["README.md"]["id"] == "c-README.md"
+    assert sorted(last_commit_log.calls) == [(COMMIT, "README.md"), (COMMIT, "meta/")]
+
+
+@pytest.mark.asyncio
+async def test_last_commits_on_a_branch_or_after_a_failure_are_asked_again(last_commit_log):
+    targets = [{"path": "README.md", "type": "file"}]
+
+    await tree_api.resolve_last_commits_for_paths("lake", "main", targets)
+    await tree_api.resolve_last_commits_for_paths("lake", "main", targets)
+    assert len(last_commit_log.calls) == 2  # a branch moves: never kept
+
+    last_commit_log.fail.add("README.md")
+    assert await tree_api.resolve_last_commits_for_paths("lake", COMMIT, targets) == {"README.md": None}
+    last_commit_log.fail.clear()
+    assert (await tree_api.resolve_last_commits_for_paths("lake", COMMIT, targets))["README.md"]["id"]
+    assert len(last_commit_log.calls) == 4  # the failure was not kept
+
+
+@pytest.mark.asyncio
+async def test_last_commit_cache_keeps_to_its_size(last_commit_log, monkeypatch):
+    monkeypatch.setattr(tree_api, "LAST_COMMIT_CACHE_ENTRIES", 2)
+
+    for path in ("a", "b", "c"):
+        await tree_api.resolve_last_commits_for_paths("lake", COMMIT, [{"path": path, "type": "file"}])
+    await tree_api.resolve_last_commits_for_paths("lake", COMMIT, [{"path": "b", "type": "file"}])
+
+    assert [key[-1] for key in tree_api._last_commits] == ["c", "b"]
+    assert len(last_commit_log.calls) == 3

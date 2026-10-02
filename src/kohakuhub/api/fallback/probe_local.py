@@ -182,6 +182,8 @@ def _build_kwargs(
             "repo_name": name,
             "request": request,
             "fallback": False,
+            "blobs": False,
+            "expand": None,
             "user": user,
         }
     if op == "tree":

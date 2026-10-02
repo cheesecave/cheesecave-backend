@@ -96,6 +96,7 @@ describe("frontend API client", () => {
       organization: "acme",
     });
     await repoAPI.getInfo("model", "alice", "demo");
+    await repoAPI.getInfo("model", "alice", "demo", ["sha", "private"]);
     await repoAPI.listRepos("dataset", { limit: 5, sort: "likes" });
     await repoAPI.getUserOverview("alice", "recent", 10);
     await repoAPI.listTree("model", "alice", "demo", "main", "/nested", {
@@ -191,6 +192,10 @@ describe("frontend API client", () => {
       data: { type: "model", name: "demo", organization: "acme" },
     });
     expect(getSpy).toHaveBeenCalledWith("/api/models/alice/demo");
+    expect(getSpy).toHaveBeenCalledWith("/api/models/alice/demo", {
+      params: { expand: ["sha", "private"] },
+      paramsSerializer: { indexes: null },
+    });
     expect(getSpy).toHaveBeenCalledWith("/api/site-config");
     expect(postSpy).toHaveBeenCalledWith(
       "/api/models/alice/demo/branch/main/revert",

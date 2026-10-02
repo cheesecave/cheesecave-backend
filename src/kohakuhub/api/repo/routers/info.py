@@ -26,14 +26,15 @@ from kohakuhub.api.fallback import (
     with_repo_fallback,
     with_user_fallback,
 )
-from kohakuhub.api.quota.util import get_repo_storage_info
 from kohakuhub.utils.datetime_utils import safe_strftime
 from kohakuhub.api.repo.utils.hf import (
     HFErrorCode,
-    collect_hf_siblings,
-    format_hf_datetime,
+    expand_error,
     hf_error_response,
+    hf_repo_info_response,
     hf_repo_not_found,
+    hf_siblings_json,
+    repo_info_fields,
 )
 
 logger = get_logger("REPO")
@@ -172,7 +173,8 @@ async def get_repo_info(
     repo_name: str,
     request: Request,
     fallback: bool = True,
-    blobs: bool = True,
+    blobs: bool = False,
+    expand: Optional[list[str]] = Query(None),
     user: User | None = Depends(get_optional_user),
 ):
     """Get repository information (without revision).
@@ -225,20 +227,18 @@ async def get_repo_info(
     # in ``main.py`` converts that to ``hf_repo_not_found(...)``.
     check_repo_read_permission(repo_row, user)
 
-    # Get LakeFS info for default branch
+    # As on the Hub: an unknown ``expand`` property is a 400
+    expand = [prop for prop in expand or [] if prop] or None  # ``expand=``: none, as on the Hub
+    if bad := expand_error(repo_type, expand):
+        return bad
+
     lakefs_repo = resolve_lakefs_repo(repo_row)
     client = get_lakefs_client()
-
-    # Get default branch info
     commit_id = None
     last_modified = None
-    siblings = []
-
     try:
         branch = await client.get_branch(repository=lakefs_repo, branch="main")
         commit_id = branch["commit_id"]
-
-        # Get commit details if available
         if commit_id:
             try:
                 commit_info = await client.get_commit(
@@ -250,75 +250,33 @@ async def get_repo_info(
                     ).strftime(DATETIME_FORMAT_ISO)
             except Exception as ex:
                 logger.debug(f"Could not get commit info: {str(ex)}")
-
-        try:
-            # `blobs` is the wire name huggingface_hub uses for
-            # `files_metadata` (every matrix version sends
-            # ``params["blobs"] = True``). Defaulting to True keeps existing
-            # responses unchanged; opting out skips the per-file metadata that
-            # dominates the cost on large repos.
-            siblings = await collect_hf_siblings(
-                repo_row, repo_type, repo_id, "main", with_metadata=blobs
-            )
-        except Exception as ex:
-            logger.exception(
-                f"Could not fetch siblings for {lakefs_repo}: {str(ex)}", ex
-            )
-            logger.debug(f"Could not fetch siblings for {lakefs_repo}: {str(ex)}")
-            # Continue without siblings if fetch fails
-
     except Exception as e:
         # Log warning but continue - repo exists even if LakeFS has issues
         logger.warning(f"Could not get branch info for {lakefs_repo}/main: {str(e)}")
 
-    # Format created_at
-    created_at = format_hf_datetime(repo_row.created_at)
+    # The file list, only when it is part of the answer: by default, when
+    # ``expand`` names it, or with ``blobs`` (the Hub adds it then too). It
+    # lists the whole repository, so a caller after the page fields alone
+    # (``expand=sha&expand=lastModified...``) costs nothing per file.
+    siblings = None
+    if not expand or "siblings" in expand or blobs:
+        siblings = "[]"
+        if commit_id:
+            try:
+                siblings = await hf_siblings_json(
+                    repo_row, lakefs_repo, commit_id, with_metadata=blobs
+                )
+            except Exception as ex:
+                logger.exception(f"Could not fetch siblings for {lakefs_repo}: {str(ex)}", ex)
 
-    # Get storage info if user has read permission (already checked above)
-    storage_info = None
-    try:
-        if user:  # Only include storage info for authenticated users
-            storage_data = get_repo_storage_info(repo_row)
-            storage_info = {
-                "quota_bytes": storage_data["quota_bytes"],
-                "used_bytes": storage_data["used_bytes"],
-                "available_bytes": storage_data["available_bytes"],
-                "percentage_used": storage_data["percentage_used"],
-                "effective_quota_bytes": storage_data["effective_quota_bytes"],
-                "is_inheriting": storage_data["is_inheriting"],
-            }
-    except Exception as e:
-        logger.warning(f"Failed to get storage info for {repo_id}: {e}")
-        # Continue without storage info if it fails
-
-    # Return repository info in HuggingFace format
-    response = {
-        "_id": repo_row.id,
-        "id": repo_id,
-        "modelId": repo_id if repo_type == "model" else None,
-        "author": repo_row.namespace,
-        "sha": commit_id[:40] if commit_id else None,
-        "lastModified": last_modified,
-        "createdAt": created_at,
-        "private": repo_row.private,
-        "disabled": False,
-        "gated": False,
-        "downloads": repo_row.downloads,
-        "likes": repo_row.likes_count,
-        "tags": [],
-        "pipeline_tag": None,
-        "library_name": None,
-        "siblings": siblings,
-        "spaces": [],
-        "models": [],
-        "datasets": [],
-    }
-
-    # Add storage info if available
-    if storage_info:
-        response["storage"] = storage_info
-
-    return response
+    fields = repo_info_fields(
+        repo_row,
+        repo_type,
+        commit_id[:40] if commit_id else None,
+        last_modified,
+        storage=bool(user) and (not expand or "storage" in expand),
+    )
+    return hf_repo_info_response(fields, expand, siblings)
 
 
 def _filter_repos_by_privacy(q, user: Optional[User], author: Optional[str] = None):

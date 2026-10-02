@@ -244,7 +244,19 @@ Squash is enabled by default and can be switched off; see
 
 **Authentication:** Optional (required for private repos)
 
-**Response:**
+**Query parameters**, as on the Hugging Face Hub:
+
+| Parameter | Effect |
+| --- | --- |
+| *(none)* | Every field, and `siblings`: the name (`rfilename`) of every file. This is what `HfApi.model_info()` / `dataset_info()` / `repo_info()` ask by default, and what `snapshot_download` lists. |
+| `blobs=true` | `siblings` also carry `blobId` and `size`, and `lfs` for LFS files (`files_metadata=True`). |
+| `expand=<property>` (repeatable) | Only `_id`, `id` and the named properties. `siblings` is listed only when named (or with `blobs=true`). An unknown property answers `400`, as on the Hub. |
+
+`siblings` lists the whole repository, so it costs in proportion to the file count; the name-only list is kept per commit after the first request. A client after the repository's metadata alone should use `expand` (the web UI asks for `sha`, `lastModified`, `createdAt`, `private`, `downloads`, `likes`, `tags` and `storage`).
+
+The accepted `expand` properties are the Hub's for each repository type (for models, for example, `sha`, `lastModified`, `private`, `downloads`, `likes`, `tags`, `siblings`, `usedStorage`, `cardData`, `safetensors`...), plus KohakuHub's `storage`. Properties KohakuHub keeps no value for are returned as `null`.
+
+**Response** (no parameters):
 ```json
 {
   "_id": 1,
@@ -262,21 +274,10 @@ Squash is enabled by default and can be switched off; see
   "tags": [],
   "pipeline_tag": null,
   "library_name": null,
-  "siblings": [
-    {
-      "rfilename": "config.json",
-      "size": 1024
-    },
-    {
-      "rfilename": "model.safetensors",
-      "size": 5368709120,
-      "lfs": {
-        "sha256": "abc123...",
-        "size": 5368709120,
-        "pointerSize": 134
-      }
-    }
-  ],
+  "usedStorage": 5368710144,
+  "spaces": [],
+  "models": [],
+  "datasets": [],
   "storage": {
     "quota_bytes": 10737418240,
     "used_bytes": 5368710144,
@@ -284,14 +285,34 @@ Squash is enabled by default and can be switched off; see
     "percentage_used": 50.0,
     "effective_quota_bytes": 10737418240,
     "is_inheriting": false
-  }
+  },
+  "siblings": [
+    {"rfilename": "config.json"},
+    {"rfilename": "model.safetensors"}
+  ]
 }
 ```
 
+With `blobs=true`, each sibling looks like:
+```json
+{"rfilename": "config.json", "blobId": "5b6e8f...", "size": 1024}
+{"rfilename": "model.safetensors", "blobId": "90e59f...", "size": 5368709120,
+ "lfs": {"sha256": "abc123...", "size": 5368709120, "pointerSize": 134}}
+```
+
+- `blobId`: the git blob id, of the file, or of its LFS pointer for an LFS file.
+- `lfs`: present for the files stored as LFS objects; `sha256` is the object's.
+
+With `expand=sha&expand=private`:
+```json
+{"_id": 1, "id": "username/bert-base", "sha": "commit_hash", "private": false}
+```
+
 **Fields:**
-- `siblings`: Complete file list with LFS metadata
-- `storage`: Only included for authenticated users
+- `storage`: KohakuHub's; only for authenticated users
 - `sha`: Latest commit on main branch
+
+`GET /api/{repo_type}s/{namespace}/{name}/revision/{revision}` answers the same way for a branch, tag or commit.
 
 **See:** [HuggingFace-Compatible API](./huggingface-compatible.md)
 

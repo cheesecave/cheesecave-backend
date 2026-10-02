@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from types import SimpleNamespace
 
@@ -195,403 +196,232 @@ def test_format_hf_datetime_and_lakefs_error_classifiers(monkeypatch):
     assert hf_utils.is_lakefs_revision_error(RuntimeError("totally different")) is False
 
 
-@pytest.mark.asyncio
-async def test_collect_hf_siblings_handles_pagination_and_lfs_metadata(monkeypatch):
-    repo_row = SimpleNamespace(repo_type="model", full_id="alice/demo")
-    calls = []
 
-    class _FakeClient:
-        async def list_objects(self, **kwargs):
-            calls.append(kwargs)
-            if len(calls) == 1:
-                return {
-                    "results": [
-                        {
-                            "path_type": "object",
-                            "path": "README.md",
-                            "size_bytes": 4,
-                            "checksum": "sha256:readme",
-                        },
-                        {
-                            "path_type": "object",
-                            "path": "weights.bin",
-                            "size_bytes": 8,
-                            "checksum": "sha256:weights",
-                        },
-                    ],
-                    "pagination": {"has_more": True, "next_offset": "cursor-2"},
-                }
+LFS_SHA = "c966da3b74697803352ca7c6f2f220e7090a557b619de9da0c6b34d89f7825c1"
+LFS_ADDRESS = f"s3://hub/lfs/c9/66/{LFS_SHA}"
 
-            return {
-                "results": [
-                    {
-                        "path_type": "object",
-                        "path": "broken.bin",
-                        "size_bytes": 9,
-                        "checksum": "sha256:broken",
-                    },
-                    {
-                        "path_type": "common_prefix",
-                        "path": "subdir/",
-                    },
-                ],
-                "pagination": {"has_more": False},
-            }
 
-    monkeypatch.setattr("kohakuhub.utils.lakefs.get_lakefs_client", lambda: _FakeClient())
+def _page(objects, next_offset=None):
+    return {
+        "results": [
+            {"path_type": "object", "path": path, "size_bytes": size, "physical_address": address}
+            for path, size, address in objects
+        ],
+        "pagination": {"has_more": next_offset is not None, "next_offset": next_offset or ""},
+    }
+
+
+class _Lister:
+    """LakeFS list_objects over fixed pages, counting calls."""
+
+    def __init__(self, *pages):
+        self.pages = list(pages)
+        self.calls = []
+
+    async def list_objects(self, **kwargs):
+        self.calls.append(kwargs)
+        return self.pages[len(self.calls) - 1]
+
+
+@pytest.fixture
+def lister(monkeypatch):
+    hf_utils._manifests.clear()
+
+    def use(*pages):
+        client = _Lister(*pages)
+        monkeypatch.setattr("kohakuhub.utils.lakefs.get_lakefs_client", lambda: client)
+        return client
+
+    yield use
+    hf_utils._manifests.clear()
+
+
+def test_git_blob_id_and_lfs_pointer_match_the_hub():
+    """Values the Hub returns for openai-community/gpt2's 64-8bits.tflite."""
+    pointer = hf_utils.lfs_pointer(LFS_SHA, 125162496)
+
+    assert len(pointer) == 134
+    assert hf_utils.git_blob_id(pointer) == "90e59f00f62c654b1a88a5f127dff14df4611cdc"
+
+
+async def test_list_repo_objects_pages_and_skips_prefixes(lister):
+    client = lister(
+        {**_page([("a.txt", 1, "s3://hub/data/x")], "cursor-2"),
+         "results": _page([("a.txt", 1, "s3://hub/data/x")])["results"] + [{"path_type": "common_prefix", "path": "d/"}]},
+        _page([("b.bin", 2, LFS_ADDRESS)]),
+    )
+
+    objects = await hf_utils.list_repo_objects("lake", "c1")
+
+    assert objects == [("a.txt", 1, "s3://hub/data/x"), ("b.bin", 2, LFS_ADDRESS)]
+    assert [c["after"] for c in client.calls] == ["", "cursor-2"]
+    assert all(c["ref"] == "c1" and c["delimiter"] == "" and c["amount"] == 1000 for c in client.calls)
+
+
+async def test_list_repo_objects_accepts_a_list_and_a_missing_cursor(lister):
+    lister([{"path_type": "object", "path": "a", "size_bytes": 1}])
+    assert await hf_utils.list_repo_objects("lake", "c1") == [("a", 1, "")]
+
+    lister({"results": [{"path_type": "object", "path": "a"}], "pagination": {"has_more": True}})
+    assert await hf_utils.list_repo_objects("lake", "c1") == [("a", 0, "")]
+
+
+async def test_names_only_siblings_are_built_once_per_commit(lister):
+    repo = SimpleNamespace(id=1)
+    client = lister(_page([("README.md", 4, "s3://hub/data/r"), ('we"ird.txt', 1, "s3://hub/data/w")]),
+                    _page([("README.md", 4, "s3://hub/data/r")]))
+
+    first = await hf_utils.hf_siblings_json(repo, "lake", "c1", with_metadata=False)
+    again = await hf_utils.hf_siblings_json(repo, "lake", "c1", with_metadata=False)
+    other = await hf_utils.hf_siblings_json(repo, "lake", "c2", with_metadata=False)
+
+    assert json.loads(first) == [{"rfilename": "README.md"}, {"rfilename": 'we"ird.txt'}]
+    assert again == first
+    assert json.loads(other) == [{"rfilename": "README.md"}]
+    assert len(client.calls) == 2  # c1 once, c2 once
+
+
+async def test_concurrent_requests_for_one_commit_list_it_once(lister):
+    import asyncio
+
+    client = lister(_page([("a", 1, "")]))
+
+    results = await asyncio.gather(
+        *(hf_utils.hf_siblings_json(SimpleNamespace(id=1), "lake", "c1", with_metadata=False) for _ in range(4))
+    )
+
+    assert len(set(results)) == 1 and len(client.calls) == 1
+
+
+async def test_the_manifest_cache_keeps_to_its_budget(lister, monkeypatch):
+    monkeypatch.setattr(hf_utils, "MANIFEST_CACHE_BYTES", 60)
+    repo = SimpleNamespace(id=1)
+    lister(*[_page([(f"file-{i}.txt", 1, "")]) for i in range(3)])
+
+    for commit in ("c1", "c2", "c3"):
+        await hf_utils.hf_siblings_json(repo, "lake", commit, with_metadata=False)
+
+    # Each manifest is 29 bytes: the oldest went
+    assert list(hf_utils._manifests) == [("lake", "c2", False), ("lake", "c3", False)]
+
+    monkeypatch.setattr(hf_utils, "MANIFEST_CACHE_BYTES", 10)
+    lister(_page([("big-file-name.txt", 1, "")]))
+    await hf_utils.hf_siblings_json(repo, "lake", "c4", with_metadata=False)
+    assert ("lake", "c4", False) not in hf_utils._manifests  # larger than the whole budget
+
+
+async def test_blob_siblings_follow_the_linked_object(lister, monkeypatch):
+    """LFS is what LakeFS links (the global lfs/ object), not a size or
+    suffix rule; blobIds of regular files are the git blob ids File rows keep."""
+    lister(_page([
+        ("README.md", 4, "s3://hub/data/r"),
+        ("small.parquet", 10, "s3://hub/data/p"),  # a suffix rule would call it LFS
+        ("model.bin", 125162496, LFS_ADDRESS),
+        ("unrecorded.txt", 3, "s3://hub/data/u"),
+        ("copied.txt", 5, "s3://hub/data/c"),  # its row keeps a LakeFS checksum, not a git blob id
+    ]))
     monkeypatch.setattr(
-        "kohakuhub.utils.lakefs.resolve_lakefs_repo",
-        lambda repo: f"{repo.repo_type}:{repo.full_id}",
-    )
-    monkeypatch.setattr(
-        "kohakuhub.db_operations.should_use_lfs",
-        lambda repo, path, size: path.endswith(".bin"),
-    )
-    # The repo's File rows are loaded in one query now, so the stub is the bulk
-    # map rather than a per-path lookup. `broken.bin` is deliberately absent to
-    # keep exercising the "no DB row for this path" branch, which must still
-    # fall back to the checksum LakeFS reported.
-    monkeypatch.setattr(
-        "kohakuhub.db_operations.get_repo_file_sha256_map",
-        lambda repo: {"weights.bin": "db-sha"},
+        hf_utils,
+        "_regular_blob_ids",
+        lambda repo: {"README.md": "aa" * 20, "small.parquet": "bb" * 20, "copied.txt": "d41d8cd98f00b204e9800998ecf8427e"},
     )
 
-    siblings = await hf_utils.collect_hf_siblings(
-        repo_row,
-        "model",
-        "alice/demo",
-        "main",
-    )
+    siblings = json.loads(await hf_utils.hf_siblings_json(SimpleNamespace(id=1), "lake", "c1", with_metadata=True))
 
-    assert calls == [
-        {
-            "repository": "model:alice/demo",
-            "ref": "main",
-            "prefix": "",
-            "delimiter": "",
-            "amount": 1000,
-            "after": "",
-        },
-        {
-            "repository": "model:alice/demo",
-            "ref": "main",
-            "prefix": "",
-            "delimiter": "",
-            "amount": 1000,
-            "after": "cursor-2",
-        },
-    ]
     assert siblings == [
-        {"rfilename": "README.md", "size": 4},
-        {
-            "rfilename": "weights.bin",
-            "size": 8,
-            "lfs": {"sha256": "db-sha", "size": 8, "pointerSize": 134},
-        },
-        {
-            "rfilename": "broken.bin",
-            "size": 9,
-            "lfs": {"sha256": "sha256:broken", "size": 9, "pointerSize": 134},
-        },
+        {"rfilename": "README.md", "blobId": "aa" * 20, "size": 4},
+        {"rfilename": "small.parquet", "blobId": "bb" * 20, "size": 10},
+        {"rfilename": "model.bin", "blobId": "90e59f00f62c654b1a88a5f127dff14df4611cdc", "size": 125162496,
+         "lfs": {"sha256": LFS_SHA, "size": 125162496, "pointerSize": 134}},
+        {"rfilename": "unrecorded.txt", "size": 3},
+        {"rfilename": "copied.txt", "size": 5},
     ]
+    # Not kept: blobIds come from File rows, which a commit records after
+    # LakeFS has the commit; a list built in between would keep stale ids
+    assert not hf_utils._manifests
 
 
-@pytest.mark.asyncio
-async def test_collect_hf_siblings_accepts_list_payload_without_pagination(monkeypatch):
-    class _FakeClient:
-        async def list_objects(self, **kwargs):
-            return [
-                {
-                    "path_type": "object",
-                    "path": "config.json",
-                    "size_bytes": 12,
-                    "checksum": "sha256:config",
-                }
-            ]
+async def test_concurrent_blob_requests_share_one_build(lister, monkeypatch):
+    import asyncio
 
-    monkeypatch.setattr("kohakuhub.utils.lakefs.get_lakefs_client", lambda: _FakeClient())
-    monkeypatch.setattr(
-        "kohakuhub.utils.lakefs.resolve_lakefs_repo",
-        lambda repo: f"{repo.repo_type}:{repo.full_id}",
+    client = lister(_page([("model.bin", 9, LFS_ADDRESS)]), _page([("model.bin", 9, LFS_ADDRESS)]))
+    loads = []
+    monkeypatch.setattr(hf_utils, "_regular_blob_ids", lambda repo: loads.append(1) or {})
+    repo = SimpleNamespace(id=1)
+
+    blobs = await asyncio.gather(
+        *(hf_utils.hf_siblings_json(repo, "lake", "c1", with_metadata=True) for _ in range(3))
     )
-    monkeypatch.setattr("kohakuhub.db_operations.should_use_lfs", lambda repo, path, size: False)
+    names = await hf_utils.hf_siblings_json(repo, "lake", "c1", with_metadata=False)
 
-    siblings = await hf_utils.collect_hf_siblings(
-        SimpleNamespace(repo_type="dataset", full_id="alice/data"),
-        "dataset",
-        "alice/data",
-        "dev",
-    )
-
-    assert siblings == [{"rfilename": "config.json", "size": 12}]
+    assert len(set(blobs)) == 1 and "blobId" in blobs[0]
+    assert json.loads(names) == [{"rfilename": "model.bin"}]
+    assert len(client.calls) == 2 and loads == [1]  # one listing for each form
+    assert list(hf_utils._manifests) == [("lake", "c1", False)]
 
 
-@pytest.mark.asyncio
-async def test_collect_hf_siblings_stops_when_pagination_cursor_is_missing(monkeypatch):
-    calls = []
+async def test_blob_siblings_without_file_rows_still_answer(lister, monkeypatch):
+    lister(_page([("README.md", 4, "s3://hub/data/r"), ("model.bin", 9, LFS_ADDRESS)]))
 
-    class _FakeClient:
-        async def list_objects(self, **kwargs):
-            calls.append(kwargs)
-            return {
-                "results": [
-                    {
-                        "path_type": "object",
-                        "path": "weights.bin",
-                        "size_bytes": 7,
-                        "checksum": "sha256:weights",
-                    }
-                ],
-                "pagination": {"has_more": True, "next_offset": None},
-            }
+    def broken(repo):
+        raise OperationalError("database down")
 
-    monkeypatch.setattr("kohakuhub.utils.lakefs.get_lakefs_client", lambda: _FakeClient())
-    monkeypatch.setattr(
-        "kohakuhub.utils.lakefs.resolve_lakefs_repo",
-        lambda repo: f"{repo.repo_type}:{repo.full_id}",
-    )
-    monkeypatch.setattr("kohakuhub.db_operations.should_use_lfs", lambda repo, path, size: False)
-
-    siblings = await hf_utils.collect_hf_siblings(
-        SimpleNamespace(repo_type="model", full_id="alice/demo"),
-        "model",
-        "alice/demo",
-        "main",
-    )
-
-    assert len(calls) == 1
-    assert siblings == [{"rfilename": "weights.bin", "size": 7}]
-
-
-async def test_collect_hf_siblings_loads_file_rows_in_bulk(monkeypatch):
-    """The DB must be consulted a fixed number of times, not once per file.
-
-    `collect_hf_siblings` runs on every `repo_info` call that asks for metadata,
-    so a per-file query made opening a large repo scale linearly with its file
-    count. Measured on a 4000-file repo (2000 LFS): 2.137s of per-path
-    `get_file()` calls versus 0.102s for the whole function using one bulk
-    select — 8.5x end to end on the endpoint.
-    """
-    file_count = 60
-    repo_row = SimpleNamespace(repo_type="model", full_id="alice/big")
-
-    class _FakeClient:
-        async def list_objects(self, **kwargs):
-            return {
-                "results": [
-                    {
-                        "path_type": "object",
-                        "path": f"shard/file{i:04d}.bin",
-                        "size_bytes": 4096,
-                        "checksum": f"sha256:obj{i}",
-                    }
-                    for i in range(file_count)
-                ],
-                "pagination": {"has_more": False},
-            }
-
-    monkeypatch.setattr("kohakuhub.utils.lakefs.get_lakefs_client", lambda: _FakeClient())
-    monkeypatch.setattr(
-        "kohakuhub.utils.lakefs.resolve_lakefs_repo", lambda repo: "m-alice-big"
-    )
-    monkeypatch.setattr(
-        "kohakuhub.db_operations.should_use_lfs", lambda repo, path, size: True
-    )
-
-    per_file_calls = []
-
-    def _tracked_get_file(repo, path):
-        per_file_calls.append(path)
-        return SimpleNamespace(sha256="per-file-sha")
-
-    monkeypatch.setattr("kohakuhub.db_operations.get_file", _tracked_get_file)
-
-    bulk_calls = []
-
-    def _tracked_get_files(repo):
-        bulk_calls.append(repo)
-        return {f"shard/file{i:04d}.bin": f"bulk-sha-{i}" for i in range(file_count)}
-
-    monkeypatch.setattr(
-        "kohakuhub.db_operations.get_repo_file_sha256_map", _tracked_get_files
-    )
-
-    siblings = await hf_utils.collect_hf_siblings(
-        repo_row, "model", "alice/big", "main"
-    )
-
-    assert len(siblings) == file_count
-    assert len(bulk_calls) == 1, (
-        "expected exactly one bulk load of the repo's File rows; "
-        f"got {len(bulk_calls)}"
-    )
-    assert per_file_calls == [], (
-        "no per-file get_file() query may remain — that is the N+1 this fixes; "
-        f"got {len(per_file_calls)} calls"
-    )
-    # The bulk-loaded checksums must actually be used.
-    assert siblings[0]["lfs"]["sha256"] == "bulk-sha-0"
-    assert siblings[-1]["lfs"]["sha256"] == f"bulk-sha-{file_count - 1}"
-
-
-async def test_collect_hf_siblings_falls_back_to_object_checksum_when_row_missing(
-    monkeypatch,
-):
-    """A path absent from the bulk map must fall back to LakeFS's checksum.
-
-    Before the bulk load this was the `get_file() -> None` branch; it still has
-    to hold, otherwise a file present in LakeFS but not in the File table loses
-    its sha256.
-    """
-    repo_row = SimpleNamespace(repo_type="model", full_id="alice/demo")
-
-    class _FakeClient:
-        async def list_objects(self, **kwargs):
-            return {
-                "results": [
-                    {
-                        "path_type": "object",
-                        "path": "tracked.bin",
-                        "size_bytes": 4096,
-                        "checksum": "sha256:from-lakefs-tracked",
-                    },
-                    {
-                        "path_type": "object",
-                        "path": "orphan.bin",
-                        "size_bytes": 4096,
-                        "checksum": "sha256:from-lakefs-orphan",
-                    },
-                ],
-                "pagination": {"has_more": False},
-            }
-
-    monkeypatch.setattr("kohakuhub.utils.lakefs.get_lakefs_client", lambda: _FakeClient())
-    monkeypatch.setattr(
-        "kohakuhub.utils.lakefs.resolve_lakefs_repo", lambda repo: "m-alice-demo"
-    )
-    monkeypatch.setattr(
-        "kohakuhub.db_operations.should_use_lfs", lambda repo, path, size: True
-    )
-    monkeypatch.setattr(
-        "kohakuhub.db_operations.get_repo_file_sha256_map",
-        lambda repo: {"tracked.bin": "db-sha"},
-    )
-
-    siblings = await hf_utils.collect_hf_siblings(
-        repo_row, "model", "alice/demo", "main"
-    )
-
-    by_path = {s["rfilename"]: s for s in siblings}
-    assert by_path["tracked.bin"]["lfs"]["sha256"] == "db-sha"
-    assert by_path["orphan.bin"]["lfs"]["sha256"] == "sha256:from-lakefs-orphan"
-
-
-async def test_collect_hf_siblings_without_metadata_touches_neither_db_nor_extra_calls(
-    monkeypatch,
-):
-    """`with_metadata=False` must not query the File table at all.
-
-    Guards the acceptance criterion directly: the point of the flag is that the
-    DB work disappears, so assert on call counts rather than on timing.
-    """
-    repo_row = SimpleNamespace(repo_type="model", full_id="alice/big")
-    listings = []
-
-    class _FakeClient:
-        async def list_objects(self, **kwargs):
-            listings.append(kwargs)
-            return {
-                "results": [
-                    {
-                        "path_type": "object",
-                        "path": f"f{i}.bin",
-                        "size_bytes": 4096,
-                        "checksum": f"sha256:{i}",
-                    }
-                    for i in range(25)
-                ],
-                "pagination": {"has_more": False},
-            }
-
-    monkeypatch.setattr("kohakuhub.utils.lakefs.get_lakefs_client", lambda: _FakeClient())
-    monkeypatch.setattr(
-        "kohakuhub.utils.lakefs.resolve_lakefs_repo", lambda repo: "m-alice-big"
-    )
-
-    bulk_calls = []
-    monkeypatch.setattr(
-        "kohakuhub.db_operations.get_repo_file_sha256_map",
-        lambda repo: bulk_calls.append(repo) or {},
-    )
-    per_file_calls = []
-    monkeypatch.setattr(
-        "kohakuhub.db_operations.get_file",
-        lambda repo, path: per_file_calls.append(path),
-    )
-
-    siblings = await hf_utils.collect_hf_siblings(
-        repo_row, "model", "alice/big", "main", with_metadata=False
-    )
-
-    assert len(siblings) == 25
-    assert all(set(s) == {"rfilename"} for s in siblings)
-    assert bulk_calls == [], "no File-table load may happen when metadata is not wanted"
-    assert per_file_calls == [], "and certainly no per-file query"
-    assert len(listings) == 1, "the LakeFS listing is still needed for the path list"
-
-
-async def test_collect_hf_siblings_warns_and_degrades_when_the_bulk_load_fails(
-    monkeypatch,
-):
-    """A DB failure must not fail the listing, but must not be silent either.
-
-    The previous per-path lookup degraded one file at a time; one bulk load
-    failing drops the stored sha256 for *every* file, and the LakeFS checksum
-    substituted in its place is documented as "typically ETag"
-    (`lakefs_rest_client.py`) rather than a sha256. Serving that silently at
-    HTTP 200 would hand clients plausible-but-wrong LFS oids, so the warning is
-    part of the contract here.
-    """
-    repo_row = SimpleNamespace(repo_type="model", full_id="alice/demo")
-
-    class _FakeClient:
-        async def list_objects(self, **kwargs):
-            return {
-                "results": [
-                    {
-                        "path_type": "object",
-                        "path": "weights.bin",
-                        "size_bytes": 4096,
-                        "checksum": "sha256:from-lakefs",
-                    }
-                ],
-                "pagination": {"has_more": False},
-            }
-
-    monkeypatch.setattr("kohakuhub.utils.lakefs.get_lakefs_client", lambda: _FakeClient())
-    monkeypatch.setattr(
-        "kohakuhub.utils.lakefs.resolve_lakefs_repo", lambda repo: "m-alice-demo"
-    )
-    monkeypatch.setattr(
-        "kohakuhub.db_operations.should_use_lfs", lambda repo, path, size: True
-    )
-
-    def _boom(repo):
-        raise OperationalError("database unavailable")
-
-    monkeypatch.setattr("kohakuhub.db_operations.get_repo_file_sha256_map", _boom)
-
-    # Patch the module logger, matching how the rest of the suite asserts on
-    # log output (loguru does not route through pytest's caplog).
-    warnings: list[str] = []
+    warnings = []
+    monkeypatch.setattr(hf_utils, "_regular_blob_ids", broken)
     monkeypatch.setattr(hf_utils.logger, "warning", warnings.append)
 
-    siblings = await hf_utils.collect_hf_siblings(
-        repo_row, "model", "alice/demo", "main"
-    )
+    siblings = json.loads(await hf_utils.hf_siblings_json(SimpleNamespace(id=1, full_id="a/b"), "lake", "c1", with_metadata=True))
 
-    assert len(siblings) == 1, "the listing must still be served"
-    assert siblings[0]["lfs"]["sha256"] == "sha256:from-lakefs"
-    assert any("database unavailable" in message for message in warnings), (
-        f"the degradation must be logged, not silent; got {warnings}"
-    )
+    assert siblings[0] == {"rfilename": "README.md", "size": 4}
+    assert siblings[1]["lfs"]["sha256"] == LFS_SHA  # read from the address, not the database
+    assert "a/b" in warnings[0]
+
+
+def test_regular_blob_ids_reads_live_regular_rows(monkeypatch):
+    rows = [SimpleNamespace(path_in_repo="a", sha256="aa"), SimpleNamespace(path_in_repo="b", sha256="bb")]
+
+    class _Query:
+        def where(self, *conditions):
+            self.conditions = conditions
+            return rows
+
+    query = _Query()
+    monkeypatch.setattr(hf_utils.File, "select", lambda *fields: query)
+
+    assert hf_utils._regular_blob_ids(SimpleNamespace(id=1)) == {"a": "aa", "b": "bb"}
+
+
+@pytest.mark.parametrize("repo_type, prop", [("model", "safetensors"), ("dataset", "citation"), ("space", "sdk")])
+def test_expand_accepts_the_hub_properties_of_each_type(repo_type, prop):
+    assert hf_utils.expand_error(repo_type, None) is None
+    assert hf_utils.expand_error(repo_type, []) is None
+    assert hf_utils.expand_error(repo_type, ["sha", prop, "siblings", "storage"]) is None
+
+
+def test_expand_refuses_an_unknown_property_like_the_hub():
+    response = hf_utils.expand_error("model", ["sha", "citation"])
+
+    assert response.status_code == 400
+    assert '"citation"' in response.headers["x-error-message"]
+    assert '"safetensors"' in response.headers["x-error-message"]  # lists what is accepted
+
+
+def test_repo_info_response_without_expand_is_every_field_and_the_siblings():
+    fields = {"_id": 1, "id": "a/b", "sha": "s", "private": False}
+
+    response = hf_utils.hf_repo_info_response(fields, None, '[{"rfilename": "x"}]')
+
+    assert response.media_type == "application/json"
+    assert json.loads(response.body) == {**fields, "siblings": [{"rfilename": "x"}]}
+
+
+def test_repo_info_response_with_expand_is_only_what_was_asked():
+    fields = {"_id": 1, "id": "a/b", "sha": "s", "private": False, "storage": None}
+
+    asked = hf_utils.hf_repo_info_response(fields, ["sha", "sha", "cardData"], None)
+    all_time = hf_utils.hf_repo_info_response({**fields, "downloads": 7}, ["downloadsAllTime"], None)
+    assert json.loads(all_time.body)["downloadsAllTime"] == 7  # only expanded, as on the Hub
+    with_siblings = hf_utils.hf_repo_info_response(fields, ["siblings"], "[]")
+
+    assert json.loads(asked.body) == {"_id": 1, "id": "a/b", "sha": "s", "cardData": None}
+    assert json.loads(with_siblings.body) == {"_id": 1, "id": "a/b", "siblings": []}

@@ -1,6 +1,8 @@
 """Repository tree listing and path information endpoints."""
 
 import asyncio
+import re
+from collections import OrderedDict
 from datetime import datetime, timezone
 from typing import Literal
 from urllib.parse import urlencode
@@ -47,6 +49,17 @@ PATHS_INFO_CONCURRENCY = 16
 # PATHS_INFO_CONCURRENCY budget and stays well under common LakeFS
 # connection-pool limits.
 LAST_COMMIT_LOOKUP_CONCURRENCY = 16
+
+# A path's last commit as of a commit, which never changes, per (LakeFS
+# repository, commit, is a directory, path). A path-filtered log walks back
+# to the path's last change, seconds for one untouched over thousands of
+# commits, and LakeFS serves them one at a time: every visitor of a
+# directory would wait for all the others (#101). ponytail: per process,
+# by entry count.
+LAST_COMMIT_CACHE_ENTRIES = 100_000
+_last_commits: "OrderedDict[tuple[str, str, bool, str], dict | None]" = OrderedDict()
+_looking_up: dict[tuple[str, str, bool, str], asyncio.Task] = {}
+_COMMIT_ID = re.compile(r"^[0-9a-f]{64}$")
 NAME_PREFIX_MAX_LENGTH = 256
 
 
@@ -153,65 +166,6 @@ async def fetch_lakefs_objects_page(
     )
 
 
-async def _calculate_directory_stats(
-    lakefs_repo: str,
-    revision: str,
-    directory_path: str,
-    first_page: dict | None = None,
-) -> tuple[int, float | None]:
-    """Calculate recursive directory size and latest file mtime."""
-    client = get_lakefs_client()
-    total_size = 0
-    latest_mtime = None
-    prefix = f"{directory_path}/"
-
-    def consume_page(page: dict) -> None:
-        nonlocal total_size, latest_mtime
-
-        for child_obj in page.get("results", []):
-            if child_obj.get("path_type") != "object":
-                continue
-
-            total_size += child_obj.get("size_bytes") or 0
-
-            child_mtime = child_obj.get("mtime")
-            if child_mtime and (latest_mtime is None or child_mtime > latest_mtime):
-                latest_mtime = child_mtime
-
-    page = first_page
-    if page is None:
-        page = await client.list_objects(
-            repository=lakefs_repo,
-            ref=revision,
-            prefix=prefix,
-            amount=1000,
-            delimiter="",
-        )
-
-    consume_page(page)
-
-    pagination = page.get("pagination", {})
-    has_more = pagination.get("has_more", False)
-    after = pagination.get("next_offset", "")
-
-    while has_more:
-        page = await client.list_objects(
-            repository=lakefs_repo,
-            ref=revision,
-            prefix=prefix,
-            amount=1000,
-            after=after,
-            delimiter="",
-        )
-        consume_page(page)
-
-        pagination = page.get("pagination", {})
-        has_more = pagination.get("has_more", False)
-        after = pagination.get("next_offset", "")
-
-    return total_size, latest_mtime
-
-
 def _make_tree_item(
     obj: dict,
     repository: Repository,
@@ -309,12 +263,11 @@ async def resolve_last_commits_for_paths(
 
     client = get_lakefs_rest_client()
     sem = asyncio.Semaphore(LAST_COMMIT_LOOKUP_CONCURRENCY)
+    # Only a commit's answers are kept: a branch moves
+    keep = bool(_COMMIT_ID.match(revision))
 
-    async def fetch_one(target: dict[str, str]) -> tuple[str, dict | None]:
-        path = target.get("path")
-        if not path:
-            return "", None
-        kind = target.get("type")
+    async def look_up(path: str, kind: str | None) -> tuple[dict | None, bool]:
+        """The last commit, and whether LakeFS answered (else it is not kept)."""
         # ``objects`` for files, ``prefixes`` for directories. The directory
         # filter must end with ``/`` so LakeFS treats it as a strict prefix,
         # otherwise paths sharing a basename leading edge would qualify.
@@ -335,10 +288,38 @@ async def resolve_last_commits_for_paths(
                 logger.debug(
                     f"log_commits for {kind or 'file'}={path!r} on {lakefs_repo}@{revision}: {error}"
                 )
-                return path, None
+                return None, False
 
         results = page.get("results") or []
-        return path, _serialize_last_commit(results[0]) if results else None
+        return (_serialize_last_commit(results[0]) if results else None), True
+
+    async def look_up_and_keep(key, path, kind) -> tuple[dict | None, bool]:
+        commit, answered = await look_up(path, kind)
+        if answered:
+            _last_commits[key] = commit
+            while len(_last_commits) > LAST_COMMIT_CACHE_ENTRIES:
+                _last_commits.popitem(last=False)
+        return commit, answered
+
+    async def fetch_one(target: dict[str, str]) -> tuple[str, dict | None]:
+        path = target.get("path")
+        if not path:
+            return "", None
+        kind = target.get("type")
+        if not keep:
+            return path, (await look_up(path, kind))[0]
+        key = (lakefs_repo, revision, kind == "directory", path)
+        if key in _last_commits:
+            _last_commits.move_to_end(key)
+            return path, _last_commits[key]
+        # Concurrent requests for the same path share one lookup
+        task = _looking_up.get(key)
+        if task is None or task.get_loop() is not asyncio.get_running_loop():
+            task = _looking_up[key] = asyncio.ensure_future(look_up_and_keep(key, path, kind))
+            task.add_done_callback(
+                lambda t: _looking_up.pop(key, None) if _looking_up.get(key) is t else None
+            )
+        return path, (await asyncio.shield(task))[0]
 
     pairs = await asyncio.gather(*(fetch_one(target) for target in targets))
     return {path: commit for path, commit in pairs if path}
@@ -420,24 +401,9 @@ async def _process_single_path(
             "size": 0,
         }
 
+        # As on the Hub, a directory has no size, expanded or not: summing it
+        # would list everything under it (#101). ``expand`` adds lastCommit.
         last_modified = _format_last_modified(first_result.get("mtime"))
-
-        if expand:
-            try:
-                dir_size, latest_mtime = await _calculate_directory_stats(
-                    lakefs_repo=lakefs_repo,
-                    revision=revision,
-                    directory_path=clean_path,
-                    first_page=list_result,
-                )
-                dir_info["size"] = dir_size
-                last_modified = _format_last_modified(latest_mtime) or last_modified
-            except Exception as error:
-                if not is_lakefs_not_found_error(error):
-                    logger.debug(
-                        f"Failed to calculate directory stats for {clean_path}: {error}"
-                    )
-
         if last_modified:
             dir_info["lastModified"] = last_modified
 

@@ -178,10 +178,17 @@ export const repoAPI = {
    * @param {string} type - Repository type (model/dataset/space)
    * @param {string} namespace - Owner namespace
    * @param {string} name - Repository name
+   * @param {string[]} [expand] - Only these properties, as on the Hub; all of
+   *   them (the whole-repository file list included) when omitted
    * @returns {Promise} - Repository metadata
    */
-  getInfo: (type, namespace, name) =>
-    api.get(`/api/${type}s/${namespace}/${name}`),
+  getInfo: (type, namespace, name, expand) =>
+    expand
+      ? api.get(`/api/${type}s/${namespace}/${name}`, {
+          params: { expand },
+          paramsSerializer: { indexes: null }, // expand=a&expand=b
+        })
+      : api.get(`/api/${type}s/${namespace}/${name}`),
 
   /**
    * List repositories

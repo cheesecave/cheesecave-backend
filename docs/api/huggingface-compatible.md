@@ -44,19 +44,8 @@ KohakuHub implements HuggingFace Hub API for compatibility with `huggingface_hub
   "pipeline_tag": null,
   "library_name": null,
   "siblings": [
-    {
-      "rfilename": "config.json",
-      "size": 1024
-    },
-    {
-      "rfilename": "model.safetensors",
-      "size": 5000000000,
-      "lfs": {
-        "sha256": "def789...",
-        "size": 5000000000,
-        "pointerSize": 134
-      }
-    }
+    {"rfilename": "config.json"},
+    {"rfilename": "model.safetensors"}
   ],
   "storage": {
     "quota_bytes": 107374182400,
@@ -70,7 +59,7 @@ KohakuHub implements HuggingFace Hub API for compatibility with `huggingface_hub
 ```
 
 **Notes:**
-- `siblings`: Full file list with LFS info
+- `siblings`: the name of every file by default, as on the Hub. `blobs=true` (`files_metadata=True`) adds `blobId`, `size` and `lfs`; `expand=...` returns only the named properties. See [Get Repository Info](./repositories.md#get-repository-info).
 - `storage`: Only included for authenticated users
 - `sha`: Latest commit hash on main branch
 - Compatible with `transformers.from_pretrained()` and `diffusers`

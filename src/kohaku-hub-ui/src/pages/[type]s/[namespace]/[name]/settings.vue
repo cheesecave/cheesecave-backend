@@ -657,6 +657,7 @@ async function loadRepoInfo() {
       repoType.value,
       route.params.namespace,
       route.params.name,
+      ["private"],
     );
     settings.value.private = data.private || false;
     moveToRepo.value = repoId.value;
