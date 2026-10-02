@@ -820,15 +820,20 @@ watch(innerPreviewProps, (val) => {
               :placeholder-icon="iconForFile(entry.name)"
               class="mb-2"
             />
+            <!-- Same square box as a thumbnail, so every card lines up -->
             <div
               v-else
-              :class="
-                entry.type === 'dir'
-                  ? 'i-carbon-folder text-blue-500'
-                  : iconForFile(entry.name)
-              "
-              class="text-3xl mb-2"
-            />
+              class="w-full aspect-square mb-2 inline-flex items-center justify-center rounded bg-gray-100 dark:bg-gray-800"
+            >
+              <div
+                :class="
+                  entry.type === 'dir'
+                    ? 'i-carbon-folder text-blue-500'
+                    : iconForFile(entry.name)
+                "
+                class="text-4xl"
+              />
+            </div>
             <div class="text-xs font-medium truncate w-full" :title="entry.name">
               {{ entry.name }}
             </div>

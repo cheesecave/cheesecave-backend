@@ -453,6 +453,29 @@ describe("TarBrowserPanel · listing + navigation", () => {
     expect(localStorage.getItem("kohaku-tar-view-mode")).toBe("list");
   });
 
+  it("centres every grid icon in the same square box a thumbnail fills", async () => {
+    const archive = buildArchive([
+      ["data/rows.json", text("{}")],
+      ["voice.ogg", text("OggS")],
+      ["clip.mkv", text("mkv")],
+      ["notes.txt", text("hi")],
+    ]);
+    serveArchive(archive);
+    const wrapper = mountPanel();
+    await flushPromises();
+
+    const cards = wrapper.findAll(".grid-cols-2 > div");
+    expect(cards).toHaveLength(4);
+    for (const card of cards) {
+      const box = card.find(".aspect-square");
+      expect(box.exists()).toBe(true);
+      expect(box.classes()).toEqual(
+        expect.arrayContaining(["items-center", "justify-center"]),
+      );
+      expect(box.find('[class*="i-carbon-"]').exists()).toBe(true);
+    }
+  });
+
   it("persists a page-size change to localStorage", async () => {
     const archive = buildArchive([["a.txt", text("a")]]);
     serveArchive(archive);
