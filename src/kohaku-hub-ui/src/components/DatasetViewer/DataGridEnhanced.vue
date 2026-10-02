@@ -1,4 +1,5 @@
 <script setup>
+import { looksLikeImageUrl } from "@/utils/media-types";
 import { ref, computed } from "vue";
 
 const props = defineProps({
@@ -120,33 +121,7 @@ function truncateValue(value) {
 
 // Check if value is an image URL or base64
 function isImage(value) {
-  if (!value) return false;
-  const str = String(value);
-
-  // Check for base64 image data URL
-  if (str.startsWith("data:image/")) return true;
-
-  // Check for HTTP(S) image URLs
-  if (str.startsWith("http://") || str.startsWith("https://")) {
-    const lowerStr = str.toLowerCase();
-    const imageExtensions = [
-      ".jpg",
-      ".jpeg",
-      ".png",
-      ".gif",
-      ".webp",
-      ".bmp",
-      ".svg",
-      ".ico",
-    ];
-    return imageExtensions.some((ext) => lowerStr.includes(ext));
-  }
-
-  // Check for <binary> indicator from backend
-  if (str.startsWith("<binary:") || str.startsWith("<large file:"))
-    return false;
-
-  return false;
+  return looksLikeImageUrl(value);
 }
 
 // Check if value is a video URL

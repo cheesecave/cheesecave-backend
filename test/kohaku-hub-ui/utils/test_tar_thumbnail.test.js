@@ -75,7 +75,7 @@ afterEach(() => {
 
 describe("isImageMember", () => {
   it("classifies common image extensions", () => {
-    for (const ext of ["jpg", "JPEG", "png", "Webp", "gif", "BMP", "ico"]) {
+    for (const ext of ["jpg", "JPEG", "png", "Webp", "gif", "BMP", "ico", "avif", "APNG", "jfif"]) {
       expect(isImageMember({ name: `x.${ext}` })).toBe(true);
     }
   });
@@ -101,9 +101,32 @@ describe("detectImageMime", () => {
     const gif = new Uint8Array([0x47, 0x49, 0x46, 0x38, 0x39, 0x61]);
     expect(detectImageMime(gif)).toBe("image/gif");
   });
+  it("recognises AVIF by its ftyp brands, BMP and ICO", () => {
+    const ftyp = (major, ...compatible) => {
+      const brands = [major, "\0\0\0\0", ...compatible].join("");
+      const box = `\0\0\0${String.fromCharCode(8 + brands.length)}ftyp${brands}`;
+      return Uint8Array.from(box, (c) => c.charCodeAt(0));
+    };
+    expect(detectImageMime(ftyp("avif", "mif1", "miaf"))).toBe("image/avif");
+    expect(detectImageMime(ftyp("avis", "avif", "msf1"))).toBe("image/avif");
+    // Major brand mif1, avif among the compatible ones
+    expect(detectImageMime(ftyp("mif1", "miaf", "avif"))).toBe("image/avif");
+    // HEIC and MP4 share the ftyp box: not AVIF
+    expect(detectImageMime(ftyp("heic", "mif1", "heic"))).toBe(null);
+    expect(detectImageMime(ftyp("isom", "iso2", "mp41"))).toBe(null);
+    // A box size reaching past the bytes read stops at the bytes
+    const truncated = ftyp("mif1", "miaf", "avif").slice(0, 20);
+    expect(detectImageMime(truncated)).toBe(null);
+
+    expect(detectImageMime(new Uint8Array([0x42, 0x4d, 0x36, 0x00, 0x00]))).toBe("image/bmp");
+    expect(detectImageMime(new Uint8Array([0x00, 0x00, 0x01, 0x00, 0x01]))).toBe("image/x-icon");
+  });
+
   it("returns null for non-image / short input", () => {
     expect(detectImageMime(new Uint8Array(3))).toBe(null);
     expect(detectImageMime(new Uint8Array([1, 2, 3, 4]))).toBe(null);
+    // Long enough for an ftyp box, but no box there
+    expect(detectImageMime(new Uint8Array(20))).toBe(null);
     expect(detectImageMime(null)).toBe(null);
   });
 });
@@ -204,6 +227,9 @@ describe("strategy registry", () => {
     expect(_STRATEGIES[1].match(notImage)).toBe(false);
     expect(_STRATEGIES[0].match(small)).toBe(false); // jpeg-exif rejects non-jpeg
     expect(_STRATEGIES[0].match({ name: "a.JPG", size: 1 })).toBe(true);
+    // A .jfif is a JPEG: its EXIF thumbnail is worth the probe too
+    expect(_STRATEGIES[0].match({ name: "a.jfif", size: 1 })).toBe(true);
+    expect(_STRATEGIES[1].match({ name: "a.avif", size: 1024 })).toBe(true);
   });
 });
 

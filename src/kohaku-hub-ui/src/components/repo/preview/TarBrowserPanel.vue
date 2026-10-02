@@ -584,11 +584,17 @@ watch(innerPreviewProps, (val) => {
 
         <div v-else-if="memberView.state === 'ready' && memberView.cls === 'image'" class="text-center">
           <img
+            v-if="!memberView.imageFailed"
             :src="memberView.blobUrl"
             :alt="memberView.name"
             class="max-w-full h-auto mx-auto"
             style="max-height: 600px"
+            @error="memberView.imageFailed = true"
           />
+          <p v-else class="py-10 text-sm text-gray-600 dark:text-gray-400">
+            This browser cannot display this image. Use the download button
+            above to save it locally.
+          </p>
         </div>
 
         <div v-else-if="memberView.state === 'ready' && memberView.cls === 'video'" class="text-center">

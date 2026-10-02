@@ -534,6 +534,25 @@ describe("TarBrowserPanel · member preview routing", () => {
     expect(img.attributes("src")).toBe("blob:mock/abc");
   });
 
+  it("previews an .avif member as an image, and says so when the browser cannot decode it", async () => {
+    const archive = buildArchive([["cover.avif", new Uint8Array([0, 0, 0, 0x1c, 0x66, 0x74, 0x79, 0x70])]]);
+    serveArchive(archive);
+
+    const wrapper = mountPanel();
+    await flushPromises();
+    await wrapper
+      .findAll(".cursor-pointer")
+      .find((w) => w.text().startsWith("cover.avif"))
+      .trigger("click");
+    await flushPromises();
+
+    const img = wrapper.find('img[alt="cover.avif"]');
+    expect(img.exists()).toBe(true);
+    await img.trigger("error");
+    expect(wrapper.find('img[alt="cover.avif"]').exists()).toBe(false);
+    expect(wrapper.text()).toContain("This browser cannot display this image");
+  });
+
   it("does not auto-open the inner FilePreviewDialog when a parquet member is clicked", async () => {
     const archive = buildArchive([["sample.parquet", PARQUET_FIXTURE]]);
     serveArchive(archive);

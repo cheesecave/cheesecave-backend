@@ -34,6 +34,7 @@
 
 import { ref, onMounted, onUnmounted } from "vue";
 import { extractMemberBytes } from "@/utils/indexed-tar";
+import { IMAGE_EXTENSIONS as IMAGE_TYPES, mediaMime } from "@/utils/media-types";
 
 // -----------------------------------------------------------------------
 // Tunables
@@ -58,15 +59,8 @@ export const TOGGLE_STORAGE_KEY = "kohaku-tar-thumbnail-enabled";
 // MIME sniffing
 // -----------------------------------------------------------------------
 
-const IMAGE_EXTENSIONS = new Set([
-  "jpg",
-  "jpeg",
-  "png",
-  "gif",
-  "webp",
-  "bmp",
-  "ico",
-]);
+// Raster images only: an SVG thumbnail would need no extraction at all
+const IMAGE_EXTENSIONS = new Set(IMAGE_TYPES.filter((ext) => ext !== "svg"));
 
 export function isImageMember(member) {
   if (!member || typeof member.name !== "string") return false;
@@ -108,7 +102,25 @@ export function detectImageMime(bytes) {
   if (b[0] === 0x47 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x38) {
     return "image/gif";
   }
+  if (isAvif(b)) return "image/avif";
+  if (b[0] === 0x42 && b[1] === 0x4d) return "image/bmp";
+  if (b[0] === 0x00 && b[1] === 0x00 && b[2] === 0x01 && b[3] === 0x00) {
+    return "image/x-icon";
+  }
   return null;
+}
+
+// An ISO-BMFF `ftyp` box naming the AVIF brand, as its major brand or a
+// compatible one ("avis" for an animated AVIF). HEIC and MP4 files open
+// with the same box under other brands.
+function isAvif(b) {
+  if (b.byteLength < 16) return false;
+  const tag = (off) => String.fromCharCode(b[off], b[off + 1], b[off + 2], b[off + 3]);
+  if (tag(4) !== "ftyp") return false;
+  const boxEnd = Math.min(readU32(b, 0, false), b.byteLength);
+  const brands = [tag(8)];
+  for (let off = 16; off + 4 <= boxEnd; off += 4) brands.push(tag(off));
+  return brands.includes("avif") || brands.includes("avis");
 }
 
 // -----------------------------------------------------------------------
@@ -382,11 +394,8 @@ class ExtractionContext {
  */
 const jpegExifStrategy = {
   name: "jpeg-exif",
-  match: (member) => {
-    const dot = member.name.lastIndexOf(".");
-    const ext = dot < 0 ? "" : member.name.slice(dot + 1).toLowerCase();
-    return ext === "jpg" || ext === "jpeg";
-  },
+  // .jpg / .jpeg / .jfif
+  match: (member) => mediaMime(member.name) === "image/jpeg",
   async extract(ctx) {
     const head = await ctx.getHead();
     const mime = detectImageMime(head);
