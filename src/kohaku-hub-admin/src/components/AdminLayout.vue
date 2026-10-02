@@ -200,6 +200,7 @@ const menuItems = [
 
 <style scoped>
 .admin-layout {
+  --admin-header-height: 60px;
   height: 100vh;
   height: 100dvh;
   overflow: hidden;
@@ -218,10 +219,11 @@ const menuItems = [
 }
 
 .sidebar-header {
+  height: var(--admin-header-height);
   display: flex;
   flex-shrink: 0;
   align-items: center;
-  padding: 24px 20px;
+  padding: 0 20px;
   border-bottom: 1px solid var(--border-light);
   background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
 }
@@ -294,6 +296,7 @@ const menuItems = [
 }
 
 .header {
+  height: var(--admin-header-height);
   flex-shrink: 0;
   background-color: var(--bg-elevated);
   border-bottom: 1px solid var(--border-default);
