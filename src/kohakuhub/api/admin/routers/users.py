@@ -120,7 +120,8 @@ async def list_users(
             (User.username.contains(search)) | (User.email.contains(search))
         )
 
-    users_query = users_query.limit(limit).offset(offset)
+    total = users_query.count()
+    users_query = users_query.order_by(User.id).limit(limit).offset(offset)
 
     users_page = list(users_query)
     used = namespace_usage(u.username for u in users_page)
@@ -141,7 +142,13 @@ async def list_users(
         for u in users_page
     ]
 
-    return {"users": users, "limit": limit, "offset": offset, "search": search}
+    return {
+        "users": users,
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "search": search,
+    }
 
 
 @router.post("/users")

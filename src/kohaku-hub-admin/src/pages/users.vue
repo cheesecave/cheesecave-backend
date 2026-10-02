@@ -78,6 +78,7 @@ const showOrgs = ref(true); // Toggle to show/hide organizations
 // Pagination
 const currentPage = ref(1);
 const pageSize = ref(20);
+const usersTotal = ref(0);
 
 // Sorting
 const sortBy = ref("id");
@@ -156,7 +157,14 @@ async function loadUsers() {
       offset: (currentPage.value - 1) * pageSize.value,
       include_orgs: showOrgs.value,
     });
+    const lastPage = Math.max(1, Math.ceil(response.total / pageSize.value));
+    if (currentPage.value > lastPage) {
+      currentPage.value = lastPage;
+      await loadUsers();
+      return;
+    }
     users.value = response.users;
+    usersTotal.value = response.total;
   } catch (error) {
     console.error("Failed to load users:", error);
     if (error.response?.status === 401 || error.response?.status === 403) {
@@ -187,7 +195,16 @@ function handleSearchInput() {
 }
 
 function clearSearch() {
+  if (searchDebounceTimer.value) {
+    clearTimeout(searchDebounceTimer.value);
+  }
   searchQuery.value = "";
+  currentPage.value = 1;
+  loadUsers();
+}
+
+function handleToggleOrganizations() {
+  currentPage.value = 1;
   loadUsers();
 }
 
@@ -427,7 +444,7 @@ onMounted(() => {
           </el-input>
           <el-switch
             v-model="showOrgs"
-            @change="loadUsers"
+            @change="handleToggleOrganizations"
             active-text="Show Organizations"
             inactive-text="Users Only"
           />
@@ -582,6 +599,16 @@ onMounted(() => {
             </template>
           </el-table-column>
         </el-table>
+        <el-pagination
+          v-if="usersTotal > pageSize"
+          v-model:current-page="currentPage"
+          :page-size="pageSize"
+          :total="usersTotal"
+          :disabled="loading"
+          layout="prev, pager, next, total"
+          class="mt-4"
+          @current-change="loadUsers"
+        />
       </el-card>
 
       <!-- Create User Dialog -->
