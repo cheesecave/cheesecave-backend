@@ -426,7 +426,9 @@ onMounted(() => {
           @click="handleRecalculateAll"
           :loading="recalculating"
         >
-          <span class="mr-2">🔄</span>
+          <template #icon>
+            <span class="i-carbon-renew" aria-hidden="true" />
+          </template>
           Recount All Storage
         </el-button>
       </div>

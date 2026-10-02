@@ -175,17 +175,21 @@ onUnmounted(() => {
               v-if="!editing"
               type="primary"
               @click="editing = true"
-              :icon="'Edit'"
               size="small"
             >
+              <template #icon>
+                <span class="i-carbon-edit" aria-hidden="true" />
+              </template>
               Edit Quota
             </el-button>
             <el-button
               @click="handleRecalculate"
               :loading="recalculating"
-              :icon="'Renew'"
               size="small"
             >
+              <template #icon>
+                <span class="i-carbon-renew" aria-hidden="true" />
+              </template>
               Recount
             </el-button>
           </div>

@@ -405,7 +405,10 @@ onMounted(() => {
         <h1 class="text-3xl font-bold text-gray-900 dark:text-gray-100">
           User Management
         </h1>
-        <el-button type="primary" @click="dialogVisible = true" :icon="'Plus'">
+        <el-button type="primary" @click="dialogVisible = true">
+          <template #icon>
+            <span class="i-carbon-user-follow" aria-hidden="true" />
+          </template>
           Create User
         </el-button>
       </div>
@@ -557,11 +560,10 @@ onMounted(() => {
           </el-table-column>
           <el-table-column label="Actions" width="300" fixed="right">
             <template #default="{ row }">
-              <el-button
-                size="small"
-                @click="handleViewUser(row)"
-                :icon="'View'"
-              >
+              <el-button size="small" @click="handleViewUser(row)">
+                <template #icon>
+                  <span class="i-carbon-view" aria-hidden="true" />
+                </template>
                 View
               </el-button>
               <el-button
@@ -575,8 +577,10 @@ onMounted(() => {
                 size="small"
                 type="danger"
                 @click="handleDeleteUser(row)"
-                :icon="'Delete'"
               >
+                <template #icon>
+                  <span class="i-carbon-trash-can" aria-hidden="true" />
+                </template>
                 Delete
               </el-button>
             </template>
@@ -649,9 +653,12 @@ onMounted(() => {
 
         <template #footer>
           <el-button @click="dialogVisible = false">Cancel</el-button>
-          <el-button type="primary" @click="handleCreateUser"
-            >Create User</el-button
-          >
+          <el-button type="primary" @click="handleCreateUser">
+            <template #icon>
+              <span class="i-carbon-user-follow" aria-hidden="true" />
+            </template>
+            Create User
+          </el-button>
         </template>
       </el-dialog>
 

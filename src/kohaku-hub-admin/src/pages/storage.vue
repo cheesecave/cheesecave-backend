@@ -219,11 +219,10 @@ onMounted(() => {
         <h1 class="text-3xl font-bold text-gray-900 dark:text-gray-100">
           Storage Browser
         </h1>
-        <el-button
-          @click="loadObjects('')"
-          :icon="'Refresh'"
-          :loading="loading"
-        >
+        <el-button @click="loadObjects('')" :loading="loading">
+          <template #icon>
+            <span class="i-carbon-renew" aria-hidden="true" />
+          </template>
           Refresh
         </el-button>
       </div>
@@ -253,10 +252,12 @@ onMounted(() => {
           <el-button
             size="small"
             @click="navigateUp"
-            :icon="'ArrowLeft'"
             class="mr-2"
             :disabled="pathParts.length === 0"
           >
+            <template #icon>
+              <span class="i-carbon-arrow-left" aria-hidden="true" />
+            </template>
             Up
           </el-button>
 

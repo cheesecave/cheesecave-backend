@@ -201,7 +201,10 @@ onMounted(() => {
         <h1 class="text-3xl font-bold text-gray-900 dark:text-gray-100">
           Registration Invitations
         </h1>
-        <el-button type="primary" @click="dialogVisible = true" :icon="'Plus'">
+        <el-button type="primary" @click="dialogVisible = true">
+          <template #icon>
+            <span class="i-carbon-add" aria-hidden="true" />
+          </template>
           Generate Invitation
         </el-button>
       </div>
@@ -225,12 +228,10 @@ onMounted(() => {
         <template #header>
           <div class="flex items-center justify-between">
             <span class="font-semibold">All Invitations</span>
-            <el-button
-              size="small"
-              @click="loadInvitations"
-              :icon="'Refresh'"
-              :loading="loading"
-            >
+            <el-button size="small" @click="loadInvitations" :loading="loading">
+              <template #icon>
+                <span class="i-carbon-renew" aria-hidden="true" />
+              </template>
               Refresh
             </el-button>
           </div>
@@ -303,16 +304,20 @@ onMounted(() => {
               <el-button
                 size="small"
                 @click="handleCopyInvitationLink(row.token, row.action)"
-                :icon="'CopyDocument'"
               >
+                <template #icon>
+                  <span class="i-carbon-copy" aria-hidden="true" />
+                </template>
                 Copy Link
               </el-button>
               <el-button
                 size="small"
                 type="danger"
                 @click="handleDeleteInvitation(row)"
-                :icon="'Delete'"
               >
+                <template #icon>
+                  <span class="i-carbon-trash-can" aria-hidden="true" />
+                </template>
                 Delete
               </el-button>
             </template>

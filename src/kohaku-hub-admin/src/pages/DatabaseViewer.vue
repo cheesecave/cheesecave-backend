@@ -274,11 +274,10 @@ onMounted(() => {
               <div class="flex justify-between items-center">
                 <span class="font-bold">Query Editor</span>
                 <div class="flex gap-2">
-                  <el-button
-                    size="small"
-                    @click="queryText = ''"
-                    :icon="'Delete'"
-                  >
+                  <el-button size="small" @click="queryText = ''">
+                    <template #icon>
+                      <span class="i-carbon-erase" aria-hidden="true" />
+                    </template>
                     Clear
                   </el-button>
                   <el-button
@@ -286,8 +285,10 @@ onMounted(() => {
                     size="small"
                     @click="executeQuery"
                     :loading="executing"
-                    :icon="'Play'"
                   >
+                    <template #icon>
+                      <span class="i-carbon-play" aria-hidden="true" />
+                    </template>
                     Execute Query
                   </el-button>
                 </div>
@@ -340,14 +341,16 @@ onMounted(() => {
                   </el-tag>
                 </div>
                 <div class="flex gap-2">
-                  <el-button size="small" @click="exportCSV" :icon="'Download'">
+                  <el-button size="small" @click="exportCSV">
+                    <template #icon>
+                      <span class="i-carbon-download" aria-hidden="true" />
+                    </template>
                     Export CSV
                   </el-button>
-                  <el-button
-                    size="small"
-                    @click="exportJSON"
-                    :icon="'Download'"
-                  >
+                  <el-button size="small" @click="exportJSON">
+                    <template #icon>
+                      <span class="i-carbon-download" aria-hidden="true" />
+                    </template>
                     Export JSON
                   </el-button>
                 </div>

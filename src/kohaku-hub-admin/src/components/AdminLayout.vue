@@ -124,7 +124,10 @@ const menuItems = [
             <div v-if="themeStore.isDark" class="i-carbon-moon text-lg" />
             <div v-else class="i-carbon-asleep text-lg" />
           </el-button>
-          <el-button type="danger" @click="handleLogout" :icon="'SwitchButton'">
+          <el-button type="danger" @click="handleLogout">
+            <template #icon>
+              <span class="i-carbon-logout" aria-hidden="true" />
+            </template>
             Logout
           </el-button>
         </div>
