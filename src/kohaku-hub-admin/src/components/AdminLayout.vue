@@ -1,5 +1,5 @@
 <script setup>
-import { ref } from "vue";
+import { onBeforeUnmount, onMounted, ref } from "vue";
 import { useRouter, useRoute } from "vue-router";
 import { useAdminStore } from "@/stores/admin";
 import { useThemeStore } from "@/stores/theme";
@@ -12,6 +12,37 @@ const adminStore = useAdminStore();
 const themeStore = useThemeStore();
 
 const globalSearchRef = ref(null);
+const sidebarScrollRef = ref(null);
+const canScrollUp = ref(false);
+const canScrollDown = ref(false);
+let sidebarResizeObserver;
+
+function updateSidebarScrollState() {
+  const sidebar = sidebarScrollRef.value;
+  if (!sidebar) return;
+
+  canScrollUp.value = sidebar.scrollTop > 1;
+  canScrollDown.value =
+    sidebar.scrollTop + sidebar.clientHeight < sidebar.scrollHeight - 1;
+}
+
+function scrollSidebar(direction) {
+  sidebarScrollRef.value?.scrollBy({
+    top: direction * sidebarScrollRef.value.clientHeight * 0.7,
+    behavior: "smooth",
+  });
+}
+
+onMounted(() => {
+  updateSidebarScrollState();
+  sidebarResizeObserver = new ResizeObserver(updateSidebarScrollState);
+  sidebarResizeObserver.observe(sidebarScrollRef.value);
+  sidebarResizeObserver.observe(sidebarScrollRef.value.firstElementChild);
+});
+
+onBeforeUnmount(() => {
+  sidebarResizeObserver?.disconnect();
+});
 
 function handleLogout() {
   adminStore.logout();
@@ -83,27 +114,53 @@ const menuItems = [
         </h2>
       </div>
 
-      <el-menu
-        :default-active="route.path"
-        router
-        class="sidebar-menu"
-        :background-color="themeStore.isDark ? '#1f1f1f' : '#ffffff'"
-        :text-color="themeStore.isDark ? '#e0e0e0' : '#303133'"
-        :active-text-color="'#409EFF'"
-      >
-        <el-menu-item
-          v-for="item in menuItems"
-          :key="item.path"
-          :index="item.path"
+      <div class="sidebar-navigation">
+        <div
+          ref="sidebarScrollRef"
+          class="sidebar-scroll"
+          @scroll="updateSidebarScrollState"
         >
-          <div :class="item.icon" class="mr-2" />
-          <span>{{ item.label }}</span>
-        </el-menu-item>
-      </el-menu>
+          <el-menu
+            :default-active="route.path"
+            router
+            class="sidebar-menu"
+            :background-color="themeStore.isDark ? '#1f1f1f' : '#ffffff'"
+            :text-color="themeStore.isDark ? '#e0e0e0' : '#303133'"
+            :active-text-color="'#409EFF'"
+          >
+            <el-menu-item
+              v-for="item in menuItems"
+              :key="item.path"
+              :index="item.path"
+            >
+              <div :class="item.icon" class="mr-2" />
+              <span>{{ item.label }}</span>
+            </el-menu-item>
+          </el-menu>
+        </div>
+        <button
+          v-show="canScrollUp"
+          type="button"
+          class="sidebar-scroll-hint sidebar-scroll-hint-up"
+          aria-label="Scroll navigation up"
+          @click="scrollSidebar(-1)"
+        >
+          <div class="i-carbon-chevron-up" aria-hidden="true" />
+        </button>
+        <button
+          v-show="canScrollDown"
+          type="button"
+          class="sidebar-scroll-hint sidebar-scroll-hint-down"
+          aria-label="Scroll navigation down"
+          @click="scrollSidebar(1)"
+        >
+          <div class="i-carbon-chevron-down" aria-hidden="true" />
+        </button>
+      </div>
     </el-aside>
 
     <!-- Main Content -->
-    <el-container>
+    <el-container class="content-layout">
       <!-- Header -->
       <el-header class="header">
         <div class="header-title">
@@ -146,11 +203,18 @@ const menuItems = [
 
 <style scoped>
 .admin-layout {
-  min-height: 100vh;
+  --admin-header-height: 60px;
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
   background-color: var(--bg-base);
 }
 
 .sidebar {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
   background-color: var(--bg-elevated);
   border-right: 1px solid var(--border-default);
   box-shadow: var(--shadow-sm);
@@ -158,9 +222,11 @@ const menuItems = [
 }
 
 .sidebar-header {
+  height: var(--admin-header-height);
   display: flex;
+  flex-shrink: 0;
   align-items: center;
-  padding: 24px 20px;
+  padding: 0 20px;
   border-bottom: 1px solid var(--border-light);
   background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
 }
@@ -169,12 +235,72 @@ const menuItems = [
   color: white !important;
 }
 
+.sidebar-navigation {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.sidebar-scroll {
+  height: 100%;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+  scroll-padding-block: 28px;
+}
+
+.sidebar-scroll::-webkit-scrollbar {
+  display: none;
+}
+
+.sidebar-scroll-hint {
+  position: absolute;
+  left: 0;
+  right: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 28px;
+  border: none;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.sidebar-scroll-hint:hover {
+  color: var(--color-info);
+}
+
+.sidebar-scroll-hint:focus-visible {
+  outline: 2px solid var(--color-info);
+  outline-offset: -2px;
+}
+
+.sidebar-scroll-hint-up {
+  top: 0;
+  background: linear-gradient(var(--bg-elevated) 60%, transparent);
+}
+
+.sidebar-scroll-hint-down {
+  bottom: 0;
+  background: linear-gradient(transparent, var(--bg-elevated) 40%);
+}
+
 .sidebar-menu {
   border-right: none;
   background-color: var(--bg-elevated) !important;
 }
 
+.content-layout {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
 .header {
+  height: var(--admin-header-height);
+  flex-shrink: 0;
   background-color: var(--bg-elevated);
   border-bottom: 1px solid var(--border-default);
   display: flex;
@@ -207,7 +333,11 @@ const menuItems = [
 }
 
 .main-content {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
   background-color: var(--bg-base);
-  min-height: calc(100vh - 60px);
 }
 </style>
