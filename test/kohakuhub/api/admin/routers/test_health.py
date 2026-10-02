@@ -417,14 +417,14 @@ async def test_fetch_minio_admin_version_returns_release_for_signed_response(
     assert release == "2024-12-13T22-19-12Z"
 
 
-async def test_minio_probe_reports_down_when_list_buckets_raises(app, monkeypatch):
+async def test_minio_probe_reports_down_when_head_bucket_raises(app, monkeypatch):
     health_mod = _live_health_module()
 
     def _raise():
         raise RuntimeError("simulated s3 failure")
 
     monkeypatch.setattr(
-        health_mod, "_list_buckets_sync", _raise, raising=True
+        health_mod, "_head_bucket_sync", _raise, raising=True
     )
     result = await health_mod.probe_minio()
     assert result["status"] == "down"
@@ -1133,3 +1133,45 @@ async def test_redis_probe_swallows_aclose_exception(app, monkeypatch):
     # The probe still succeeded; aclose's exception was swallowed.
     assert result["status"] == "ok"
     assert result["version"] == "Redis 7.4.0"
+
+
+async def test_minio_probe_checks_the_configured_bucket(app, monkeypatch):
+    """HEAD on the configured bucket, not ListBuckets: a key scoped to one
+    bucket (an R2 API token) may list no buckets at all (#133)."""
+    health_mod = _live_health_module()
+    seen = []
+
+    class _S3:
+        def head_bucket(self, Bucket):
+            seen.append(Bucket)
+            return {"ResponseMetadata": {"HTTPHeaders": {"server": "cloudflare"}}}
+
+    monkeypatch.setattr(health_mod, "get_s3_client", lambda: _S3())
+    monkeypatch.setattr(health_mod.cfg.s3, "bucket", "hub-storage")
+    result = await health_mod.probe_minio()
+    assert result["status"] == "ok" and result["version"] == "cloudflare"
+    assert seen == ["hub-storage"]
+
+
+async def test_minio_admin_version_is_asked_of_the_root_endpoint(app, monkeypatch):
+    """With the real bucket in the endpoint path, the admin API is still at
+    the server's root."""
+    import httpx as httpx_module
+
+    health_mod = _live_health_module()
+    monkeypatch.setattr(health_mod.cfg.s3, "endpoint", "http://minio.local:9000/realbucket")
+    urls = []
+
+    def _handler(request):
+        urls.append(str(request.url))
+        return httpx_module.Response(403)
+
+    real_async_client = httpx_module.AsyncClient
+    transport = httpx_module.MockTransport(_handler)
+    monkeypatch.setattr(
+        health_mod.httpx,
+        "AsyncClient",
+        lambda *_a, **kw: real_async_client(transport=transport, timeout=kw.get("timeout")),
+    )
+    assert await health_mod._fetch_minio_admin_version(timeout=1.0) is None
+    assert urls == ["http://minio.local:9000/minio/admin/v3/info"]

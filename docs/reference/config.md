@@ -34,7 +34,7 @@ By default, the application looks for `config.toml` in the current working direc
 | Variable | Description | Default |
 | --- | --- | --- |
 | `KOHAKU_HUB_S3_PUBLIC_ENDPOINT` | The public-facing S3 endpoint, used for client downloads. | `http://localhost:9000` |
-| `KOHAKU_HUB_S3_ENDPOINT` | The internal S3 endpoint for the application. | `http://localhost:9000` |
+| `KOHAKU_HUB_S3_ENDPOINT` | The internal S3 endpoint for the application. A path after the host names the real bucket: with `https://<account>.r2.cloudflarestorage.com/<bucket>`, `KOHAKU_HUB_S3_BUCKET` is a key prefix inside `<bucket>`, after any further path. The first path segment is always taken as the bucket, so an S3 service mounted under a sub-path of a proxy is not supported. LakeFS's `blockstore.s3.endpoint` must be the same, and `KOHAKU_HUB_S3_PUBLIC_ENDPOINT` must end with the same bucket. | `http://localhost:9000` |
 | `KOHAKU_HUB_S3_ACCESS_KEY` | The access key for the S3 bucket. | `test-access-key` |
 | `KOHAKU_HUB_S3_SECRET_KEY` | The secret key for the S3 bucket. | `test-secret-key` |
 | `KOHAKU_HUB_S3_BUCKET` | The name of the S3 bucket. | `test-bucket` |

@@ -102,28 +102,42 @@ def test_get_multipart_limits_read_current_config():
 
 
 def test_get_s3_client_supports_signature_version_and_path_style(monkeypatch):
+    """An endpoint with a path names the real bucket: the client talks to the
+    root endpoint and readdresses requests (test_s3_bucket_in_endpoint.py)."""
     captured = {}
     monkeypatch.setattr(s3_module.cfg.s3, "endpoint", "https://r2.example.com/account/bucket")
     monkeypatch.setattr(s3_module.cfg.s3, "signature_version", "s3v4")
     monkeypatch.setattr(s3_module.cfg.s3, "force_path_style", True)
     monkeypatch.setattr(s3_module, "BotoConfig", lambda **kwargs: kwargs)
 
+    class Events:
+        def __init__(self):
+            self.first, self.last = [], []
+
+        def register_first(self, event, handler):
+            self.first.append(event)
+
+        def register_last(self, event, handler):
+            self.last.append(event)
+
+    class Client:
+        meta = type("Meta", (), {"events": Events()})()
+
     def fake_boto3_client(service_name, **kwargs):
         captured["kwargs"] = kwargs
-        return "client"
+        return Client()
 
     monkeypatch.setattr(s3_module.boto3, "client", fake_boto3_client)
 
     client = s3_module.get_s3_client()
 
-    assert client == "client"
+    assert captured["kwargs"]["endpoint_url"] == "https://r2.example.com"
     assert captured["kwargs"]["config"] == {
         "signature_version": "s3v4",
-        "s3": {
-            "addressing_style": "path",
-            "use_accelerate_endpoint": False,
-        },
+        "s3": {"addressing_style": "path"},
     }
+    assert client.meta.events.first == ["before-parameter-build.s3"]
+    assert client.meta.events.last == ["after-call.s3"]
 
 
 def test_get_s3_client_uses_default_signature_when_not_configured(monkeypatch):

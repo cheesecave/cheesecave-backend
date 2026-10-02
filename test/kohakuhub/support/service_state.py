@@ -130,7 +130,9 @@ def _ensure_services_ready(
     report("ensuring the test database exists")
     _ensure_database_exists(cfg.database_url)
     report("waiting for MinIO")
-    _wait_for_http(f"{cfg.s3_endpoint.rstrip('/')}/minio/health/live")
+    # At the server's root, also when the endpoint's path names the bucket
+    s3 = urlparse(cfg.s3_endpoint)
+    _wait_for_http(f"{s3.scheme}://{s3.netloc}/minio/health/live")
     report("checking LakeFS credentials")
 
     if (

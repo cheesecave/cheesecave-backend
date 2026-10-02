@@ -292,6 +292,18 @@ make test
 
 The test code reads environment variables only. It does not load `.env` directly.
 
+### An S3 endpoint with the bucket in its path
+
+Production can keep its objects inside another bucket: `KOHAKU_HUB_S3_ENDPOINT` ends with that bucket (`.../my-bucket`), and `KOHAKU_HUB_S3_BUCKET` is a key prefix inside it. The CI job "backend tests (S3 endpoint with a path)" runs the whole suite that way: MinIO with one bucket, a key allowed only on it, and LakeFS on the same endpoint (see `.github/workflows/fullstack-tests.yml`). Then `test/kohakuhub/test_s3_bucket_in_endpoint_stack.py`, skipped otherwise, checks what is really stored. To run it locally, start such a MinIO and LakeFS, then point the test environment at them:
+
+```bash
+export KOHAKU_HUB_S3_ENDPOINT=http://127.0.0.1:<minio-port>/realbucket
+export KOHAKU_HUB_S3_PUBLIC_ENDPOINT=$KOHAKU_HUB_S3_ENDPOINT
+export KOHAKU_HUB_S3_ACCESS_KEY=<key allowed on realbucket> KOHAKU_HUB_S3_SECRET_KEY=<its secret>
+export KOHAKU_HUB_LAKEFS_ENDPOINT=http://127.0.0.1:<lakefs-port>
+make test
+```
+
 ## Reset Local Data
 
 `make reset-local-data` is intentionally destructive. The script prints a bold red warning, explains the consequences, and asks for a single `y/N` confirmation before it clears the local app state through the in-process local reset helper.

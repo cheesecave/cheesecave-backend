@@ -6,10 +6,7 @@ import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from urllib.parse import urlparse
 
-import boto3
-from botocore.config import Config as BotoConfig
 from fastapi import APIRouter, Depends, HTTPException
 
 from kohakuhub.async_utils import run_in_s3_executor
@@ -28,7 +25,7 @@ from kohakuhub.storage_cleanup import (
     lfs_reconciliation_status,
 )
 from kohakuhub.utils.lakefs import get_lakefs_client
-from kohakuhub.utils.s3 import delete_objects_with_prefix, get_s3_client
+from kohakuhub.utils.s3 import bucket_in_endpoint, get_s3_client
 from kohakuhub.api.admin.utils import verify_admin_token
 
 logger = get_logger("ADMIN")
@@ -99,6 +96,11 @@ async def debug_s3_config(
     return result
 
 
+def _created(bucket: dict) -> str:
+    created = bucket["CreationDate"]
+    return created.isoformat() if created else "N/A"
+
+
 @router.get("/storage/buckets")
 async def list_s3_buckets(
     _admin: bool = Depends(verify_admin_token),
@@ -115,38 +117,43 @@ async def list_s3_buckets(
     def _list_buckets():
         s3 = get_s3_client()
 
-        try:
-            buckets = s3.list_buckets()
-            logger.info(f"list_buckets() response: {buckets}")
-        except Exception as e:
-            logger.error(f"Failed to list buckets: {e}")
-            # For R2/path-style, list_buckets might not work
-            # Return configured bucket as fallback
-            return [
-                {
-                    "name": cfg.s3.bucket,
-                    "creation_date": "N/A",
-                    "total_size": 0,
-                    "object_count": 0,
-                    "note": "Using configured bucket (list_buckets not supported)",
-                }
-            ]
+        if bucket_in_endpoint():
+            # The configured bucket is a key prefix inside the endpoint's: list
+            # only it, sized within the prefix, never the whole real bucket
+            bucket_list = [{"Name": cfg.s3.bucket, "CreationDate": None}]
+        else:
+            try:
+                buckets = s3.list_buckets()
+                logger.info(f"list_buckets() response: {buckets}")
+            except Exception as e:
+                logger.error(f"Failed to list buckets: {e}")
+                # For R2/path-style, list_buckets might not work
+                # Return configured bucket as fallback
+                return [
+                    {
+                        "name": cfg.s3.bucket,
+                        "creation_date": "N/A",
+                        "total_size": 0,
+                        "object_count": 0,
+                        "note": "Using configured bucket (list_buckets not supported)",
+                    }
+                ]
 
-        bucket_list = buckets.get("Buckets", [])
-        logger.info(f"Found {len(bucket_list)} buckets")
+            bucket_list = buckets.get("Buckets", [])
+            logger.info(f"Found {len(bucket_list)} buckets")
 
-        # If no buckets returned (R2 path-style issue), use configured bucket
-        if not bucket_list:
-            logger.warning("list_buckets returned empty, using configured bucket")
-            return [
-                {
-                    "name": cfg.s3.bucket,
-                    "creation_date": "N/A",
-                    "total_size": 0,
-                    "object_count": 0,
-                    "note": "Using configured bucket",
-                }
-            ]
+            # If no buckets returned (R2 path-style issue), use configured bucket
+            if not bucket_list:
+                logger.warning("list_buckets returned empty, using configured bucket")
+                return [
+                    {
+                        "name": cfg.s3.bucket,
+                        "creation_date": "N/A",
+                        "total_size": 0,
+                        "object_count": 0,
+                        "note": "Using configured bucket",
+                    }
+                ]
 
         bucket_info = []
         for bucket in bucket_list:
@@ -168,7 +175,7 @@ async def list_s3_buckets(
                 bucket_info.append(
                     {
                         "name": bucket_name,
-                        "creation_date": bucket["CreationDate"].isoformat(),
+                        "creation_date": _created(bucket),
                         "total_size": total_size,
                         "object_count": object_count,
                     }
@@ -178,7 +185,7 @@ async def list_s3_buckets(
                 bucket_info.append(
                     {
                         "name": bucket_name,
-                        "creation_date": bucket["CreationDate"].isoformat(),
+                        "creation_date": _created(bucket),
                         "total_size": 0,
                         "object_count": 0,
                         "error": str(e),
@@ -214,138 +221,37 @@ async def list_s3_objects(
 
     # Use configured bucket if not specified
     bucket_name = bucket if bucket else cfg.s3.bucket
+    if bucket_in_endpoint() and bucket_name != cfg.s3.bucket:
+        # Only the configured bucket's prefix belongs to the hub
+        raise HTTPException(400, detail={"error": f"Only bucket {cfg.s3.bucket} can be listed"})
 
     logger.info(
         f"Listing S3 objects: bucket={bucket_name}, prefix={prefix}, limit={limit}"
     )
-    logger.info(f"S3 endpoint: {cfg.s3.endpoint}")
-    logger.info(f"S3 bucket config: {cfg.s3.bucket}")
 
     def _list_objects():
-        # Parse endpoint URL to extract path (for R2 with path-in-endpoint)
-        parsed = urlparse(cfg.s3.endpoint)
-        endpoint_path = parsed.path.strip("/")  # e.g., "sizigi-deepghs-grant"
-
-        # Determine actual bucket, endpoint, and prefix
-        if endpoint_path:
-            # Endpoint has path - first component is bucket, rest is base prefix
-            path_parts = endpoint_path.split("/")
-            root_endpoint = f"{parsed.scheme}://{parsed.netloc}"
-            actual_bucket = path_parts[0]  # "sizigi-deepghs-grant"
-
-            # Combine remaining path parts + configured bucket + user prefix
-            base_prefix_parts = path_parts[1:] + [bucket_name]  # ["hub-storage"]
-            base_prefix = "/".join(base_prefix_parts)
-
-            # Add user-requested prefix
-            if prefix:
-                actual_prefix = f"{base_prefix}/{prefix}"
-            else:
-                actual_prefix = f"{base_prefix}/" if base_prefix else ""
-
-            logger.info(f"Endpoint path detected: '{endpoint_path}'")
-            logger.info(f"Root endpoint: {root_endpoint}")
-            logger.info(f"Actual bucket: {actual_bucket}")
-            logger.info(f"Base prefix: {base_prefix}")
-            logger.info(f"Final prefix: {actual_prefix}")
-
-            # Create client with root endpoint
-            s3_config = {}
-            if cfg.s3.force_path_style:
-                s3_config["addressing_style"] = "path"
-
-            boto_config = BotoConfig(signature_version="s3v4", s3=s3_config)
-
-            s3 = boto3.client(
-                "s3",
-                endpoint_url=root_endpoint,
-                aws_access_key_id=cfg.s3.access_key,
-                aws_secret_access_key=cfg.s3.secret_key,
-                region_name=cfg.s3.region,
-                config=boto_config,
-            )
-        else:
-            # Standard S3/MinIO - use configured client as-is
-            actual_bucket = bucket_name
-            actual_prefix = prefix
-            s3 = get_s3_client()
-            logger.info(
-                f"Standard S3 endpoint - bucket: {actual_bucket}, prefix: {actual_prefix}"
-            )
-
+        # An endpoint with a path is readdressed by the client (bucket_in_endpoint)
+        s3 = get_s3_client()
         try:
-            logger.info(
-                f"Calling list_objects_v2(Bucket='{actual_bucket}', Prefix='{actual_prefix}', MaxKeys={limit})"
-            )
-
-            response = s3.list_objects_v2(
-                Bucket=actual_bucket,
-                Prefix=actual_prefix,
-                MaxKeys=limit,
-            )
-
-            # Log ResponseMetadata
-            metadata = response.get("ResponseMetadata", {})
-            logger.info(
-                f"ResponseMetadata HTTPStatusCode: {metadata.get('HTTPStatusCode')}"
-            )
-            logger.info(f"ResponseMetadata RequestId: {metadata.get('RequestId')}")
-
-            # Log all response fields
-            logger.info(f"Response keys: {list(response.keys())}")
-            for key in ["Name", "Prefix", "KeyCount", "MaxKeys", "IsTruncated"]:
-                if key in response:
-                    logger.info(f"{key}: {response[key]}")
-
-            contents = response.get("Contents", [])
-            logger.info(f"Contents count: {len(contents)}")
-
-            if contents:
-                logger.success(f"Found {len(contents)} objects!")
-                logger.info(f"First 3 keys: {[obj['Key'] for obj in contents[:3]]}")
-
-            # Strip base prefix from keys for frontend display
-            # So frontend sees relative paths from their perspective
-            strip_prefix = f"{base_prefix}/" if endpoint_path and base_prefix else ""
-            logger.info(
-                f"Stripping prefix '{strip_prefix}' from object keys for frontend"
-            )
-
-            objects = []
-            for obj in contents:
-                original_key = obj["Key"]
-                # Remove base prefix to show relative path
-                display_key = (
-                    original_key[len(strip_prefix) :]
-                    if strip_prefix and original_key.startswith(strip_prefix)
-                    else original_key
-                )
-
-                objects.append(
-                    {
-                        "key": display_key,  # Relative path for frontend
-                        "full_key": original_key,  # Full S3 key
-                        "size": obj["Size"],
-                        "last_modified": obj["LastModified"].isoformat(),
-                        "storage_class": obj.get("StorageClass", "STANDARD"),
-                    }
-                )
-
-            if objects:
-                logger.info(
-                    f"Sample display keys: {[obj['key'] for obj in objects[:3]]}"
-                )
-
-            return {
-                "objects": objects,
-                "bucket": bucket_name,
-                "is_truncated": response.get("IsTruncated", False),
-                "key_count": len(objects),
-            }
+            response = s3.list_objects_v2(Bucket=bucket_name, Prefix=prefix, MaxKeys=limit)
         except Exception as e:
-            logger.error(f"Failed to list objects: {e}")
-            logger.exception("Full exception:", e)
+            logger.exception("Failed to list objects", e)
             raise HTTPException(500, detail={"error": str(e)})
+        objects = [
+            {
+                "key": obj["Key"],
+                "size": obj["Size"],
+                "last_modified": obj["LastModified"].isoformat(),
+                "storage_class": obj.get("StorageClass", "STANDARD"),
+            }
+            for obj in response.get("Contents", [])
+        ]
+        return {
+            "objects": objects,
+            "bucket": bucket_name,
+            "is_truncated": response.get("IsTruncated", False),
+            "key_count": len(objects),
+        }
 
     result = await run_in_s3_executor(_list_objects)
 
@@ -404,62 +310,20 @@ async def prepare_delete_prefix(
         Confirmation token, prefix, estimated count, expiration
     """
 
-    # Handle R2 path-in-endpoint (same logic as list_objects)
-    parsed = urlparse(cfg.s3.endpoint)
-    endpoint_path = parsed.path.strip("/")
+    logger.info(f"Counting objects: bucket={cfg.s3.bucket}, prefix={prefix}")
 
-    if endpoint_path:
-        # Endpoint has path - need to add base prefix
-        path_parts = endpoint_path.split("/")
-        actual_bucket = path_parts[0]
-        base_prefix_parts = path_parts[1:] + [cfg.s3.bucket]
-        base_prefix = "/".join(base_prefix_parts)
-        actual_prefix = f"{base_prefix}/{prefix}" if prefix else f"{base_prefix}/"
-    else:
-        # Standard S3 - use prefix as-is
-        actual_bucket = cfg.s3.bucket
-        actual_prefix = prefix
-
-    logger.info(f"Counting objects: bucket={actual_bucket}, prefix={actual_prefix}")
-
-    # Count objects with prefix
     def _count():
-        # Parse endpoint for R2 support
-        if endpoint_path:
-            root_endpoint = f"{parsed.scheme}://{parsed.netloc}"
-            s3_config = {}
-            if cfg.s3.force_path_style:
-                s3_config["addressing_style"] = "path"
-            boto_config = BotoConfig(signature_version="s3v4", s3=s3_config)
-            s3 = boto3.client(
-                "s3",
-                endpoint_url=root_endpoint,
-                aws_access_key_id=cfg.s3.access_key,
-                aws_secret_access_key=cfg.s3.secret_key,
-                region_name=cfg.s3.region,
-                config=boto_config,
-            )
-        else:
-            s3 = get_s3_client()
-
-        paginator = s3.get_paginator("list_objects_v2")
-        count = 0
-        for page in paginator.paginate(Bucket=actual_bucket, Prefix=actual_prefix):
-            count += len(page.get("Contents", []))
-        return count
+        # An endpoint with a path is readdressed by the client (bucket_in_endpoint)
+        paginator = get_s3_client().get_paginator("list_objects_v2")
+        pages = paginator.paginate(Bucket=cfg.s3.bucket, Prefix=prefix)
+        return sum(len(page.get("Contents", [])) for page in pages)
 
     estimated = await run_in_s3_executor(_count)
 
     # Create confirmation token in database (works across workers)
-    # Store ACTUAL prefix (with base prefix if needed) for deletion
     conf_token = create_confirmation_token(
         action_type="delete_s3_prefix",
-        action_data={
-            "display_prefix": prefix,  # What frontend sees
-            "actual_prefix": actual_prefix,  # What S3 sees
-            "actual_bucket": actual_bucket,  # Actual bucket name
-            "estimated_count": estimated,
-        },
+        action_data={"display_prefix": prefix, "estimated_count": estimated},
         ttl_seconds=60,
     )
 
@@ -502,64 +366,28 @@ async def delete_s3_prefix(
     if action_data.get("display_prefix") != prefix:
         raise HTTPException(400, detail="Prefix mismatch with confirmation token")
 
-    # Use actual S3 prefix and bucket from token (handles R2 path-in-endpoint)
-    actual_prefix = action_data.get("actual_prefix")
-    actual_bucket = action_data.get("actual_bucket")
+    logger.info(f"Deleting: bucket={cfg.s3.bucket}, prefix={prefix}")
 
-    logger.info(f"Deleting: bucket={actual_bucket}, prefix={actual_prefix}")
-
-    # Delete objects - handle R2 path-in-endpoint
-    parsed = urlparse(cfg.s3.endpoint)
-    endpoint_path = parsed.path.strip("/")
-
-    def _delete_with_r2_support():
-        # Create appropriate S3 client based on endpoint type
-        if endpoint_path:
-            # R2 with path - use root endpoint
-            root_endpoint = f"{parsed.scheme}://{parsed.netloc}"
-            s3_config = {}
-            if cfg.s3.force_path_style:
-                s3_config["addressing_style"] = "path"
-            boto_config = BotoConfig(signature_version="s3v4", s3=s3_config)
-            s3 = boto3.client(
-                "s3",
-                endpoint_url=root_endpoint,
-                aws_access_key_id=cfg.s3.access_key,
-                aws_secret_access_key=cfg.s3.secret_key,
-                region_name=cfg.s3.region,
-                config=boto_config,
-            )
-        else:
-            # Standard S3/MinIO
-            s3 = get_s3_client()
-
-        # Delete objects
+    def _delete():
+        # An endpoint with a path is readdressed by the client (bucket_in_endpoint)
+        s3 = get_s3_client()
         paginator = s3.get_paginator("list_objects_v2")
         deleted_count = 0
-
-        # List and delete in batches
-        for page in paginator.paginate(Bucket=actual_bucket, Prefix=actual_prefix):
-            if "Contents" not in page or not page["Contents"]:
+        for page in paginator.paginate(Bucket=cfg.s3.bucket, Prefix=prefix):
+            keys = [{"Key": obj["Key"]} for obj in page.get("Contents", [])]
+            if not keys:
                 continue
-
-            # Delete batch (max 1000 objects)
-            delete_keys = [{"Key": obj["Key"]} for obj in page["Contents"]]
             response = s3.delete_objects(
-                Bucket=actual_bucket,
-                Delete={"Objects": delete_keys, "Quiet": True},
+                Bucket=cfg.s3.bucket, Delete={"Objects": keys, "Quiet": True}
             )
-
-            deleted_count += len(response.get("Deleted", []))
-
-            if "Errors" in response:
-                for error in response["Errors"]:
-                    logger.warning(
-                        f"Failed to delete {error['Key']}: {error['Message']}"
-                    )
-
+            # Quiet: S3 answers only the keys it could not delete
+            errors = response.get("Errors", [])
+            deleted_count += len(keys) - len(errors)
+            for error in errors:
+                logger.warning(f"Failed to delete {error['Key']}: {error['Message']}")
         return deleted_count
 
-    deleted_count = await run_in_s3_executor(_delete_with_r2_support)
+    deleted_count = await run_in_s3_executor(_delete)
 
     logger.warning(f"Admin deleted S3 prefix: {prefix} ({deleted_count} objects)")
 
