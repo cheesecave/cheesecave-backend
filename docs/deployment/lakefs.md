@@ -30,6 +30,8 @@ How this was determined:
   passes on every sampled release from 1.48.1 to 1.88.0 except 1.70.0.
 - Releases below 1.48.1 failed the Reset tests of the earlier, merge-based
   Reset. The current Reset has not been run on them.
+- These runs used the earlier Reset. The current one, a metarange commit, is
+  run by CI on 1.48.1 and 1.86.0.
 
 CI runs the suite on 1.86.0 and on 1.48.1, the oldest supported release.
 

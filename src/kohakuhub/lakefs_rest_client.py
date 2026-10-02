@@ -338,7 +338,9 @@ class LakeFSRestClient:
         client = self._httpx()
         response = await client.post(
             url,
-            params={"source_metarange": source_metarange} if source_metarange else {},
+            # An empty id is sent too: LakeFS refuses it, where leaving it out
+            # would commit the branch's staged changes instead
+            params={} if source_metarange is None else {"source_metarange": source_metarange},
             json=commit_data,
             auth=self.auth,
             timeout=None,  # No timeout for internal service

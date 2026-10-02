@@ -753,6 +753,7 @@ async def test_commit_can_take_a_source_metarange(monkeypatch):
         [
             _response("POST", url, status=201, json_data={"id": "c2", "meta_range_id": "mr-1"}),
             _response("POST", url, status=201, json_data={"id": "c3"}),
+            _response("POST", url, status=400, text='{"message":"empty value is not allowed"}'),
         ]
     )
     monkeypatch.setattr(lakefs_rest.httpx, "AsyncClient", factory)
@@ -767,6 +768,10 @@ async def test_commit_can_take_a_source_metarange(monkeypatch):
     assert factory.calls[0][2]["json"] == {"message": "Reset", "metadata": {"reset_to": "c1"}}
     assert factory.calls[1][2]["params"] == {}
     assert factory.calls[1][2]["json"] == {"message": "Plain"}
+    # An empty id is sent for LakeFS to refuse, never dropped into a plain commit
+    with pytest.raises(httpx.HTTPStatusError):
+        await client.commit("repo", "main", "Reset", source_metarange="")
+    assert factory.calls[2][2]["params"] == {"source_metarange": ""}
 
 
 @pytest.mark.asyncio

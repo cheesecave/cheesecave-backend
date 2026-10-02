@@ -112,8 +112,14 @@ async def reset_branch(
         paths = await availability.changed_paths(client, lakefs_repo, parent, target)
         rounds = [(made["id"], await availability.entries(client, lakefs_repo, target, paths))]
         await records.claim_objects(rounds[0][1], action)
-    except OperationRefused as e:
+    except OperationRefused as e:  # missing files: unlike a refusal, the commit is in
+        missing = e.detail["missing_files"]
         e.rounds, e.detail["commits"] = rounds, [made["id"]]
+        e.detail["error"] = (
+            f"Reset committed as {made['id'][:8]} on top of a concurrent commit, but "
+            f"{len(missing)} LFS file(s) it restored are no longer stored "
+            f"(garbage collected or missing): {records.shown(missing)}"
+        )
         raise
     except Exception as e:
         logger.exception(f"Reset of {lakefs_repo}@{branch} failed after committing", e)

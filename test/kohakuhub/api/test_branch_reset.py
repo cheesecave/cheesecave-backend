@@ -111,8 +111,6 @@ def _scratch_branches(branches):
     return [b["id"] for b in branches["results"] if b["id"].startswith("kh-reset-")]
 
 
-
-
 def _status_error(status, text):
     request = httpx.Request("POST", "http://lakefs")
     response = httpx.Response(status, request=request, text=text)
@@ -349,9 +347,11 @@ async def test_a_concurrent_commit_is_reset_too(m, owner_client, monkeypatch):
     concurrent = []
 
     async def racing(n):
-        # a.bin: a path the reset changes anyway; late.txt: one it did not plan to
+        # a.bin: a path the reset changes anyway; late.txt and new.bin: paths
+        # it did not plan to touch, which the target lacks
         if n == 1:
-            concurrent.append(await repo.commit(lfs("a.bin", b"a v9"), _file("late.txt", "late")))
+            ops = (lfs("a.bin", b"a v9"), _file("late.txt", "late"), lfs("new.bin", b"new"))
+            concurrent.append(await repo.commit(*ops))
 
     _on_reset_commit(m, monkeypatch, before=racing)
     response = await _reset(repo, c1)
@@ -361,8 +361,9 @@ async def test_a_concurrent_commit_is_reset_too(m, owner_client, monkeypatch):
     assert await _differs(m, repo, head, c1) == []
     made = await m.client.get_commit(repository=repo.lakefs_repo, commit_id=head)
     assert made["parents"] == concurrent and made["metadata"]["reset_to"] == c1
-    assert _files(m, repo)["late.txt"][2] is True
-    assert _head_refs(m, repo) == {("a.bin", sha(b"a v1"))}
+    files = _files(m, repo)
+    assert files["late.txt"][2] is True and files["new.bin"][2] is True
+    assert _head_refs(m, repo) == {("a.bin", sha(b"a v1"))}  # new.bin's reference is gone
     H = m.db.LFSObjectHistory
     assert H.get((H.commit_id == head) & (H.path_in_repo == "a.bin")).sha256 == sha(b"a v1")
 
@@ -618,6 +619,9 @@ async def test_a_claim_refused_after_a_concurrent_commit_still_records_it(
     detail = response.json()["detail"]
     assert detail["missing_files"] == ["a.bin"]
     assert detail["commits"] == [await repo.head()]
+    # Not "Cannot reset": the reset commit is in
+    assert detail["error"].startswith(f"Reset committed as {detail['commits'][0][:8]} on top of")
+    assert detail["error"].endswith("are no longer stored (garbage collected or missing): a.bin")
     assert _files(m, repo)["x.txt"] == (blob_sha1("x1"), False, False)
     assert _head_refs(m, repo) == {("a.bin", sha(b"a v1"))}
 
