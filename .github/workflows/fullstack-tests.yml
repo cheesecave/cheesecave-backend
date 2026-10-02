@@ -357,13 +357,14 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Create the real bucket and a key scoped to it
+        # S3 on realbucket only; server info too, so that the health probe
+        # looking up the MinIO release (asked at the root) is checked live.
+        # The script is single-quoted: keep apostrophes out of it.
         run: |
           docker exec "${{ job.services.minio.id }}" sh -c '
             set -e
             mc alias set local http://127.0.0.1:9000 minioadmin minioadmin
             mc mb local/realbucket
-            # S3 on realbucket only; server info too, so the health probe's
-            # MinIO release lookup (asked at the root) is checked live
             printf "%s" "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":[\"s3:*\"],\"Resource\":[\"arn:aws:s3:::realbucket\",\"arn:aws:s3:::realbucket/*\"]},{\"Effect\":\"Allow\",\"Action\":[\"admin:ServerInfo\"]}]}" > /tmp/realbucket-only.json
             mc admin user add local hubuser hubpass123
             mc admin policy create local realbucket-only /tmp/realbucket-only.json
