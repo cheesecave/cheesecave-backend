@@ -271,7 +271,7 @@ async def test_the_reset_endpoint_says_why_on_an_old_lakefs(client, monkeypatch)
     assert site["capabilities"]["repository_operations"]["reset"] is False
     assert response.status_code == 503
     assert response.json()["detail"]["code"] == "operation_disabled"
-    assert "Reset would leave a merge commit" in response.json()["detail"]["message"]
+    assert "Reset is not verified on it" in response.json()["detail"]["message"]
 
 
 async def test_the_reset_gate_learns_the_lakefs_version_first(client, monkeypatch):

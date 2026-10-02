@@ -313,6 +313,7 @@ class LakeFSRestClient:
         branch: str,
         message: str,
         metadata: dict[str, Any] | None = None,
+        source_metarange: str | None = None,
     ) -> dict[str, Any]:
         """Create commit.
 
@@ -321,6 +322,9 @@ class LakeFSRestClient:
             branch: Branch name
             message: Commit message
             metadata: Optional commit metadata
+            source_metarange: Commit this metarange as the tree instead of the
+                branch's staged changes; LakeFS refuses it while the branch has
+                uncommitted changes, and does not check that it exists
 
         Returns:
             Commit dict with keys: id, parents, committer, message, creation_date, meta_range_id, metadata
@@ -334,6 +338,7 @@ class LakeFSRestClient:
         client = self._httpx()
         response = await client.post(
             url,
+            params={"source_metarange": source_metarange} if source_metarange else {},
             json=commit_data,
             auth=self.auth,
             timeout=None,  # No timeout for internal service
@@ -571,23 +576,6 @@ class LakeFSRestClient:
             url, params={"path": path, "force": force}, auth=self.auth, timeout=None
         )
         self._check_response(response)
-
-    async def copy_object(
-        self, repository: str, branch: str, dest_path: str, src_ref: str, src_path: str
-    ) -> dict[str, Any]:
-        """Copy ``src_ref:src_path`` to ``dest_path`` on ``branch``, inside the
-        object store: no content passes through this service."""
-        url = f"{self.base_url}/repositories/{repository}/branches/{branch}/objects/copy"
-        client = self._httpx()
-        response = await client.post(
-            url,
-            params={"dest_path": dest_path},
-            json={"src_path": src_path, "src_ref": src_ref},
-            auth=self.auth,
-            timeout=None,
-        )
-        self._check_response(response)
-        return response.json()
 
     async def delete_objects(self, repository: str, branch: str, paths: list[str]) -> None:
         """Delete up to 1000 objects from ``branch`` in one request."""

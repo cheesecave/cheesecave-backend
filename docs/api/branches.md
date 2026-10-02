@@ -66,9 +66,9 @@ Each flag stays as an off switch. Set `KOHAKU_HUB_REPOSITORY_REVERT_ENABLED`,
 An operation is available only when:
 
 - `db_backend = "postgres"`. Any other backend keeps all three disabled.
-- For Reset, the LakeFS server is 1.48.1 or later. On an older LakeFS, Reset
-  would leave a merge commit instead of one linear commit, so it is disabled
-  and its `503` says so. See [LakeFS compatibility](../deployment/lakefs.md).
+- For Reset, the LakeFS server is 1.48.1 or later, the oldest release it is
+  verified on. On an older LakeFS it is disabled and its `503` says so. See
+  [LakeFS compatibility](../deployment/lakefs.md).
 
 ## Branches
 
@@ -300,15 +300,15 @@ bucket. Objects the head already has need nothing restored. Otherwise:
 - `200 OK` - Reset successful
 - `400 Bad Request` - LFS files no longer stored, `main` without `force`, or the branch is already at the target state
 - `404 Not Found` - Commit not found
-- `409 Conflict` - The branch kept changing during the reset (concurrent commits), or it has uncommitted changes (an upload in progress); try again
+- `409 Conflict` - The branch has uncommitted changes (an upload in progress); try again
 - `503 Service Unavailable` - Reset operation is disabled by server policy
 
 **How it works:**
 - A two-dot diff between the head and the target, read to the end, gives every path to change.
-- No file content passes through the API: LFS files link their global `lfs/<sha256>` object again (same identity), regular files are copied inside the object store, removed files are deleted in batches. `lakefs.operation_concurrency` bounds the concurrent LakeFS requests.
-- The new tree is built on a scratch branch and squash-merged onto the branch in one step, so readers never see a half-done reset, and a failure before that merge leaves the branch as it was.
-- The result must equal the target. Where a concurrent commit changed the same paths, the merge takes the target's version; paths the reset did not touch, merged alongside, make it run again from the new head (at most three rounds). The concurrent commits stay in the history. If the branch came to equal the target on its own, `commit_id` is that head (LakeFS versions that refuse a merge with nothing to add make no reset commit then; older ones record an empty one).
-- An error after a reset commit was merged (giving up, a missing file, a failure) lists the commits made in `commits`; they are on the branch and recorded.
+- The reset is one LakeFS commit of the target's own metarange (`source_metarange`) on top of the branch head. It is applied atomically, and no object is copied or linked, so it works whatever the object store (#133). Recording the changed regular files' git blob ids still reads them, as before. A failure before that commit leaves the branch as it was.
+- A commit that lands concurrently becomes the reset commit's parent. The result still equals the target, the concurrent commit stays in the history, and the paths it changed are claimed and recorded too. If the branch came to equal the target meanwhile, the reset commit changes nothing more and is recorded like any other.
+- The initial commit has no metarange (an empty tree): a scratch branch with every file deleted provides one.
+- An error after the reset commit landed (a missing file, a failure) names it in `commits`; it is on the branch and recorded.
 - Before answering, the File table, LFS history, branch head references, commit record and storage usage are updated for the paths that changed, from what the branch holds. The versions replaced are left to garbage collection, which runs in the background.
 
 **Changed from earlier versions:** `force` no longer skips the LFS check, the 400 body has no `affected_commits`, a target equal to the head answers 400 (not 500), and 409 is new.

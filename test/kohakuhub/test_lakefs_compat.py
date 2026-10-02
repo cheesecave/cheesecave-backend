@@ -41,7 +41,7 @@ def test_each_boundary(version, status, license, reset_supported):
 
 
 def test_the_messages_say_why():
-    assert "Reset would leave a merge commit" in lakefs_compat.assess("1.40.0").message
+    assert "Reset is not verified on it" in lakefs_compat.assess("1.40.0").message
     assert "without TLS" in lakefs_compat.assess("1.70.0").message
     assert '"do not use"' in lakefs_compat.assess("1.48.0").message
     assert "newest tested release, 1.88.0" in lakefs_compat.assess("1.90.0").message

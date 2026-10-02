@@ -744,12 +744,37 @@ async def test_close_lakefs_rest_client_resets_singleton(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_copy_and_bulk_delete_objects(monkeypatch):
+async def test_commit_can_take_a_source_metarange(monkeypatch):
+    """A commit whose tree is a given metarange (a reset), sent as LakeFS's
+    ``source_metarange`` query parameter; a plain commit sends none."""
+    client = lakefs_rest.LakeFSRestClient("https://lakefs.example.com", "ak", "sk")
+    url = "https://lakefs.example.com/api/v1/repositories/repo/branches/main/commits"
+    factory = _AsyncClientFactory(
+        [
+            _response("POST", url, status=201, json_data={"id": "c2", "meta_range_id": "mr-1"}),
+            _response("POST", url, status=201, json_data={"id": "c3"}),
+        ]
+    )
+    monkeypatch.setattr(lakefs_rest.httpx, "AsyncClient", factory)
+
+    made = await client.commit(
+        "repo", "main", "Reset", metadata={"reset_to": "c1"}, source_metarange="mr-1"
+    )
+    assert made == {"id": "c2", "meta_range_id": "mr-1"}
+    await client.commit("repo", "main", "Plain")
+
+    assert factory.calls[0][2]["params"] == {"source_metarange": "mr-1"}
+    assert factory.calls[0][2]["json"] == {"message": "Reset", "metadata": {"reset_to": "c1"}}
+    assert factory.calls[1][2]["params"] == {}
+    assert factory.calls[1][2]["json"] == {"message": "Plain"}
+
+
+@pytest.mark.asyncio
+async def test_bulk_delete_objects(monkeypatch):
     client = lakefs_rest.LakeFSRestClient("https://lakefs.example.com", "ak", "sk")
     base = "https://lakefs.example.com/api/v1/repositories/repo/branches/scratch/objects"
     factory = _AsyncClientFactory(
         [
-            _response("POST", f"{base}/copy", status=201, json_data={"path": "b.txt"}),
             _response("POST", f"{base}/delete", json_data={"errors": []}),
             _response("POST", f"{base}/delete", json_data={}),
             _response(
@@ -761,15 +786,10 @@ async def test_copy_and_bulk_delete_objects(monkeypatch):
     )
     monkeypatch.setattr(lakefs_rest.httpx, "AsyncClient", factory)
 
-    assert await client.copy_object("repo", "scratch", "b.txt", "commit-1", "a.txt") == {
-        "path": "b.txt"
-    }
     await client.delete_objects("repo", "scratch", ["a.txt", "b.txt"])
     await client.delete_objects("repo", "scratch", ["a.txt"])
     # A partial failure comes back as 200 with the failed paths listed
     with pytest.raises(RuntimeError, match="c.txt"):
         await client.delete_objects("repo", "scratch", ["c.txt"])
 
-    assert factory.calls[0][2]["params"] == {"dest_path": "b.txt"}
-    assert factory.calls[0][2]["json"] == {"src_path": "a.txt", "src_ref": "commit-1"}
-    assert factory.calls[1][2]["json"] == {"paths": ["a.txt", "b.txt"]}
+    assert factory.calls[0][2]["json"] == {"paths": ["a.txt", "b.txt"]}

@@ -13,7 +13,7 @@ release works with it, and LakeFS changed its license in 1.87.0.
 
 | LakeFS | Status | Why |
 | --- | --- | --- |
-| below 1.48.0 | **Unsupported** | Reset reports success but leaves a merge commit with two parents instead of one linear commit. KohakuHub disables Reset on these releases. |
+| below 1.48.0 | **Unsupported** | Reset is not verified on these releases, so KohakuHub disables it. The earlier, merge-based Reset left a merge commit with two parents here; the current one commits a metarange, which LakeFS has offered since 1.0, but has not been run here. |
 | 1.48.0 | **Unsupported** | LakeFS's own "do not use" release: it squashes every merge by default. |
 | 1.48.1 – 1.69.x | Supported | |
 | 1.70.0 | **Unsupported** | Cannot store regular files on an S3 endpoint without TLS, such as the bundled MinIO. Fixed in 1.70.1. |
@@ -28,7 +28,8 @@ How this was determined:
 - Its LakeFS-heavy part (186 tests: Super Squash, Reset, Revert, commit
   availability, garbage collection, storage usage, Hugging Face compatibility)
   passes on every sampled release from 1.48.1 to 1.88.0 except 1.70.0.
-- Releases below 1.48.1 fail the Reset tests.
+- Releases below 1.48.1 failed the Reset tests of the earlier, merge-based
+  Reset. The current Reset has not been run on them.
 
 CI runs the suite on 1.86.0 and on 1.48.1, the oldest supported release.
 
