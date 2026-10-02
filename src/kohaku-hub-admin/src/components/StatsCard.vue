@@ -49,12 +49,12 @@ const colorClasses = {
 <template>
   <el-card shadow="hover" class="stat-card-wrapper">
     <div class="stat-card" :class="colorClasses[color]">
-      <div :class="icon" class="text-5xl mb-3 opacity-80" />
-      <div class="text-5xl font-bold mb-2">{{ value }}</div>
-      <div class="text-lg opacity-90" :class="{ 'mb-2': subtitle }">
+      <div :class="icon" class="stat-icon text-5xl mb-3 opacity-80" />
+      <div class="stat-value text-5xl font-bold mb-2">{{ value }}</div>
+      <div class="stat-title text-lg opacity-90 mb-2">
         {{ title }}
       </div>
-      <div v-if="subtitle" class="text-sm opacity-75">
+      <div class="stat-subtitle text-sm opacity-75" :aria-hidden="!subtitle">
         {{ subtitle }}
       </div>
     </div>
@@ -63,7 +63,16 @@ const colorClasses = {
 
 <style scoped>
 .stat-card-wrapper {
+  display: flex;
+  min-width: 0;
+  margin-bottom: 0;
   transition: transform 0.2s;
+}
+
+.stat-card-wrapper :deep(.el-card__body) {
+  display: flex;
+  flex: 1;
+  min-width: 0;
 }
 
 .stat-card-wrapper:hover {
@@ -71,6 +80,12 @@ const colorClasses = {
 }
 
 .stat-card {
+  container-type: inline-size;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  min-width: 0;
   text-align: center;
   padding: 32px;
   border-radius: 8px;
@@ -80,6 +95,29 @@ const colorClasses = {
     var(--tw-gradient-from),
     var(--tw-gradient-to)
   );
+}
+
+.stat-icon {
+  flex-shrink: 0;
+}
+
+.stat-value {
+  font-size: clamp(2rem, 20cqi, 3rem);
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-height: 2lh;
+  overflow-wrap: anywhere;
+}
+
+.stat-title,
+.stat-subtitle {
+  width: 100%;
+  min-height: 2lh;
+  flex-shrink: 0;
+  overflow-wrap: anywhere;
 }
 
 .from-blue-500 {
