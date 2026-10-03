@@ -6,9 +6,13 @@ import AutoImport from 'unplugin-auto-import/vite'
 import Components from 'unplugin-vue-components/vite'
 import { ElementPlusResolver } from 'unplugin-vue-components/resolvers'
 import UnoCSS from 'unocss/vite'
+import { getFrontendBuildInfo } from '../../scripts/frontend-build-info.mjs'
 
 export default defineConfig({
   base: '/admin/',
+  define: {
+    __BUILD_INFO__: JSON.stringify(getFrontendBuildInfo())
+  },
   plugins: [
     // Must be before Vue plugin
     VueRouter({
