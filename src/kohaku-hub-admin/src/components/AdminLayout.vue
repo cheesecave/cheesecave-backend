@@ -3,13 +3,29 @@ import { onBeforeUnmount, onMounted, ref } from "vue";
 import { useRouter, useRoute } from "vue-router";
 import { useAdminStore } from "@/stores/admin";
 import { useThemeStore } from "@/stores/theme";
+import { useSiteBrandingStore } from "@/stores/siteBranding";
 import { ElMessage } from "element-plus";
 import GlobalSearch from "@/components/GlobalSearch.vue";
+
+const buildInfo =
+  typeof __BUILD_INFO__ === "undefined"
+    ? { commit: "unknown", dirty: false }
+    : __BUILD_INFO__;
+const versionLabel = `${buildInfo.commit.slice(0, 7)}${buildInfo.dirty ? "-dirty" : ""}`;
+const commitUrl =
+  buildInfo.commit === "unknown"
+    ? null
+    : `https://github.com/deepghs/KohakuHub/commit/${buildInfo.commit}`;
+const versionTitle =
+  buildInfo.commit === "unknown"
+    ? "Frontend Git commit unavailable"
+    : `Frontend Git commit: ${buildInfo.commit}${buildInfo.dirty ? " (uncommitted changes)" : ""}`;
 
 const router = useRouter();
 const route = useRoute();
 const adminStore = useAdminStore();
 const themeStore = useThemeStore();
+const siteBrandingStore = useSiteBrandingStore();
 
 const globalSearchRef = ref(null);
 const sidebarScrollRef = ref(null);
@@ -58,6 +74,11 @@ function openGlobalSearch() {
 
 const menuItems = [
   { path: "/", label: "Dashboard", icon: "i-carbon-dashboard" },
+  {
+    path: "/site-branding",
+    label: "Site Branding",
+    icon: "i-carbon-paint-brush",
+  },
   { path: "/users", label: "Users", icon: "i-carbon-user-multiple" },
   { path: "/invitations", label: "Invitations", icon: "i-carbon-email" },
   { path: "/repositories", label: "Repositories", icon: "i-carbon-data-base" },
@@ -107,7 +128,14 @@ const menuItems = [
     <el-aside width="250px" class="sidebar">
       <div class="sidebar-header">
         <div
+          v-if="!siteBrandingStore.branding.header_logo"
           class="i-carbon-security text-2xl text-blue-600 dark:text-blue-400"
+        />
+        <img
+          v-else
+          :src="siteBrandingStore.branding.header_logo"
+          :alt="`${siteBrandingStore.branding.site_name} logo`"
+          class="sidebar-brand-logo"
         />
         <h2 class="text-xl font-bold ml-2 text-gray-900 dark:text-gray-100">
           Admin Portal
@@ -157,6 +185,23 @@ const menuItems = [
           <div class="i-carbon-chevron-down" aria-hidden="true" />
         </button>
       </div>
+      <div
+        class="sidebar-version"
+        data-testid="frontend-version"
+        :title="versionTitle"
+      >
+        Frontend
+        <a
+          v-if="commitUrl"
+          :href="commitUrl"
+          target="_blank"
+          rel="noopener noreferrer"
+          :aria-label="`View frontend Git commit ${buildInfo.commit} on GitHub`"
+        >
+          {{ versionLabel }}
+        </a>
+        <span v-else>{{ versionLabel }}</span>
+      </div>
     </el-aside>
 
     <!-- Main Content -->
@@ -164,8 +209,11 @@ const menuItems = [
       <!-- Header -->
       <el-header class="header">
         <div class="header-title">
-          <h1 class="text-xl font-semibold text-gray-900 dark:text-gray-100">
-            KohakuHub Administration
+          <h1
+            class="text-xl font-semibold text-gray-900 dark:text-gray-100"
+            :title="`${siteBrandingStore.branding.site_name} Administration`"
+          >
+            {{ siteBrandingStore.branding.site_name }} Administration
           </h1>
         </div>
 
@@ -235,11 +283,42 @@ const menuItems = [
   color: white !important;
 }
 
+.sidebar-brand-logo {
+  width: 32px;
+  height: 32px;
+  object-fit: contain;
+}
+
 .sidebar-navigation {
   position: relative;
   flex: 1;
   min-height: 0;
   overflow: hidden;
+}
+
+.sidebar-version {
+  flex-shrink: 0;
+  padding: 12px 20px;
+  border-top: 1px solid var(--border-light);
+  color: var(--text-secondary);
+  font-family: monospace;
+  font-size: 12px;
+}
+
+.sidebar-version a {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.sidebar-version a:hover {
+  color: var(--color-info);
+}
+
+.sidebar-version a:focus-visible {
+  outline: 2px solid var(--color-info);
+  outline-offset: 3px;
+  border-radius: 2px;
 }
 
 .sidebar-scroll {
@@ -313,10 +392,19 @@ const menuItems = [
 
 .header-title {
   flex: 1;
+  min-width: 0;
+  padding-right: 12px;
+}
+
+.header-title h1 {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .header-actions {
   display: flex;
+  flex-shrink: 0;
   align-items: center;
   gap: 12px;
 }

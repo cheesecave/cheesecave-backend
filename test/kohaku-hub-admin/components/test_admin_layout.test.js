@@ -18,6 +18,9 @@ const mocks = vi.hoisted(() => ({
     isDark: false,
     toggle: vi.fn(),
   },
+  siteBrandingStore: {
+    branding: { site_name: "DeepGHS Hub", header_logo: null },
+  },
   globalSearch: {
     openDialog: vi.fn(),
   },
@@ -34,6 +37,10 @@ vi.mock("@/stores/admin", () => ({
 
 vi.mock("@/stores/theme", () => ({
   useThemeStore: () => mocks.themeStore,
+}));
+
+vi.mock("@/stores/siteBranding", () => ({
+  useSiteBrandingStore: () => mocks.siteBrandingStore,
 }));
 
 vi.mock("element-plus", async () => {
@@ -66,7 +73,8 @@ describe("AdminLayout", () => {
   function mountLayout() {
     return mount(AdminLayout, {
       slots: {
-        default: '<section data-slot-content="true">Dashboard content</section>',
+        default:
+          '<section data-slot-content="true">Dashboard content</section>',
       },
       global: {
         stubs: ElementPlusStubs,
@@ -74,12 +82,47 @@ describe("AdminLayout", () => {
     });
   }
 
+  it.each([false, true])("shows the frontend commit with dirty=%s", (dirty) => {
+    const commit = "0123456789abcdef0123456789abcdef01234567";
+    vi.stubGlobal("__BUILD_INFO__", { commit, dirty });
+    const version = mountLayout().get('[data-testid="frontend-version"]');
+
+    expect(version.text()).toBe(`Frontend 0123456${dirty ? "-dirty" : ""}`);
+    expect(version.attributes("title")).toContain(commit);
+    expect(version.attributes("title").includes("uncommitted changes")).toBe(
+      dirty,
+    );
+    const commitLink = version.get("a");
+    expect(commitLink.attributes("href")).toBe(
+      `https://github.com/deepghs/KohakuHub/commit/${commit}`,
+    );
+    expect(commitLink.text()).toBe(`0123456${dirty ? "-dirty" : ""}`);
+    expect(commitLink.attributes("target")).toBe("_blank");
+    expect(commitLink.attributes("rel")).toBe("noopener noreferrer");
+    expect(commitLink.attributes("aria-label")).toContain(commit);
+  });
+
+  it("shows an explicit unknown version when build metadata is unavailable", () => {
+    vi.stubGlobal("__BUILD_INFO__", { commit: "unknown", dirty: false });
+    const version = mountLayout().get('[data-testid="frontend-version"]');
+
+    expect(version.text()).toBe("Frontend unknown");
+    expect(version.attributes("title")).toBe("Frontend Git commit unavailable");
+    expect(version.find("a").exists()).toBe(false);
+  });
+
   it("renders the admin navigation, opens global search, and toggles theme", async () => {
     const wrapper = mountLayout();
 
     expect(wrapper.text()).toContain("Admin Portal");
     expect(wrapper.text()).toContain("Repositories");
     expect(wrapper.text()).toContain("Quota Overview");
+    expect(wrapper.text()).toContain("Site Branding");
+    expect(wrapper.text()).toContain("DeepGHS Hub Administration");
+    expect(wrapper.get("h1").attributes("title")).toBe(
+      "DeepGHS Hub Administration",
+    );
+    expect(wrapper.find('[data-index="/site-branding"]').exists()).toBe(true);
     expect(wrapper.find('[data-slot-content="true"]').exists()).toBe(true);
 
     await wrapper

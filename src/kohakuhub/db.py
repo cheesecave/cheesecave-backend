@@ -64,6 +64,19 @@ class BaseModel(Model):
         database = db
 
 
+class SiteBranding(BaseModel):
+    """Site identity overrides; the single row always has primary key 1."""
+
+    id = IntegerField(primary_key=True)
+    site_name = CharField(max_length=100, null=True)
+    footer_description = TextField(null=True)
+    header_logo = TextField(null=True)
+    favicon = TextField(null=True)
+
+    class Meta:
+        table_name = "site_branding"
+
+
 class User(BaseModel):
     """Unified User/Organization model.
 
@@ -735,6 +748,7 @@ def init_db():
     db.connect(reuse_if_open=True)
     db.create_tables(
         [
+            SiteBranding,
             User,
             EmailVerification,
             Session,
