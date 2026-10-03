@@ -2,6 +2,8 @@
 import { ref, computed, onMounted } from "vue";
 import { useRouter } from "vue-router";
 import AdminLayout from "@/components/AdminLayout.vue";
+import AdminPage from "@/components/AdminPage.vue";
+import AdminPageHeader from "@/components/AdminPageHeader.vue";
 import OrphanLakefsRepos from "@/components/storage/OrphanLakefsRepos.vue";
 import LfsReconciliation from "@/components/storage/LfsReconciliation.vue";
 import UsageRecount from "@/components/storage/UsageRecount.vue";
@@ -214,18 +216,20 @@ onMounted(() => {
 
 <template>
   <AdminLayout>
-    <div class="page-container">
-      <div class="flex justify-between items-center mb-6">
-        <h1 class="text-3xl font-bold text-gray-900 dark:text-gray-100">
-          Storage Browser
-        </h1>
-        <el-button @click="loadObjects('')" :loading="loading">
-          <template #icon>
-            <span class="i-carbon-renew" aria-hidden="true" />
-          </template>
-          Refresh
-        </el-button>
-      </div>
+    <AdminPage>
+      <AdminPageHeader
+        title="Storage Browser"
+        subtitle="Browse stored objects and manage storage maintenance."
+      >
+        <template #actions>
+          <el-button @click="loadObjects('')" :loading="loading">
+            <template #icon>
+              <span class="i-carbon-renew" aria-hidden="true" />
+            </template>
+            Refresh
+          </el-button>
+        </template>
+      </AdminPageHeader>
 
       <!-- File Explorer (Direct) -->
       <el-card>
@@ -415,15 +419,11 @@ onMounted(() => {
           )
         "
       />
-    </div>
+    </AdminPage>
   </AdminLayout>
 </template>
 
 <style scoped>
-.page-container {
-  padding: 24px;
-}
-
 .bucket-card {
   background-color: var(--bg-card);
   transition: all 0.3s ease;

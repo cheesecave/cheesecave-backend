@@ -6,7 +6,7 @@ import AutoImport from "unplugin-auto-import/vite";
 
 const testRoot = fileURLToPath(
   new URL("../../test/kohaku-hub-admin", import.meta.url),
-);
+).replaceAll("\\", "/");
 const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
 const adminRoot = dirname(fileURLToPath(import.meta.url));
 const adminNodeModules = resolve(adminRoot, "node_modules");

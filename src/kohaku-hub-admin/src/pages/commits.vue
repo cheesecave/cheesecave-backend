@@ -2,6 +2,8 @@
 import { ref, computed, onMounted } from "vue";
 import { useRouter } from "vue-router";
 import AdminLayout from "@/components/AdminLayout.vue";
+import AdminPage from "@/components/AdminPage.vue";
+import AdminPageHeader from "@/components/AdminPageHeader.vue";
 import { useAdminStore } from "@/stores/admin";
 import { listCommits } from "@/utils/api";
 import { ElMessage } from "element-plus";
@@ -157,12 +159,11 @@ onMounted(() => {
 
 <template>
   <AdminLayout>
-    <div class="page-container">
-      <div class="flex justify-between items-center mb-6">
-        <h1 class="text-3xl font-bold text-gray-900 dark:text-gray-100">
-          Commit History
-        </h1>
-      </div>
+    <AdminPage>
+      <AdminPageHeader
+        title="Commit History"
+        subtitle="Browse repository commits and filter activity by repository or author."
+      />
 
       <!-- Filters -->
       <el-card class="mb-4">
@@ -269,15 +270,11 @@ onMounted(() => {
           />
         </div>
       </el-card>
-    </div>
+    </AdminPage>
   </AdminLayout>
 </template>
 
 <style scoped>
-.page-container {
-  padding: 24px;
-}
-
 :deep(.el-card) {
   background-color: var(--bg-card);
   border-color: var(--border-default);

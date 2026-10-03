@@ -2,6 +2,8 @@
 import { ref, computed, onMounted } from "vue";
 import { useRouter } from "vue-router";
 import AdminLayout from "@/components/AdminLayout.vue";
+import AdminPage from "@/components/AdminPage.vue";
+import AdminPageHeader from "@/components/AdminPageHeader.vue";
 import FileTree from "@/components/FileTree.vue";
 import { useAdminStore } from "@/stores/admin";
 import {
@@ -416,22 +418,24 @@ onMounted(() => {
 
 <template>
   <AdminLayout>
-    <div class="page-container">
-      <div class="flex justify-between items-center mb-6">
-        <h1 class="text-3xl font-bold text-gray-900 dark:text-gray-100">
-          Repository Management
-        </h1>
-        <el-button
-          type="warning"
-          @click="handleRecalculateAll"
-          :loading="recalculating"
-        >
-          <template #icon>
-            <span class="i-carbon-renew" aria-hidden="true" />
-          </template>
-          Recount All Storage
-        </el-button>
-      </div>
+    <AdminPage>
+      <AdminPageHeader
+        title="Repository Management"
+        subtitle="Inspect repositories, manage operations, and review storage usage."
+      >
+        <template #actions>
+          <el-button
+            type="warning"
+            @click="handleRecalculateAll"
+            :loading="recalculating"
+          >
+            <template #icon>
+              <span class="i-carbon-renew" aria-hidden="true" />
+            </template>
+            Recount All Storage
+          </el-button>
+        </template>
+      </AdminPageHeader>
 
       <!-- Search Bar -->
       <el-card class="mb-4">
@@ -937,15 +941,11 @@ onMounted(() => {
           <el-button @click="repoDialogVisible = false">Close</el-button>
         </template>
       </el-dialog>
-    </div>
+    </AdminPage>
   </AdminLayout>
 </template>
 
 <style scoped>
-.page-container {
-  padding: 24px;
-}
-
 .repo-details {
   padding: 12px 0;
 }

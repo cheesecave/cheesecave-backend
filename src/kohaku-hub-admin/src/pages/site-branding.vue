@@ -3,6 +3,8 @@ import { computed, onMounted, reactive, ref } from "vue";
 import { useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
 import AdminLayout from "@/components/AdminLayout.vue";
+import AdminPage from "@/components/AdminPage.vue";
+import AdminPageHeader from "@/components/AdminPageHeader.vue";
 import { useAdminStore } from "@/stores/admin";
 import { useSiteBrandingStore } from "@/stores/siteBranding";
 import { getGifLoop } from "../../../shared/site-branding.js";
@@ -196,17 +198,15 @@ onMounted(loadBranding);
 
 <template>
   <AdminLayout>
-    <div class="branding-page">
-      <div class="branding-heading">
-        <div>
-          <h2 class="text-2xl font-bold">Site Branding</h2>
-          <p class="branding-help">
-            Customize the site name, header logo, favicon and footer
-            description.
-          </p>
-        </div>
-        <el-button :disabled="busy" @click="loadBranding">Reload</el-button>
-      </div>
+    <AdminPage class="branding-page">
+      <AdminPageHeader
+        title="Site Branding"
+        subtitle="Customize the site name, header logo, favicon and footer description."
+      >
+        <template #actions>
+          <el-button :disabled="busy" @click="loadBranding">Reload</el-button>
+        </template>
+      </AdminPageHeader>
 
       <p v-if="errorMessage" class="branding-error" role="alert">
         {{ errorMessage }}
@@ -343,22 +343,13 @@ onMounted(loadBranding);
         unavailable, the last saved branding or the packaged defaults remain
         visible.
       </p>
-    </div>
+    </AdminPage>
   </AdminLayout>
 </template>
 
 <style scoped>
 .branding-page {
-  max-width: 1100px;
-  margin: 0 auto;
   color: var(--text-primary);
-}
-.branding-heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 24px;
 }
 .branding-card {
   margin-bottom: 24px;
@@ -454,9 +445,6 @@ select:disabled {
   .branding-assets {
     grid-template-columns: 1fr;
     gap: 0;
-  }
-  .branding-heading {
-    align-items: flex-start;
   }
 }
 </style>

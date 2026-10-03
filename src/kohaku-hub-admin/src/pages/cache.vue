@@ -2,6 +2,8 @@
 import { computed, onMounted, onBeforeUnmount, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import AdminLayout from "@/components/AdminLayout.vue";
+import AdminPage from "@/components/AdminPage.vue";
+import AdminPageHeader from "@/components/AdminPageHeader.vue";
 import { useAdminStore } from "@/stores/admin";
 import { getCacheStats, resetCacheMetrics } from "@/utils/api";
 import { ElMessage, ElMessageBox } from "element-plus";
@@ -226,19 +228,14 @@ onBeforeUnmount(() => {
 
 <template>
   <AdminLayout>
-    <div class="page-container">
-      <div class="flex justify-between items-center mb-6 gap-4 flex-wrap">
-        <div>
-          <h1 class="text-3xl font-bold text-gray-900 dark:text-gray-100">
-            L2 Cache (Redis)
-          </h1>
-          <p class="text-gray-500 dark:text-gray-400 text-sm mt-1">
-            Hit / miss counters, Redis memory state, and the bootstrap-flush
-            metadata. The cache is never on the correctness critical path —
-            see <code>docs/development/cache.md</code> for the design.
-          </p>
-        </div>
-        <div class="flex items-center gap-3">
+    <AdminPage>
+      <AdminPageHeader title="L2 Cache (Redis)">
+        <template #subtitle
+          >Hit / miss counters, Redis memory state, and the bootstrap-flush
+          metadata. The cache is never on the correctness critical path — see
+          <code>docs/development/cache.md</code> for the design.</template
+        >
+        <template #actions>
           <el-select
             v-model="refreshIntervalSeconds"
             class="refresh-select"
@@ -269,8 +266,8 @@ onBeforeUnmount(() => {
             <div class="i-carbon-reset mr-1" />
             Reset counters
           </el-button>
-        </div>
-      </div>
+        </template>
+      </AdminPageHeader>
 
       <el-alert
         v-if="lastError"
@@ -436,7 +433,7 @@ onBeforeUnmount(() => {
           description="No traffic recorded yet"
         />
       </el-card>
-    </div>
+    </AdminPage>
   </AdminLayout>
 </template>
 
@@ -476,9 +473,4 @@ onBeforeUnmount(() => {
   color: var(--el-text-color-primary);
 }
 
-.page-container {
-  padding: 24px;
-  max-width: 1280px;
-  margin: 0 auto;
-}
 </style>
