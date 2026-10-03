@@ -2,6 +2,8 @@
 import { computed, onMounted, onBeforeUnmount, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import AdminLayout from "@/components/AdminLayout.vue";
+import AdminPage from "@/components/AdminPage.vue";
+import AdminPageHeader from "@/components/AdminPageHeader.vue";
 import { useAdminStore } from "@/stores/admin";
 import { getDependencyHealth } from "@/utils/api";
 import { ElMessage } from "element-plus";
@@ -151,19 +153,14 @@ onBeforeUnmount(() => {
 
 <template>
   <AdminLayout>
-    <div class="page-container">
-      <div class="flex justify-between items-center mb-6 gap-4 flex-wrap">
-        <div>
-          <h1 class="text-3xl font-bold text-gray-900 dark:text-gray-100">
-            Dependency Health
-          </h1>
-          <p class="text-gray-500 dark:text-gray-400 text-sm mt-1">
-            Live probes for the services this hub depends on. Useful for
-            quickly answering "is the deployment healthy?" without leaving the
-            admin UI.
-          </p>
-        </div>
-        <div class="flex items-center gap-3">
+    <AdminPage>
+      <AdminPageHeader title="Dependency Health">
+        <template #subtitle
+          >Live probes for the services this hub depends on. Useful for quickly
+          answering "is the deployment healthy?" without leaving the admin
+          UI.</template
+        >
+        <template #actions>
           <el-select
             v-model="refreshIntervalSeconds"
             class="refresh-select"
@@ -185,8 +182,8 @@ onBeforeUnmount(() => {
             <div class="i-carbon-renew mr-1" />
             Re-check
           </el-button>
-        </div>
-      </div>
+        </template>
+      </AdminPageHeader>
 
       <el-alert
         v-if="lastError"
@@ -293,7 +290,7 @@ onBeforeUnmount(() => {
           description="No probe results yet"
         />
       </div>
-    </div>
+    </AdminPage>
   </AdminLayout>
 </template>
 

@@ -25,16 +25,19 @@ handlers, embedded HTML, animation, external references, and external fonts
 are rejected; local fragment references such as gradients and reusable paths
 are supported. The normalized SVG must fit within 256 KiB.
 
-GIF uploads retain their animation, transparency, and frame timing. Each image
-has an independent **GIF playback** selector: **Loop forever** or **Play once**.
+Header-logo GIF uploads retain their animation, transparency, and frame timing.
+The header logo has a **GIF playback** selector: **Loop forever** or **Play once**.
 Choose the setting before uploading, or change it for an existing GIF and click
 its **Save** button. Play once stops on the final frame; loading the
-image again, such as after a page reload, starts a new playback. Existing GIFs
+image again, such as after a page reload, starts a new playback. Existing header GIFs
 uploaded before animation support were stored as a single PNG frame and must
 be uploaded again to restore animation.
 
-GIF previews and header logos animate. Browser tab favicon animation depends
-on browser support; some browsers show a static frame even for animated GIFs.
+Header-logo GIF previews and header logos animate. Favicons are always static:
+uploading a GIF uses its first frame and stores it as PNG, preserving transparency.
+The favicon card has no GIF playback controls. Older saved GIF favicons are also
+returned as first-frame PNGs without rewriting their database records; no data
+migration or re-upload is required.
 
 Other raster images are decoded and re-encoded as PNG, preserving transparency,
 with decoded input limited to 16 million pixels. Header logos fit within
@@ -74,7 +77,7 @@ All four override columns are nullable. The migration leaves the table empty;
 the first admin save or upload inserts row `1`. The primary key prevents
 duplicate row `1`; the application enforces the single-row convention. Images
 are inline Base64 data URLs, so a full database backup also includes SVGs, GIF
-frames, and GIF playback settings. With two 256 KiB normalized images, their
+frames, and header-logo GIF playback settings. With two 256 KiB normalized images, their
 combined Base64 content is approximately 683 KiB, plus data URL prefixes and
 text; upload limits are enforced by the API rather than SQL constraints.
 
@@ -173,8 +176,8 @@ infrastructure, so run the host migration command for that environment.
    ```
 
    Verify the authenticated admin branding page loads, save a test change,
-   upload an SVG/GIF, and confirm the public header, favicon, footer, and GIF
-   playback after reloading. Restore any temporary validation settings.
+   upload an SVG/GIF, and confirm the public header, static favicon, footer, and
+   header-logo GIF playback after reloading. Restore any temporary validation settings.
 
 Do not rely on starting several raw Uvicorn workers to perform the upgrade:
 the application's existing import-time `init_db()` can create missing tables,
@@ -241,7 +244,8 @@ draft and previously displayed branding.
 
 Image values are either `null` (use the bundled default) or an inline
 `data:image/png;base64,...`, `data:image/gif;base64,...`, or
-`data:image/svg+xml;base64,...` string. GIF loop behavior is encoded in the GIF
+`data:image/svg+xml;base64,...` string. Favicon responses use PNG or SVG.
+Header-logo GIF loop behavior is encoded in the GIF
 contents and remains effective when loaded from the browser cache. Browser
 favicons use the corresponding image MIME type. No admin credentials are part
 of the public response or browser branding cache. `GET /api/site-config` also
@@ -249,19 +253,21 @@ returns the effective site name without including image contents.
 
 All admin operations require `X-Admin-Token` and an enabled admin API:
 
-| Method | Endpoint                                           | Behavior                         |
-| ------ | -------------------------------------------------- | -------------------------------- |
-| GET    | `/admin/api/site-branding`                         | Read saved branding and defaults |
-| PUT    | `/admin/api/site-branding`                         | Update provided text fields      |
-| POST   | `/admin/api/site-branding/assets/{kind}`           | Upload multipart field `file`    |
-| PATCH  | `/admin/api/site-branding/assets/{kind}/animation` | Update GIF playback              |
-| DELETE | `/admin/api/site-branding/assets/{kind}`           | Restore one default image        |
+| Method | Endpoint                                                | Behavior                         |
+| ------ | ------------------------------------------------------- | -------------------------------- |
+| GET    | `/admin/api/site-branding`                              | Read saved branding and defaults |
+| PUT    | `/admin/api/site-branding`                              | Update provided text fields      |
+| POST   | `/admin/api/site-branding/assets/{kind}`                | Upload multipart field `file`    |
+| PATCH  | `/admin/api/site-branding/assets/header_logo/animation` | Update header GIF playback       |
+| DELETE | `/admin/api/site-branding/assets/{kind}`                | Restore one default image        |
 
 `kind` is `header_logo` or `favicon`. Each successful admin operation returns
 the full branding object. The name must be nonblank and at most 100 characters;
 the footer introduction may be empty and is limited to 2,000 characters.
 
-Uploads optionally accept the multipart field `loop` (`true` by default for
-infinite playback, `false` for one playback). Updating playback uses JSON
+Header-logo uploads optionally accept the multipart field `loop` (`true` by default for
+infinite playback, `false` for one playback). Favicon uploads always use the first
+frame; a legacy `loop` value has no effect. Updating header-logo playback uses JSON
 `{"loop": true}` or `{"loop": false}` and requires the selected asset to already
-be a GIF. Playback changes preserve the other image and text settings.
+be a GIF. Playback changes preserve the favicon and text settings. Favicon
+animation updates return HTTP 400 because favicon images have no playback settings.

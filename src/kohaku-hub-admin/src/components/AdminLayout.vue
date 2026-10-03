@@ -221,7 +221,11 @@ const menuItems = [
           <el-button @click="openGlobalSearch" class="search-button">
             <div class="i-carbon-search text-lg" />
             <span class="ml-2 hidden sm:inline">Search</span>
-            <el-tag size="small" effect="plain" class="ml-2 hidden md:inline">
+            <el-tag
+              size="small"
+              effect="plain"
+              class="ml-2 hidden md:inline-flex"
+            >
               Ctrl+K
             </el-tag>
           </el-button>

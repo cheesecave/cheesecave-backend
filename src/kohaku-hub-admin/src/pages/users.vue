@@ -2,6 +2,8 @@
 import { ref, computed, onMounted } from "vue";
 import { useRouter } from "vue-router";
 import AdminLayout from "@/components/AdminLayout.vue";
+import AdminPage from "@/components/AdminPage.vue";
+import AdminPageHeader from "@/components/AdminPageHeader.vue";
 import { useAdminStore } from "@/stores/admin";
 import {
   listUsers,
@@ -417,18 +419,20 @@ onMounted(() => {
 
 <template>
   <AdminLayout>
-    <div class="page-container">
-      <div class="flex justify-between items-center mb-6">
-        <h1 class="text-3xl font-bold text-gray-900 dark:text-gray-100">
-          User Management
-        </h1>
-        <el-button type="primary" @click="dialogVisible = true">
-          <template #icon>
-            <span class="i-carbon-user-follow" aria-hidden="true" />
-          </template>
-          Create User
-        </el-button>
-      </div>
+    <AdminPage>
+      <AdminPageHeader
+        title="User Management"
+        subtitle="Manage accounts, organizations, verification, and storage quotas."
+      >
+        <template #actions>
+          <el-button type="primary" @click="dialogVisible = true">
+            <template #icon>
+              <span class="i-carbon-user-follow" aria-hidden="true" />
+            </template>
+            Create User
+          </el-button>
+        </template>
+      </AdminPageHeader>
 
       <!-- Search Bar -->
       <el-card class="mb-4">
@@ -896,15 +900,11 @@ onMounted(() => {
           </el-button>
         </template>
       </el-dialog>
-    </div>
+    </AdminPage>
   </AdminLayout>
 </template>
 
 <style scoped>
-.page-container {
-  padding: 24px;
-}
-
 .user-details {
   padding: 12px 0;
 }

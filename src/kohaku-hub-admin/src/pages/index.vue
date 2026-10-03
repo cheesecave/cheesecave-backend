@@ -2,6 +2,8 @@
 import { ref, computed, onMounted } from "vue";
 import { useRouter } from "vue-router";
 import AdminLayout from "@/components/AdminLayout.vue";
+import AdminPage from "@/components/AdminPage.vue";
+import AdminPageHeader from "@/components/AdminPageHeader.vue";
 import StatsCard from "@/components/StatsCard.vue";
 import ChartCard from "@/components/ChartCard.vue";
 import { useAdminStore } from "@/stores/admin";
@@ -168,10 +170,11 @@ onMounted(() => {
 
 <template>
   <AdminLayout>
-    <div class="page-container">
-      <h1 class="text-3xl font-bold mb-6 text-gray-900 dark:text-gray-100">
-        Dashboard
-      </h1>
+    <AdminPage>
+      <AdminPageHeader
+        title="Dashboard"
+        subtitle="Monitor system activity, growth and storage usage."
+      />
 
       <div v-loading="loading" class="stats-grid">
         <StatsCard
@@ -453,15 +456,11 @@ onMounted(() => {
           </el-button>
         </div>
       </div>
-    </div>
+    </AdminPage>
   </AdminLayout>
 </template>
 
 <style scoped>
-.page-container {
-  padding: 24px;
-}
-
 .stats-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(250px, 100%), 1fr));

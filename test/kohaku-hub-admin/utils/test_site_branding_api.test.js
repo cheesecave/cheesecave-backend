@@ -57,7 +57,7 @@ describe("admin site branding API", () => {
       expect(url).toBe(`/site-branding/assets/${asset}`);
       expect(form).toBeInstanceOf(FormData);
       expect(form.get("file")).toBe(file);
-      expect(form.get("loop")).toBe("true");
+      expect(form.get("loop")).toBe(asset === "header_logo" ? "true" : null);
       expect(options).toEqual({ timeout: 30000 });
       expect(await resetSiteBrandingAsset("admin-token", asset)).toEqual(
         branding,
@@ -73,15 +73,23 @@ describe("admin site branding API", () => {
     const file = new File(["GIF"], "logo.gif", { type: "image/gif" });
     await uploadSiteBrandingAsset("admin-token", "header_logo", file, false);
     expect(client.post.mock.calls[0][1].get("loop")).toBe("false");
-    for (const asset of ["header_logo", "favicon"]) {
-      expect(
-        await updateSiteBrandingAssetAnimation("admin-token", asset, false),
-      ).toEqual(branding);
-      expect(client.patch).toHaveBeenLastCalledWith(
-        `/site-branding/assets/${asset}/animation`,
-        { loop: false },
-        { timeout: 30000 },
-      );
-    }
+    expect(
+      await updateSiteBrandingAssetAnimation(
+        "admin-token",
+        "header_logo",
+        false,
+      ),
+    ).toEqual(branding);
+    expect(client.patch).toHaveBeenLastCalledWith(
+      "/site-branding/assets/header_logo/animation",
+      { loop: false },
+      { timeout: 30000 },
+    );
+  });
+
+  it("omits playback options for favicon uploads even when a caller supplies them", async () => {
+    const file = new File(["GIF"], "favicon.gif", { type: "image/gif" });
+    await uploadSiteBrandingAsset("admin-token", "favicon", file, false);
+    expect(client.post.mock.calls[0][1].get("loop")).toBeNull();
   });
 });

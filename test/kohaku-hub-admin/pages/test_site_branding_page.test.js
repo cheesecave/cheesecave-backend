@@ -201,7 +201,7 @@ describe("site branding administration", () => {
         "admin-token",
         asset,
         file,
-        true,
+        ...(asset === "header_logo" ? [true] : []),
       );
       expect(
         wrapper
@@ -244,7 +244,7 @@ describe("site branding administration", () => {
         "admin-token",
         asset,
         file,
-        true,
+        ...(asset === "header_logo" ? [true] : []),
       );
       expect(useSiteBrandingStore(pinia).branding[asset]).toBe(svgImage);
     }
@@ -253,38 +253,56 @@ describe("site branding administration", () => {
     );
   });
 
-  it("uploads GIFs with independent playback preferences selected before upload", async () => {
+  it("uploads header GIFs with playback preferences and favicon GIFs as static images", async () => {
     mountPage();
     await flushPromises();
     expect(playbackButton("header_logo")).toBeUndefined();
+    expect(wrapper.find("#favicon-playback").exists()).toBe(false);
     await wrapper.get("#header_logo-playback").setValue("false");
-    for (const [asset, loop, gif] of [
-      ["header_logo", false, gifOnce],
-      ["favicon", true, gifLoop],
-    ]) {
-      const file = new File(["GIF"], "logo.gif", { type: "image/gif" });
-      mocks.uploadSiteBrandingAsset.mockResolvedValue({
-        ...useSiteBrandingStore(pinia).branding,
-        [asset]: gif,
-      });
-      await chooseFile(asset, file);
-      expect(mocks.uploadSiteBrandingAsset).toHaveBeenLastCalledWith(
-        "admin-token",
-        asset,
-        file,
-        loop,
-      );
-      expect(useSiteBrandingStore(pinia).branding[asset]).toBe(gif);
-      expect(wrapper.get(`#${asset}-playback`).element.value).toBe(
-        String(loop),
-      );
-      expect(playbackButton(asset).element.disabled).toBe(true);
-      expect(playbackButton(asset).text()).toBe("Save");
-      expect(playbackButton(asset).attributes("data-type")).toBe("primary");
-    }
+    const headerFile = new File(["GIF"], "logo.gif", { type: "image/gif" });
+    mocks.uploadSiteBrandingAsset.mockResolvedValue({
+      ...original,
+      header_logo: gifOnce,
+    });
+    await chooseFile("header_logo", headerFile);
+    expect(mocks.uploadSiteBrandingAsset).toHaveBeenLastCalledWith(
+      "admin-token",
+      "header_logo",
+      headerFile,
+      false,
+    );
+    expect(wrapper.get("#header_logo-playback").element.value).toBe("false");
+    expect(playbackButton("header_logo").element.disabled).toBe(true);
+    expect(playbackButton("header_logo").text()).toBe("Save");
+    expect(playbackButton("header_logo").attributes("data-type")).toBe(
+      "primary",
+    );
+
+    await wrapper.get("#header_logo-playback").setValue("true");
+    const faviconFile = new File(["GIF"], "favicon.gif", { type: "image/gif" });
+    mocks.uploadSiteBrandingAsset.mockResolvedValue({
+      ...original,
+      header_logo: gifOnce,
+      favicon: image,
+    });
+    await chooseFile("favicon", faviconFile);
+    expect(mocks.uploadSiteBrandingAsset).toHaveBeenLastCalledWith(
+      "admin-token",
+      "favicon",
+      faviconFile,
+    );
+    expect(useSiteBrandingStore(pinia).branding.favicon).toBe(image);
+    expect(wrapper.get("#header_logo-playback").element.value).toBe("true");
+    expect(playbackButton("header_logo").element.disabled).toBe(false);
+    expect(document.querySelector('link[rel="icon"]').type).toBe("image/png");
+    expect(wrapper.find("#favicon-playback").exists()).toBe(false);
+    expect(playbackButton("favicon")).toBeUndefined();
+    expect(wrapper.text()).toContain(
+      "For favicons, only the first GIF frame is used.",
+    );
   });
 
-  it("loads persisted playback and saves each GIF setting without overwriting other drafts", async () => {
+  it("omits favicon playback even for a legacy GIF while saving header playback without overwriting drafts", async () => {
     mocks.getSiteBranding.mockResolvedValue({
       ...original,
       header_logo: gifOnce,
@@ -293,40 +311,26 @@ describe("site branding administration", () => {
     mountPage();
     await flushPromises();
     expect(wrapper.get("#header_logo-playback").element.value).toBe("false");
-    expect(wrapper.get("#favicon-playback").element.value).toBe("true");
+    expect(wrapper.find("#favicon-playback").exists()).toBe(false);
+    expect(playbackButton("favicon")).toBeUndefined();
+    expect(wrapper.findAll("select")).toHaveLength(1);
     await wrapper.get("#site-name").setValue("Unsaved text");
     await wrapper.get("#header_logo-playback").setValue("true");
-    await wrapper.get("#favicon-playback").setValue("false");
     mocks.updateSiteBrandingAssetAnimation.mockResolvedValue({
       ...original,
       header_logo: gifLoop,
-      favicon: gifLoop,
+      favicon: image,
     });
     await playbackButton("header_logo").trigger("click");
     await flushPromises();
-    expect(mocks.updateSiteBrandingAssetAnimation).toHaveBeenLastCalledWith(
-      "admin-token",
-      "header_logo",
-      true,
-    );
+    expect(
+      mocks.updateSiteBrandingAssetAnimation,
+    ).toHaveBeenCalledExactlyOnceWith("admin-token", "header_logo", true);
     expect(wrapper.get("#site-name").element.value).toBe("Unsaved text");
-    expect(wrapper.get("#favicon-playback").element.value).toBe("false");
-    mocks.updateSiteBrandingAssetAnimation.mockResolvedValue({
-      ...original,
-      header_logo: gifLoop,
-      favicon: gifOnce,
-    });
-    await playbackButton("favicon").trigger("click");
-    await flushPromises();
-    expect(mocks.updateSiteBrandingAssetAnimation).toHaveBeenLastCalledWith(
-      "admin-token",
-      "favicon",
-      false,
-    );
     expect(JSON.parse(localStorage.getItem(CACHE_KEY)).branding.favicon).toBe(
-      gifOnce,
+      image,
     );
-    expect(document.querySelector('link[rel="icon"]').type).toBe("image/gif");
+    expect(document.querySelector('link[rel="icon"]').type).toBe("image/png");
   });
 
   it("keeps saved GIF and playback draft on failed playback save", async () => {
@@ -345,7 +349,7 @@ describe("site branding administration", () => {
         }),
     );
     await playbackButton("header_logo").trigger("click");
-    expect(wrapper.get("#favicon-playback").element.disabled).toBe(true);
+    expect(wrapper.get("#favicon").element.disabled).toBe(true);
     rejectSave(new Error("Playback save failed"));
     await flushPromises();
     expect(wrapper.get('[role="alert"]').text()).toBe("Playback save failed");
@@ -356,13 +360,16 @@ describe("site branding administration", () => {
   });
 
   it("restoring a default removes its GIF playback save control", async () => {
-    mocks.getSiteBranding.mockResolvedValue({ ...original, favicon: gifOnce });
+    mocks.getSiteBranding.mockResolvedValue({
+      ...original,
+      header_logo: gifOnce,
+    });
     mountPage();
     await flushPromises();
-    await resetButton("favicon").trigger("click");
+    await resetButton("header_logo").trigger("click");
     await flushPromises();
-    expect(playbackButton("favicon")).toBeUndefined();
-    expect(wrapper.get("#favicon-playback").element.value).toBe("true");
+    expect(playbackButton("header_logo")).toBeUndefined();
+    expect(wrapper.get("#header_logo-playback").element.value).toBe("true");
   });
 
   it("rejects unsupported and oversized files before making a request", async () => {
@@ -443,7 +450,8 @@ describe("site branding administration", () => {
     async (operation) => {
       mocks.getSiteBranding.mockResolvedValue({
         ...original,
-        favicon: operation === "playback" ? gifLoop : image,
+        favicon: image,
+        header_logo: operation === "playback" ? gifLoop : null,
       });
       const unauthorized = { response: { status: 401 } };
       mountPage();
@@ -456,8 +464,8 @@ describe("site branding administration", () => {
         await chooseFile("favicon", new File(["image"], "image.png"));
       } else if (operation === "playback") {
         mocks.updateSiteBrandingAssetAnimation.mockRejectedValue(unauthorized);
-        await wrapper.get("#favicon-playback").setValue("false");
-        await playbackButton("favicon").trigger("click");
+        await wrapper.get("#header_logo-playback").setValue("false");
+        await playbackButton("header_logo").trigger("click");
       } else {
         mocks.resetSiteBrandingAsset.mockRejectedValue(unauthorized);
         await resetButton("favicon").trigger("click");

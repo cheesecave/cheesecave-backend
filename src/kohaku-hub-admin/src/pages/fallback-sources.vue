@@ -2,6 +2,8 @@
 import { onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
 import AdminLayout from "@/components/AdminLayout.vue";
+import AdminPage from "@/components/AdminPage.vue";
+import AdminPageHeader from "@/components/AdminPageHeader.vue";
 import ProbeReportView from "@/components/ProbeReportView.vue";
 import { useChainTesterState } from "@/composables/useChainTesterState";
 import { useAdminStore } from "@/stores/admin";
@@ -870,18 +872,11 @@ onMounted(async () => {
 
 <template>
   <AdminLayout>
-    <div class="page-container">
-      <div class="flex justify-between items-center mb-6 gap-4 flex-wrap">
-        <div>
-          <h1 class="text-3xl font-bold text-gray-900 dark:text-gray-100">
-            Fallback Sources
-          </h1>
-          <p class="text-gray-500 dark:text-gray-400 text-sm mt-1">
-            Manage external repository sources (HuggingFace, other KohakuHub
-            instances).
-          </p>
-        </div>
-      </div>
+    <AdminPage>
+      <AdminPageHeader
+        title="Fallback Sources"
+        subtitle="Manage external repository sources (HuggingFace, other KohakuHub instances)."
+      />
 
       <!-- Cache Stats Card -->
       <el-card v-if="cacheStats" class="stats-card" shadow="hover">
@@ -1854,32 +1849,11 @@ onMounted(async () => {
           </el-button>
         </template>
       </el-dialog>
-    </div>
+    </AdminPage>
   </AdminLayout>
 </template>
 
 <style scoped>
-.page-container {
-  padding: 24px;
-  max-width: 1280px;
-  margin: 0 auto;
-}
-
-.page-header {
-  margin-bottom: 24px;
-}
-
-.page-header h1 {
-  font-size: 24px;
-  font-weight: 600;
-  margin-bottom: 8px;
-}
-
-.page-header p {
-  color: var(--el-text-color-secondary);
-  margin: 0;
-}
-
 .stats-card {
   margin-bottom: 20px;
 }

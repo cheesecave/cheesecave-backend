@@ -2,6 +2,8 @@
 import { ref, onMounted } from "vue";
 import { useRouter } from "vue-router";
 import AdminLayout from "@/components/AdminLayout.vue";
+import AdminPage from "@/components/AdminPage.vue";
+import AdminPageHeader from "@/components/AdminPageHeader.vue";
 import { useAdminStore } from "@/stores/admin";
 import {
   listDatabaseTables,
@@ -184,17 +186,19 @@ onMounted(() => {
 
 <template>
   <AdminLayout>
-    <div class="page-container">
-      <div class="flex justify-between items-center mb-6">
-        <h1 class="text-3xl font-bold text-gray-900 dark:text-gray-100">
-          Database Viewer
-        </h1>
-        <el-alert type="warning" :closable="false" show-icon>
-          <span class="text-sm"
-            >Read-only mode - Only SELECT queries allowed</span
-          >
-        </el-alert>
-      </div>
+    <AdminPage>
+      <el-alert
+        title="Read-only mode - Only SELECT queries allowed"
+        type="warning"
+        :closable="true"
+        show-icon
+        class="mb-6"
+        data-testid="database-read-only-notice"
+      />
+      <AdminPageHeader
+        title="Database Viewer"
+        subtitle="Browse database tables and run read-only SQL queries."
+      />
 
       <div class="database-viewer-container">
         <div class="sidebar-section">
@@ -419,15 +423,11 @@ onMounted(() => {
           />
         </div>
       </div>
-    </div>
+    </AdminPage>
   </AdminLayout>
 </template>
 
 <style scoped>
-.page-container {
-  padding: 24px;
-}
-
 .database-viewer-container {
   display: grid;
   grid-template-columns: 300px 1fr;

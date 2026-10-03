@@ -3,6 +3,8 @@ import { computed, onMounted, reactive, ref } from "vue";
 import { useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
 import AdminLayout from "@/components/AdminLayout.vue";
+import AdminPage from "@/components/AdminPage.vue";
+import AdminPageHeader from "@/components/AdminPageHeader.vue";
 import { useAdminStore } from "@/stores/admin";
 import { useSiteBrandingStore } from "@/stores/siteBranding";
 import { getGifLoop } from "../../../shared/site-branding.js";
@@ -18,12 +20,11 @@ const router = useRouter();
 const adminStore = useAdminStore();
 const siteBrandingStore = useSiteBrandingStore();
 const draft = reactive({ site_name: "", footer_description: "" });
-const playback = reactive({ header_logo: true, favicon: true });
+const playback = ref(true);
 const fileInputs = {};
-const savedPlayback = computed(() => ({
-  header_logo: getGifLoop(siteBrandingStore.branding.header_logo),
-  favicon: getGifLoop(siteBrandingStore.branding.favicon),
-}));
+const savedPlayback = computed(() =>
+  getGifLoop(siteBrandingStore.branding.header_logo),
+);
 const loaded = ref(false);
 const busy = ref(false);
 const errorMessage = ref("");
@@ -74,7 +75,7 @@ function copyText(branding) {
 }
 
 function copyPlayback(asset) {
-  playback[asset] = savedPlayback.value[asset] ?? true;
+  if (asset === "header_logo") playback.value = savedPlayback.value ?? true;
 }
 
 async function loadBranding() {
@@ -85,7 +86,7 @@ async function loadBranding() {
   try {
     siteBrandingStore.apply(await getSiteBranding(adminStore.token));
     copyText(siteBrandingStore.branding);
-    assets.forEach((asset) => copyPlayback(asset.key));
+    copyPlayback("header_logo");
     loaded.value = true;
   } catch (error) {
     showError(error, "Failed to load site branding");
@@ -147,7 +148,9 @@ async function uploadAsset(asset, event) {
   }
   await mutateAsset(
     () =>
-      uploadSiteBrandingAsset(adminStore.token, asset, file, playback[asset]),
+      asset === "header_logo"
+        ? uploadSiteBrandingAsset(adminStore.token, asset, file, playback.value)
+        : uploadSiteBrandingAsset(adminStore.token, asset, file),
     "Image uploaded",
     asset,
   );
@@ -162,18 +165,17 @@ async function resetAsset(asset) {
   );
 }
 
-async function savePlayback(asset) {
-  if (disabled.value || savedPlayback.value[asset] === null || !checkAuth())
-    return;
+async function savePlayback() {
+  if (disabled.value || savedPlayback.value === null || !checkAuth()) return;
   await mutateAsset(
     () =>
       updateSiteBrandingAssetAnimation(
         adminStore.token,
-        asset,
-        playback[asset],
+        "header_logo",
+        playback.value,
       ),
     "GIF playback saved",
-    asset,
+    "header_logo",
   );
 }
 
@@ -196,17 +198,15 @@ onMounted(loadBranding);
 
 <template>
   <AdminLayout>
-    <div class="branding-page">
-      <div class="branding-heading">
-        <div>
-          <h2 class="text-2xl font-bold">Site Branding</h2>
-          <p class="branding-help">
-            Customize the site name, header logo, favicon and footer
-            description.
-          </p>
-        </div>
-        <el-button :disabled="busy" @click="loadBranding">Reload</el-button>
-      </div>
+    <AdminPage class="branding-page">
+      <AdminPageHeader
+        title="Site Branding"
+        subtitle="Customize the site name, header logo, favicon and footer description."
+      >
+        <template #actions>
+          <el-button :disabled="busy" @click="loadBranding">Reload</el-button>
+        </template>
+      </AdminPageHeader>
 
       <p v-if="errorMessage" class="branding-error" role="alert">
         {{ errorMessage }}
@@ -294,35 +294,38 @@ onMounted(loadBranding);
           >
           <p class="branding-help">
             SVG, PNG, JPEG, WebP, GIF or ICO. Maximum 2 MiB. SVG must be
-            self-contained and static. GIF animation is preserved.
+            self-contained and static.
+            {{
+              asset.key === "header_logo"
+                ? "GIF animation is preserved."
+                : "For favicons, only the first GIF frame is used."
+            }}
           </p>
-          <label :for="`${asset.key}-playback`" class="branding-upload-label">
-            GIF playback
-          </label>
-          <select
-            :id="`${asset.key}-playback`"
-            v-model="playback[asset.key]"
-            :disabled="disabled"
-            class="branding-playback"
-          >
-            <option :value="true">Loop forever</option>
-            <option :value="false">Play once</option>
-          </select>
-          <p class="branding-help">
-            Select before uploading a GIF, or save playback for the current GIF.
-            <span v-if="asset.key === 'favicon'">
-              Favicon animation depends on browser support.
-            </span>
-          </p>
+          <template v-if="asset.key === 'header_logo'">
+            <label for="header_logo-playback" class="branding-upload-label">
+              GIF playback
+            </label>
+            <select
+              id="header_logo-playback"
+              v-model="playback"
+              :disabled="disabled"
+              class="branding-playback"
+            >
+              <option :value="true">Loop forever</option>
+              <option :value="false">Play once</option>
+            </select>
+            <p class="branding-help">
+              Select before uploading a GIF, or save playback for the current
+              GIF.
+            </p>
+          </template>
           <div class="branding-actions">
             <el-button
-              v-if="savedPlayback[asset.key] !== null"
+              v-if="asset.key === 'header_logo' && savedPlayback !== null"
               type="primary"
-              :aria-label="`Save ${asset.label.toLowerCase()} playback`"
-              :disabled="
-                disabled || playback[asset.key] === savedPlayback[asset.key]
-              "
-              @click="savePlayback(asset.key)"
+              aria-label="Save header logo playback"
+              :disabled="disabled || playback === savedPlayback"
+              @click="savePlayback"
               >Save</el-button
             >
             <el-button
@@ -340,22 +343,13 @@ onMounted(loadBranding);
         unavailable, the last saved branding or the packaged defaults remain
         visible.
       </p>
-    </div>
+    </AdminPage>
   </AdminLayout>
 </template>
 
 <style scoped>
 .branding-page {
-  max-width: 1100px;
-  margin: 0 auto;
   color: var(--text-primary);
-}
-.branding-heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 24px;
 }
 .branding-card {
   margin-bottom: 24px;
@@ -451,9 +445,6 @@ select:disabled {
   .branding-assets {
     grid-template-columns: 1fr;
     gap: 0;
-  }
-  .branding-heading {
-    align-items: flex-start;
   }
 }
 </style>

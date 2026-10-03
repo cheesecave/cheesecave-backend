@@ -9,6 +9,8 @@ export {}
 declare module 'vue' {
   export interface GlobalComponents {
     AdminLayout: typeof import('./components/AdminLayout.vue')['default']
+    AdminPage: typeof import('./components/AdminPage.vue')['default']
+    AdminPageHeader: typeof import('./components/AdminPageHeader.vue')['default']
     ChartCard: typeof import('./components/ChartCard.vue')['default']
     ElAlert: typeof import('element-plus/es')['ElAlert']
     ElAside: typeof import('element-plus/es')['ElAside']

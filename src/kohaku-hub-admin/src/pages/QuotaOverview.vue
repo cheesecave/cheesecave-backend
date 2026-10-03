@@ -2,6 +2,8 @@
 import { ref, onMounted } from "vue";
 import { useRouter } from "vue-router";
 import AdminLayout from "@/components/AdminLayout.vue";
+import AdminPage from "@/components/AdminPage.vue";
+import AdminPageHeader from "@/components/AdminPageHeader.vue";
 import { useAdminStore } from "@/stores/admin";
 import { getQuotaOverview, formatBytes } from "@/utils/api";
 import { ElMessage } from "element-plus";
@@ -57,18 +59,20 @@ onMounted(() => {
 
 <template>
   <AdminLayout>
-    <div class="page-container">
-      <div class="flex justify-between items-center mb-6">
-        <h1 class="text-3xl font-bold text-gray-900 dark:text-gray-100">
-          Quota Overview
-        </h1>
-        <el-button @click="loadOverview" :loading="loading">
-          <template #icon>
-            <span class="i-carbon-renew" aria-hidden="true" />
-          </template>
-          Refresh
-        </el-button>
-      </div>
+    <AdminPage>
+      <AdminPageHeader
+        title="Quota Overview"
+        subtitle="Review storage usage and users or repositories over quota."
+      >
+        <template #actions>
+          <el-button @click="loadOverview" :loading="loading">
+            <template #icon>
+              <span class="i-carbon-renew" aria-hidden="true" />
+            </template>
+            Refresh
+          </el-button>
+        </template>
+      </AdminPageHeader>
 
       <div v-loading="loading">
         <!-- System Storage Summary -->
@@ -350,15 +354,11 @@ onMounted(() => {
           class="mb-6"
         />
       </div>
-    </div>
+    </AdminPage>
   </AdminLayout>
 </template>
 
 <style scoped>
-.page-container {
-  padding: 24px;
-}
-
 .storage-summary {
   padding: 12px 0;
 }

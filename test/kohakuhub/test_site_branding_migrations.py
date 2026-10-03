@@ -112,7 +112,8 @@ def test_upgrade_matches_model_and_preserves_existing_data(migration):
         }
         site_branding.update_branding(values)
         assert module.run() is True
-        assert site_branding.get_branding() == values
+        record = SiteBranding.get_by_id(1)
+        assert {name: getattr(record, name) for name in values} == values
         SiteBranding.drop_table()
         connection.create_tables([SiteBranding])
         assert schema_signature(connection) == actual

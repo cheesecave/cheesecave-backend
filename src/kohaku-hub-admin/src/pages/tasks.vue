@@ -2,6 +2,8 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import AdminLayout from "@/components/AdminLayout.vue";
+import AdminPage from "@/components/AdminPage.vue";
+import AdminPageHeader from "@/components/AdminPageHeader.vue";
 import TaskDetail from "@/components/tasks/TaskDetail.vue";
 import TaskOverview from "@/components/tasks/TaskOverview.vue";
 import TaskProgress from "@/components/tasks/TaskProgress.vue";
@@ -336,39 +338,35 @@ onBeforeUnmount(stopTimer);
 
 <template>
   <AdminLayout>
-    <div class="page-container">
-      <div class="flex justify-between items-center mb-6 gap-4 flex-wrap">
-        <div>
-          <h1
-            class="text-3xl font-bold text-gray-900 dark:text-gray-100 flex items-center gap-3"
+    <AdminPage>
+      <AdminPageHeader>
+        <template #title>
+          Background Tasks
+          <span
+            v-if="health"
+            class="health-chip"
+            :class="health.type"
+            data-testid="tasks-health"
           >
-            Background Tasks
-            <span
-              v-if="health"
-              class="health-chip"
-              :class="health.type"
-              data-testid="tasks-health"
-            >
-              <span class="health-dot" />{{ health.label }}
-            </span>
-            <button
-              v-if="activeWorkers !== null"
-              type="button"
-              class="health-chip workers-chip"
-              :class="activeWorkers ? 'success' : 'danger'"
-              data-testid="tasks-workers-chip"
-              @click="activeTab = 'workers'"
-            >
-              {{ activeWorkers }} worker(s) online
-            </button>
-          </h1>
-          <p class="text-gray-500 dark:text-gray-400 text-sm mt-1">
-            Durable tasks executed by <code>khub-worker</code>. Tasks run at
-            least once. Follow progress and logs, cancel queued or running
-            tasks, and retry or discard failed ones here.
-          </p>
-        </div>
-        <div class="flex items-center gap-3">
+            <span class="health-dot" />{{ health.label }}
+          </span>
+          <button
+            v-if="activeWorkers !== null"
+            type="button"
+            class="health-chip workers-chip"
+            :class="activeWorkers ? 'success' : 'danger'"
+            data-testid="tasks-workers-chip"
+            @click="activeTab = 'workers'"
+          >
+            {{ activeWorkers }} worker(s) online
+          </button>
+        </template>
+        <template #subtitle
+          >Durable tasks executed by <code>khub-worker</code>. Tasks run at
+          least once. Follow progress and logs, cancel queued or running tasks,
+          and retry or discard failed ones here.</template
+        >
+        <template #actions>
           <el-select
             v-model="refreshIntervalSeconds"
             class="refresh-select"
@@ -391,8 +389,8 @@ onBeforeUnmount(stopTimer);
             <div class="i-carbon-renew mr-1" />
             Refresh
           </el-button>
-        </div>
-      </div>
+        </template>
+      </AdminPageHeader>
 
       <div class="status-cards mb-4">
         <button
@@ -654,7 +652,7 @@ onBeforeUnmount(stopTimer);
           <el-button @click="detailVisible = false">Close</el-button>
         </template>
       </el-dialog>
-    </div>
+    </AdminPage>
   </AdminLayout>
 </template>
 

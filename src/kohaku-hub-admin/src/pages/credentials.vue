@@ -2,6 +2,8 @@
 import { computed, onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import AdminLayout from "@/components/AdminLayout.vue";
+import AdminPage from "@/components/AdminPage.vue";
+import AdminPageHeader from "@/components/AdminPageHeader.vue";
 import { useAdminStore } from "@/stores/admin";
 import {
   listAdminSessions,
@@ -237,28 +239,25 @@ onMounted(() => {
 
 <template>
   <AdminLayout>
-    <div class="page-container">
-      <div class="flex justify-between items-center mb-6 gap-4 flex-wrap">
-        <div>
-          <h1 class="text-3xl font-bold text-gray-900 dark:text-gray-100">
-            Credentials
-          </h1>
-          <p class="text-gray-500 dark:text-gray-400 text-sm mt-1">
-            Sessions, API tokens and SSH keys across every user. Use this view
-            to investigate a leak, clean up after an offboarding, or kill a
-            misbehaving CI client.
-          </p>
-        </div>
-        <el-button
-          v-if="activeTab === 'sessions'"
-          type="warning"
-          @click="bulkRevokeOpen = true"
-          data-testid="credentials-open-bulk"
+    <AdminPage>
+      <AdminPageHeader title="Credentials">
+        <template #subtitle
+          >Sessions, API tokens and SSH keys across every user. Use this view to
+          investigate a leak, clean up after an offboarding, or kill a
+          misbehaving CI client.</template
         >
-          <div class="i-carbon-trash-can mr-1" />
-          Bulk revoke
-        </el-button>
-      </div>
+        <template #actions>
+          <el-button
+            v-if="activeTab === 'sessions'"
+            type="warning"
+            @click="bulkRevokeOpen = true"
+            data-testid="credentials-open-bulk"
+          >
+            <div class="i-carbon-trash-can mr-1" />
+            Bulk revoke
+          </el-button>
+        </template>
+      </AdminPageHeader>
 
       <el-card shadow="never" class="mb-4">
         <div class="flex items-center gap-3 flex-wrap">
@@ -479,7 +478,7 @@ onMounted(() => {
           </el-button>
         </template>
       </el-dialog>
-    </div>
+    </AdminPage>
   </AdminLayout>
 </template>
 
