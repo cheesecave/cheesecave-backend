@@ -208,7 +208,7 @@ describe("admin health page", () => {
 
   it("explains an unsupported LakeFS", async () => {
     const message =
-      "LakeFS 1.40.0 is older than 1.48.1: Reset would leave a merge commit instead of one linear commit, so it is disabled";
+      "LakeFS 1.40.0 is older than 1.48.1: Reset is not verified on it, so it is disabled";
     mocks.api.getDependencyHealth.mockResolvedValue(
       withLakefs({
         version: "1.40.0",

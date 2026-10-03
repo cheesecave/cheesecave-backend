@@ -56,13 +56,14 @@ class OperationRefused(Exception):
 
 
 def refusal(error: httpx.HTTPStatusError) -> str:
-    """Why LakeFS refused a merge or revert: ``conflict`` with a concurrent
-    commit, ``dirty`` (an upload in flight), ``unchanged`` (nothing to
-    change), or ``other``."""
+    """Why LakeFS refused a revert or a reset's commit: ``conflict`` with a
+    concurrent commit, ``dirty`` (an upload in flight), ``unchanged`` (nothing
+    to change), or ``other``."""
     status, text = error.response.status_code, error.response.text
     if status == 409:
         return "conflict"
-    if status == 400 and "dirty" in text:
+    # "uncommitted changes": a commit of a given metarange (a reset)
+    if status == 400 and ("dirty" in text or "uncommitted changes" in text):
         return "dirty"
     if status == 400 and "no changes" in text:
         return "unchanged"

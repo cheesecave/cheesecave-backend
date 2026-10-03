@@ -49,7 +49,7 @@ By default, the application looks for `config.toml` in the current working direc
 | `KOHAKU_HUB_LAKEFS_ACCESS_KEY` | The access key for LakeFS. | `test-access-key` |
 | `KOHAKU_HUB_LAKEFS_SECRET_KEY` | The secret key for LakeFS. | `test-secret-key` |
 | `KOHAKU_HUB_LAKEFS_REPO_NAMESPACE` | The default namespace for repositories in LakeFS. | `hf` |
-| `KOHAKU_HUB_LAKEFS_OPERATION_CONCURRENCY` | Concurrent LakeFS requests one branch operation (reset) makes. Around 8 saturates LakeFS; more only slows other requests down. | `8` |
+| `KOHAKU_HUB_LAKEFS_OPERATION_CONCURRENCY` | Concurrent LakeFS reads one branch operation (reset, revert, merge) makes while recording the regular files it changed. Around 8 saturates LakeFS; more only slows other requests down. | `8` |
 
 ## Git LFS Settings
 

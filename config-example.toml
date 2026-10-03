@@ -19,8 +19,9 @@ endpoint = "http://127.0.0.1:28000"
 # access_key = "your-lakefs-access-key"
 # secret_key = "your-lakefs-secret-key"
 repo_namespace = "hf"
-# Concurrent LakeFS requests one branch operation (reset) makes; around 8
-# saturates LakeFS, and more only slows down other requests.
+# Concurrent LakeFS reads one branch operation (reset, revert, merge) makes
+# while recording the regular files it changed; around 8 saturates LakeFS,
+# and more only slows down other requests.
 # operation_concurrency = 8
 
 [smtp]

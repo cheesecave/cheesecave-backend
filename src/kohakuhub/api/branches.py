@@ -829,8 +829,8 @@ async def reset_branch(
         )
 
     # A new commit whose tree equals the target's: history is kept, and no
-    # file content passes through this service (#99). LFS objects are always
-    # checked, ``force`` only allows resetting main (#107).
+    # object is copied (#99, #133). LFS objects are always checked,
+    # ``force`` only allows resetting main (#107).
     message = payload.message or f"Reset to commit {commit_id[:8]}"
     try:
         async with operation_lock.writing(repo_row):
@@ -842,20 +842,20 @@ async def reset_branch(
     except HTTPException:
         raise  # refused while an operation holds the repository
     except records.OperationRefused as e:
-        # Merged before giving up or failing: those commits are on the branch
+        # Committed before failing: that commit is on the branch
         await records.record_commits(
             client, lakefs_repo, repo_row, branch, e.rounds, user, message, f"Reset to {commit_id}"
         )
         raise HTTPException(status_code=e.status, detail=e.detail)
     except Exception as e:
         logger.exception(f"Failed to reset branch: {e}", e)
-        # Whether a merge landed before the failure is unknown here
+        # Whether the commit landed before the failure is unknown here
         records.outcome_unknown(repo_row, branch)
         raise HTTPException(status_code=500, detail={"error": f"Reset failed: {e}"})
     await records.record_commits(
         client, lakefs_repo, repo_row, branch, rounds, user, message, f"Reset to {commit_id}"
     )
-    logger.success(f"Reset {repo_id}@{branch} to {commit_id[:8]} in {len(rounds)} merge(s)")
+    logger.success(f"Reset {repo_id}@{branch} to {commit_id[:8]} as {head[:8]}")
 
     return {
         "success": True,

@@ -3,10 +3,12 @@
 Each boundary was found by running the backend suite against the LakeFS
 release in question:
 
-- below 1.48.1, Reset reports success but leaves a merge commit with two
-  parents instead of one linear commit: it relies on squash merges, which
-  LakeFS added in 1.48.0 (and 1.48.0 itself squashes every merge by default,
-  LakeFS's own "do not use" release);
+- below 1.48.1, Reset is not verified, so it is disabled. Its earlier
+  implementation relied on squash merges, which LakeFS added in 1.48.0, and
+  left a merge commit with two parents there (1.48.0 itself squashes every
+  merge by default, LakeFS's own "do not use" release). The current one
+  commits the target's metarange, which LakeFS has offered since 1.0, but the
+  suite has not been run on those releases;
 - 1.70.0 cannot store regular files on an S3 endpoint without TLS, such as
   the bundled MinIO (fixed in 1.70.1);
 - 1.87.0 and later are licensed under the Business Source License 1.1, not
@@ -76,7 +78,7 @@ def assess(version: str | None) -> Assessment:
     elif not reset_supported:
         status, message = "unsupported", (
             f"LakeFS {_text(parsed)} is older than {_text(MINIMUM)}: "
-            "Reset would leave a merge commit instead of one linear commit, so it is disabled"
+            "Reset is not verified on it, so it is disabled"
         )
     elif parsed > TESTED_UP_TO:
         status, message = "untested", (

@@ -49,6 +49,12 @@ class _Query:
         self.offset_value = value
         return self
 
+    def order_by(self, *args):
+        return self
+
+    def count(self):
+        return len(self.items)
+
     def __iter__(self):
         items = self.items[self.offset_value :]
         if self.limit_value is not None:
@@ -70,6 +76,7 @@ class _AtomicContext:
 
 
 class _FakeUserModel:
+    id = _Field("id")
     username = _Field("username")
     email = _Field("email")
     is_org = _Field("is_org")
@@ -185,6 +192,7 @@ async def test_get_user_info_and_list_users_cover_not_found_and_filters(monkeypa
             "created_at": created_at.isoformat(),
         }
     ]
+    assert listed["total"] == 2  # counted before the page is cut (the fake does not filter)
     assert _FakeUserModel.select_query.where_calls
 
     _FakeUserModel.select_query = _Query(items=[alice, org])
