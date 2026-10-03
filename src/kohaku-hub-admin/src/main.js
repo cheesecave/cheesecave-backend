@@ -9,6 +9,7 @@ import "uno.css";
 import "./styles/colors.css";
 import "./style.css";
 import App from "./App.vue";
+import { useSiteBrandingStore } from "./stores/siteBranding";
 
 const app = createApp(App);
 const pinia = createPinia();
@@ -21,5 +22,8 @@ const router = createRouter({
 app.use(pinia);
 app.use(router);
 app.use(ElementPlus);
+
+const siteBrandingStore = useSiteBrandingStore(pinia);
+void siteBrandingStore.refresh();
 
 app.mount("#app");

@@ -10,6 +10,7 @@ import yaml
 from kohakuhub.config import cfg
 from kohakuhub.db import User, UserOrganization
 from kohakuhub.logger import get_logger
+from kohakuhub.site_branding import get_public_branding
 from kohakuhub.auth.dependencies import get_optional_user
 from kohakuhub.api.operation_capabilities import (
     get_repository_operation_capabilities,
@@ -81,7 +82,7 @@ def get_site_config():
         Public site configuration
     """
     return {
-        "site_name": cfg.app.site_name,
+        "site_name": get_public_branding()[0]["site_name"],
         "invitation_only": cfg.auth.invitation_only,
         "require_email_verification": cfg.auth.require_email_verification,
         "capabilities": {

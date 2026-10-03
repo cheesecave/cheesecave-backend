@@ -3,6 +3,7 @@ import { onBeforeUnmount, onMounted, ref } from "vue";
 import { useRouter, useRoute } from "vue-router";
 import { useAdminStore } from "@/stores/admin";
 import { useThemeStore } from "@/stores/theme";
+import { useSiteBrandingStore } from "@/stores/siteBranding";
 import { ElMessage } from "element-plus";
 import GlobalSearch from "@/components/GlobalSearch.vue";
 
@@ -10,6 +11,7 @@ const router = useRouter();
 const route = useRoute();
 const adminStore = useAdminStore();
 const themeStore = useThemeStore();
+const siteBrandingStore = useSiteBrandingStore();
 
 const globalSearchRef = ref(null);
 const sidebarScrollRef = ref(null);
@@ -58,6 +60,11 @@ function openGlobalSearch() {
 
 const menuItems = [
   { path: "/", label: "Dashboard", icon: "i-carbon-dashboard" },
+  {
+    path: "/site-branding",
+    label: "Site Branding",
+    icon: "i-carbon-paint-brush",
+  },
   { path: "/users", label: "Users", icon: "i-carbon-user-multiple" },
   { path: "/invitations", label: "Invitations", icon: "i-carbon-email" },
   { path: "/repositories", label: "Repositories", icon: "i-carbon-data-base" },
@@ -107,7 +114,14 @@ const menuItems = [
     <el-aside width="250px" class="sidebar">
       <div class="sidebar-header">
         <div
+          v-if="!siteBrandingStore.branding.header_logo"
           class="i-carbon-security text-2xl text-blue-600 dark:text-blue-400"
+        />
+        <img
+          v-else
+          :src="siteBrandingStore.branding.header_logo"
+          :alt="`${siteBrandingStore.branding.site_name} logo`"
+          class="sidebar-brand-logo"
         />
         <h2 class="text-xl font-bold ml-2 text-gray-900 dark:text-gray-100">
           Admin Portal
@@ -164,8 +178,11 @@ const menuItems = [
       <!-- Header -->
       <el-header class="header">
         <div class="header-title">
-          <h1 class="text-xl font-semibold text-gray-900 dark:text-gray-100">
-            KohakuHub Administration
+          <h1
+            class="text-xl font-semibold text-gray-900 dark:text-gray-100"
+            :title="`${siteBrandingStore.branding.site_name} Administration`"
+          >
+            {{ siteBrandingStore.branding.site_name }} Administration
           </h1>
         </div>
 
@@ -233,6 +250,12 @@ const menuItems = [
 
 .sidebar-header h2 {
   color: white !important;
+}
+
+.sidebar-brand-logo {
+  width: 32px;
+  height: 32px;
+  object-fit: contain;
 }
 
 .sidebar-navigation {
@@ -313,10 +336,19 @@ const menuItems = [
 
 .header-title {
   flex: 1;
+  min-width: 0;
+  padding-right: 12px;
+}
+
+.header-title h1 {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .header-actions {
   display: flex;
+  flex-shrink: 0;
   align-items: center;
   gap: 12px;
 }

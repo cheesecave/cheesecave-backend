@@ -1,4 +1,11 @@
 <!-- src/kohaku-hub-ui/src/components/layout/TheFooter.vue -->
+<script setup>
+import { storeToRefs } from "pinia";
+import { useSiteBrandingStore } from "@/stores/siteBranding";
+
+const { branding } = storeToRefs(useSiteBrandingStore());
+</script>
+
 <template>
   <footer
     class="bg-gray-100 dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700 mt-4 transition-colors"
@@ -8,9 +15,13 @@
         class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-8"
       >
         <div>
-          <h3 class="font-semibold mb-3">KohakuHub</h3>
-          <p class="text-sm text-gray-600 dark:text-gray-400">
-            Self-hosted HuggingFace Hub alternative
+          <h3 class="font-semibold mb-3 break-words">
+            {{ branding.site_name }}
+          </h3>
+          <p
+            class="text-sm text-gray-600 dark:text-gray-400 whitespace-pre-wrap break-words"
+          >
+            {{ branding.footer_description }}
           </p>
         </div>
 

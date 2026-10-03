@@ -8,6 +8,10 @@ icon: i-carbon-security
 
 Complete administrative control panel for KohakuHub. All endpoints require admin authentication.
 
+Site name, footer introduction, header logo, and favicon settings are documented
+in [Site Branding](../deployment/site-branding.md), including the public read
+endpoint and admin text/upload/reset endpoints.
+
 ---
 
 ## Authentication

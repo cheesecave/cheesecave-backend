@@ -32,6 +32,7 @@ vi.mock("element-plus", () => ({
 import TheHeader from "@/components/layout/TheHeader.vue";
 import { useAuthStore } from "@/stores/auth";
 import { useThemeStore } from "@/stores/theme";
+import { useSiteBrandingStore } from "@/stores/siteBranding";
 
 describe("TheHeader", () => {
   beforeEach(() => {
@@ -164,5 +165,31 @@ describe("TheHeader", () => {
 
     expect(authStore.logout).toHaveBeenCalled();
     expect(mocks.router.push).not.toHaveBeenCalledWith("/");
+  });
+
+  it("reacts to branding updates, exposes full names, and falls back on image errors", async () => {
+    const store = useSiteBrandingStore();
+    const name = "A long community hub name ".repeat(3);
+    const png = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==";
+    store.apply({ ...store.branding, site_name: name, header_logo: png });
+    const wrapper = mountHeader();
+    const home = wrapper
+      .findAll("a")
+      .find((link) => link.attributes("href") === "/");
+    expect(home.attributes("aria-label")).toBe(name.trim());
+    expect(home.attributes("title")).toBe(name.trim());
+    expect(home.get("span").classes()).toContain("truncate");
+    expect(home.get("img").attributes("src")).toBe(png);
+
+    await home.get("img").trigger("error");
+    expect(home.get("img").attributes("src")).toBe("/images/logo-square.svg");
+    store.apply({
+      ...store.branding,
+      site_name: "Renamed Hub",
+      header_logo: null,
+    });
+    await nextTick();
+    expect(home.text()).toBe("Renamed Hub");
+    expect(home.get("img").attributes("alt")).toBe("Renamed Hub");
   });
 });

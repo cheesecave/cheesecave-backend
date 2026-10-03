@@ -18,6 +18,9 @@ const mocks = vi.hoisted(() => ({
     isDark: false,
     toggle: vi.fn(),
   },
+  siteBrandingStore: {
+    branding: { site_name: "DeepGHS Hub", header_logo: null },
+  },
   globalSearch: {
     openDialog: vi.fn(),
   },
@@ -34,6 +37,10 @@ vi.mock("@/stores/admin", () => ({
 
 vi.mock("@/stores/theme", () => ({
   useThemeStore: () => mocks.themeStore,
+}));
+
+vi.mock("@/stores/siteBranding", () => ({
+  useSiteBrandingStore: () => mocks.siteBrandingStore,
 }));
 
 vi.mock("element-plus", async () => {
@@ -66,7 +73,8 @@ describe("AdminLayout", () => {
   function mountLayout() {
     return mount(AdminLayout, {
       slots: {
-        default: '<section data-slot-content="true">Dashboard content</section>',
+        default:
+          '<section data-slot-content="true">Dashboard content</section>',
       },
       global: {
         stubs: ElementPlusStubs,
@@ -80,6 +88,12 @@ describe("AdminLayout", () => {
     expect(wrapper.text()).toContain("Admin Portal");
     expect(wrapper.text()).toContain("Repositories");
     expect(wrapper.text()).toContain("Quota Overview");
+    expect(wrapper.text()).toContain("Site Branding");
+    expect(wrapper.text()).toContain("DeepGHS Hub Administration");
+    expect(wrapper.get("h1").attributes("title")).toBe(
+      "DeepGHS Hub Administration",
+    );
+    expect(wrapper.find('[data-index="/site-branding"]').exists()).toBe(true);
     expect(wrapper.find('[data-slot-content="true"]').exists()).toBe(true);
 
     await wrapper

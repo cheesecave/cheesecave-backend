@@ -6,6 +6,7 @@ import { routes } from "vue-router/auto-routes";
 import App from "./App.vue";
 import { initializeBrowserTimezone } from "./utils/datetime";
 import { createPageScrollBehavior } from "./utils/page-scroll";
+import { useSiteBrandingStore } from "./stores/siteBranding";
 
 // Import UnoCSS
 import "virtual:uno.css";
@@ -41,11 +42,16 @@ if (import.meta.hot) import.meta.hot.dispose(pageScroll.dispose);
 app.use(pinia);
 app.use(router);
 
+// Use cached branding immediately; a slow/offline API never delays mounting.
+const disposeBranding = useSiteBrandingStore().initialize();
+app.onUnmount(disposeBranding);
+if (import.meta.hot) import.meta.hot.dispose(disposeBranding);
+
 // Initialize auth before mounting
 import { useAuthStore } from "./stores/auth";
 const authStore = useAuthStore();
 
-// Restore auth state, then mount app
+// Restore auth state, then mount app. Branding refresh remains independent.
 authStore.init().finally(() => {
   app.mount("#app");
 });

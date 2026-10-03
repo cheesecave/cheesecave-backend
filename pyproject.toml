@@ -39,6 +39,7 @@ dependencies = [
     "redis[hiredis]>=5.0",
     "requests",
     "rich",
+    "tinycss2>=1.2",
     "toml",
     "tomli; python_version < '3.11'",
     "uvicorn",

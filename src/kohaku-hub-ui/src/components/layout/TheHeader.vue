@@ -6,15 +6,21 @@
   >
     <div class="container-main flex items-center justify-between h-12 md:h-16">
       <!-- Logo -->
-      <RouterLink to="/" class="flex items-center gap-2">
+      <RouterLink
+        to="/"
+        class="flex items-center gap-2 min-w-0 max-w-[70%] md:max-w-[25%]"
+        :aria-label="branding.site_name"
+        :title="branding.site_name"
+      >
         <img
-          src="/images/logo-square.svg"
-          alt="KohakuHub"
-          class="h-8 w-8 md:h-10 md:w-10"
+          :src="headerLogo"
+          :alt="branding.site_name"
+          class="h-8 w-8 md:h-10 md:w-10 shrink-0 object-contain"
+          @error="logoFailed = true"
         />
         <span
-          class="text-lg md:text-xl font-bold text-gray-900 dark:text-gray-100"
-          >KohakuHub</span
+          class="text-lg md:text-xl font-bold text-gray-900 dark:text-gray-100 truncate"
+          >{{ branding.site_name }}</span
         >
       </RouterLink>
 
@@ -390,10 +396,25 @@
 import { storeToRefs } from "pinia";
 import { useAuthStore } from "@/stores/auth";
 import { useThemeStore } from "@/stores/theme";
+import { useSiteBrandingStore } from "@/stores/siteBranding";
+import { computed, ref, watch } from "vue";
 import { ElMessage } from "element-plus";
 
 const authStore = useAuthStore();
 const themeStore = useThemeStore();
+const { branding } = storeToRefs(useSiteBrandingStore());
+const logoFailed = ref(false);
+const headerLogo = computed(() =>
+  logoFailed.value
+    ? "/images/logo-square.svg"
+    : branding.value.header_logo || "/images/logo-square.svg",
+);
+watch(
+  () => branding.value.header_logo,
+  () => {
+    logoFailed.value = false;
+  },
+);
 const { isAuthenticated, username } = storeToRefs(authStore);
 const router = useRouter();
 const mobileMenuOpen = ref(false);

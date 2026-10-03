@@ -14,6 +14,53 @@ export async function getSiteConfig() {
   return response.data;
 }
 
+// ===== Site Branding =====
+
+export async function getSiteBranding(token) {
+  const response = await createAdminClient(token).get("/site-branding", {
+    timeout: 30000,
+  });
+  return response.data;
+}
+
+export async function updateSiteBranding(token, branding) {
+  const response = await createAdminClient(token).put(
+    "/site-branding",
+    branding,
+    { timeout: 30000 },
+  );
+  return response.data;
+}
+
+export async function uploadSiteBrandingAsset(token, asset, file, loop = true) {
+  const form = new FormData();
+  form.append("file", file);
+  form.append("loop", String(loop));
+  const response = await createAdminClient(token).post(
+    `/site-branding/assets/${asset}`,
+    form,
+    { timeout: 30000 },
+  );
+  return response.data;
+}
+
+export async function updateSiteBrandingAssetAnimation(token, asset, loop) {
+  const response = await createAdminClient(token).patch(
+    `/site-branding/assets/${asset}/animation`,
+    { loop },
+    { timeout: 30000 },
+  );
+  return response.data;
+}
+
+export async function resetSiteBrandingAsset(token, asset) {
+  const response = await createAdminClient(token).delete(
+    `/site-branding/assets/${asset}`,
+    { timeout: 30000 },
+  );
+  return response.data;
+}
+
 /**
  * Create axios instance with admin token
  * @param {string} token - Admin token
