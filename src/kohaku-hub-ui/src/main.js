@@ -5,6 +5,7 @@ import { createRouter, createWebHistory } from "vue-router";
 import { routes } from "vue-router/auto-routes";
 import App from "./App.vue";
 import { initializeBrowserTimezone } from "./utils/datetime";
+import { createPageScrollBehavior } from "./utils/page-scroll";
 
 // Import UnoCSS
 import "virtual:uno.css";
@@ -27,10 +28,15 @@ const pinia = createPinia();
 initializeBrowserTimezone();
 
 // Create router
+const pageScroll = createPageScrollBehavior();
 const router = createRouter({
   history: createWebHistory(),
   routes,
+  scrollBehavior: pageScroll.scrollBehavior,
 });
+pageScroll.install(router);
+app.onUnmount(pageScroll.dispose);
+if (import.meta.hot) import.meta.hot.dispose(pageScroll.dispose);
 
 app.use(pinia);
 app.use(router);

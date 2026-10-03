@@ -1,24 +1,26 @@
 <!-- src/kohaku-hub-ui/src/App.vue -->
 <template>
   <div
-    id="app"
-    class="min-h-screen w-full bg-gray-50 dark:bg-gray-900 text-gray-900 dark:text-gray-100 transition-colors flex flex-col"
+    class="app-shell w-full bg-gray-50 dark:bg-gray-900 text-gray-900 dark:text-gray-100 transition-colors flex flex-col"
   >
-    <TheHeader />
-    <main class="flex-1">
-      <RouterView v-slot="{ Component, route }">
-        <keep-alive :include="['RepoViewer']">
-          <component :is="Component" :key="getRouteKey(route)" />
-        </keep-alive>
-      </RouterView>
-    </main>
-    <TheFooter />
+    <TheHeader class="shrink-0" />
+    <PageScrollArea>
+      <main class="flex-1 min-w-0">
+        <RouterView v-slot="{ Component, route }">
+          <keep-alive :include="['RepoViewer']">
+            <component :is="Component" :key="getRouteKey(route)" />
+          </keep-alive>
+        </RouterView>
+      </main>
+      <TheFooter />
+    </PageScrollArea>
   </div>
 </template>
 
 <script setup>
 import TheHeader from "@/components/layout/TheHeader.vue";
 import TheFooter from "@/components/layout/TheFooter.vue";
+import PageScrollArea from "@/components/layout/PageScrollArea.vue";
 
 // Theme is applied early via inline script in index.html to prevent flash
 // No need to initialize here
@@ -40,3 +42,11 @@ function getRouteKey(route) {
   return route.path;
 }
 </script>
+
+<style scoped>
+.app-shell {
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
+}
+</style>

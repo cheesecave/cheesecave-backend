@@ -766,7 +766,7 @@
       <!-- Sidebar (Compact) -->
       <aside
         v-if="activeTab !== 'viewer'"
-        class="space-y-4 lg:sticky lg:top-20 lg:self-start"
+        class="space-y-4 lg:sticky lg:top-4 lg:self-start"
       >
         <!-- Relationships (Author + Base Model + Datasets from YAML) -->
         <SidebarRelationshipsCard
