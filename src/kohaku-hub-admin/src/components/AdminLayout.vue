@@ -6,6 +6,20 @@ import { useThemeStore } from "@/stores/theme";
 import { ElMessage } from "element-plus";
 import GlobalSearch from "@/components/GlobalSearch.vue";
 
+const buildInfo =
+  typeof __BUILD_INFO__ === "undefined"
+    ? { commit: "unknown", dirty: false }
+    : __BUILD_INFO__;
+const versionLabel = `${buildInfo.commit.slice(0, 7)}${buildInfo.dirty ? "-dirty" : ""}`;
+const commitUrl =
+  buildInfo.commit === "unknown"
+    ? null
+    : `https://github.com/deepghs/KohakuHub/commit/${buildInfo.commit}`;
+const versionTitle =
+  buildInfo.commit === "unknown"
+    ? "Frontend Git commit unavailable"
+    : `Frontend Git commit: ${buildInfo.commit}${buildInfo.dirty ? " (uncommitted changes)" : ""}`;
+
 const router = useRouter();
 const route = useRoute();
 const adminStore = useAdminStore();
@@ -157,6 +171,23 @@ const menuItems = [
           <div class="i-carbon-chevron-down" aria-hidden="true" />
         </button>
       </div>
+      <div
+        class="sidebar-version"
+        data-testid="frontend-version"
+        :title="versionTitle"
+      >
+        Frontend
+        <a
+          v-if="commitUrl"
+          :href="commitUrl"
+          target="_blank"
+          rel="noopener noreferrer"
+          :aria-label="`View frontend Git commit ${buildInfo.commit} on GitHub`"
+        >
+          {{ versionLabel }}
+        </a>
+        <span v-else>{{ versionLabel }}</span>
+      </div>
     </el-aside>
 
     <!-- Main Content -->
@@ -240,6 +271,31 @@ const menuItems = [
   flex: 1;
   min-height: 0;
   overflow: hidden;
+}
+
+.sidebar-version {
+  flex-shrink: 0;
+  padding: 12px 20px;
+  border-top: 1px solid var(--border-light);
+  color: var(--text-secondary);
+  font-family: monospace;
+  font-size: 12px;
+}
+
+.sidebar-version a {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.sidebar-version a:hover {
+  color: var(--color-info);
+}
+
+.sidebar-version a:focus-visible {
+  outline: 2px solid var(--color-info);
+  outline-offset: 3px;
+  border-radius: 2px;
 }
 
 .sidebar-scroll {
