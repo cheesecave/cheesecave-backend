@@ -731,14 +731,16 @@ async def test_hf_snapshot_download_lists_files_from_the_name_only_default(
     assert {"README.md", "weights/model.safetensors"} <= files
 
 
-async def test_hf_paths_info_expands_a_directory_with_its_last_commit(live_server_url, hf_api_token):
+async def test_hf_paths_info_expands_a_directory_without_a_last_commit(live_server_url, hf_api_token):
+    """A directory's last commit is not looked up (LakeFS would diff every
+    commit of the history): huggingface_hub reads the null as none."""
     api = HfApi(endpoint=live_server_url, token=hf_api_token)
 
     (entry,) = await asyncio.to_thread(
         lambda: api.get_paths_info("owner/demo-model", ["weights"], expand=True)
     )
 
-    assert entry.path == "weights" and entry.last_commit is not None
+    assert entry.path == "weights" and entry.last_commit is None
 
 
 async def test_hf_dataset_info_default_and_files_metadata(live_server_url, member_hf_api_token):
@@ -816,4 +818,5 @@ async def test_hf_list_repo_tree_expands_directories(live_server_url, hf_api_tok
     entries = await asyncio.to_thread(lambda: list(api.list_repo_tree("owner/demo-model", expand=True)))
 
     folder = next(e for e in entries if isinstance(e, RepoFolder) and e.path == "weights")
-    assert folder.last_commit is not None
+    readme = next(e for e in entries if e.path == "README.md")
+    assert folder.last_commit is None and readme.last_commit is not None

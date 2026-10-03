@@ -246,7 +246,8 @@ paths_info = response.json()
 **Notes:**
 
 - Paths that don't exist are silently omitted from the response
-- A directory's `size` is always `0`, with `expand` or without, as on the Hub: summing it would list everything under it. `expand=true` adds its `lastCommit`.
+- A directory's `size` is always `0`, with `expand` or without, as on the Hub: summing it would list everything under it. Its `lastCommit` is `null` for now: LakeFS can only answer it by diffing every commit of the history, which takes hours on a large repository.
+- With `expand=true`, a file's `lastCommit` is `null` when LakeFS does not answer within a few seconds; asking again later gives it.
 - For directories, include trailing slash (`models/`) or omit it (`models`) - both work
 - The `lfs` field is `null` for non-LFS files
 - `last_commit` and `security` fields are reserved for future use
