@@ -50,10 +50,26 @@ a:hover {
   color: #535bf2;
 }
 
+html,
+body,
+#app {
+  height: 100%;
+  overflow: hidden;
+}
+
+/* Dialogs and drawers lock the page's own scroll region, not just the body. */
+body.el-popup-parent--hidden .page-scroll-wrap {
+  overflow: hidden;
+}
+
+body.el-popup-parent--hidden .page-scroll-area > .el-scrollbar__bar {
+  pointer-events: none;
+  visibility: hidden;
+}
+
 body {
   margin: 0;
   min-width: 320px;
-  min-height: 100vh;
   width: 100%;
 }
 

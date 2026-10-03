@@ -31,7 +31,7 @@
 
     <div v-else class="grid grid-cols-1 lg:grid-cols-[280px_1fr] gap-6">
       <!-- Sidebar with members -->
-      <aside class="space-y-4 lg:sticky lg:top-20 lg:self-start">
+      <aside class="space-y-4 lg:sticky lg:top-4 lg:self-start">
         <div class="card">
           <div class="flex items-center gap-3 mb-4">
             <div class="i-carbon-group text-5xl text-gray-400" />
