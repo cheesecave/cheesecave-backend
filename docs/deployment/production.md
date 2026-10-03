@@ -74,8 +74,9 @@ KOHAKU_HUB_S3_ENDPOINT: https://account.r2.cloudflarestorage.com/my-bucket
 KOHAKU_HUB_S3_PUBLIC_ENDPOINT: https://account.r2.cloudflarestorage.com/my-bucket  # same bucket
 KOHAKU_HUB_S3_BUCKET: hub-storage            # objects live under my-bucket/hub-storage/
 LAKEFS_BLOCKSTORE_S3_ENDPOINT: https://account.r2.cloudflarestorage.com/my-bucket
+LAKEFS_BLOCKSTORE_S3_DISCOVER_BUCKET_REGION: "false"  # its region probe of hub-storage can only fail
 ```
-KohakuHub reaches the bucket at the endpoint's root, so copies, listings and bulk deletes stay inside the prefix. It needs no permission beyond that bucket. The first path segment is always the bucket: an S3 service mounted under a proxy's sub-path is not supported.
+KohakuHub reaches the bucket at the endpoint's root, so copies, listings and bulk deletes stay inside the prefix. It needs no permission beyond that bucket. The first path segment is always the bucket: an S3 service mounted under a proxy's sub-path is not supported. Some LakeFS features do not work with this layout; KohakuHub uses none of them (see [LakeFS compatibility](lakefs.md#an-s3-endpoint-with-the-bucket-in-its-path)).
 
 **AWS S3:**
 ```yaml

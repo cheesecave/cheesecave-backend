@@ -100,16 +100,19 @@ MULTIPART_THRESHOLD = property(lambda self: get_multipart_threshold())
 MULTIPART_CHUNK_SIZE = property(lambda self: get_multipart_chunk_size())
 
 
-def bucket_in_endpoint() -> tuple[str, str, str] | None:
+def bucket_in_endpoint(
+    endpoint: str | None = None, bucket: str | None = None
+) -> tuple[str, str, str] | None:
     """``(root endpoint, real bucket, key prefix)`` when the endpoint carries the
     real bucket in its path, as ``https://<account>.r2.cloudflarestorage.com/
-    <bucket>``: ``cfg.s3.bucket`` is then a key prefix inside that bucket, after
-    any further path. ``None`` for a plain endpoint (#133)."""
-    parsed = urlparse(cfg.s3.endpoint or "")
+    <bucket>``: ``bucket`` is then a key prefix inside that bucket, after any
+    further path. ``None`` for a plain endpoint (#133). Both default to the
+    configured ones."""
+    parsed = urlparse((cfg.s3.endpoint if endpoint is None else endpoint) or "")
     parts = [part for part in parsed.path.split("/") if part]
     if not parts:
         return None
-    prefix = "/".join(parts[1:] + [cfg.s3.bucket]) + "/"
+    prefix = "/".join(parts[1:] + [cfg.s3.bucket if bucket is None else bucket]) + "/"
     return f"{parsed.scheme}://{parsed.netloc}", parts[0], prefix
 
 
@@ -175,6 +178,15 @@ class _BucketInEndpoint:
                 item[name] = self.bucket
 
 
+def readdress(client, bucket: str, layout: tuple[str, str, str]):
+    """Hook ``client``, made for ``layout``'s root endpoint, so that ``bucket``
+    reads as a bucket (``_BucketInEndpoint``); returns the client."""
+    hooks = _BucketInEndpoint(bucket, layout[1], layout[2])
+    client.meta.events.register_first("before-parameter-build.s3", hooks.request)
+    client.meta.events.register_last("after-call.s3", hooks.response)
+    return client
+
+
 def get_s3_client():
     """Create configured S3 client with configurable signature version.
 
@@ -218,11 +230,7 @@ def get_s3_client():
         region_name=cfg.s3.region,
         config=boto_config,
     )
-    if layout:
-        readdress = _BucketInEndpoint(cfg.s3.bucket, layout[1], layout[2])
-        client.meta.events.register_first("before-parameter-build.s3", readdress.request)
-        client.meta.events.register_last("after-call.s3", readdress.response)
-    return client
+    return readdress(client, cfg.s3.bucket, layout) if layout else client
 
 
 def init_storage():

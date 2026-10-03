@@ -52,6 +52,18 @@ Upgrading LakeFS is a deliberate change:
 Releases newer than the newest tested one are reported as untested, not
 refused.
 
+## An S3 endpoint with the bucket in its path
+
+With `LAKEFS_BLOCKSTORE_S3_ENDPOINT` ending in a bucket (`https://<account>.r2.cloudflarestorage.com/<bucket>`, see [production](production.md#external-s3)), LakeFS's storage namespaces name a key prefix inside that bucket. Object requests work, which is all KohakuHub needs: uploads, reads, commits, merges, reverts, links and repository creation (#133). Requests that name the bucket anywhere else do not:
+
+- `objects/copy`, a copy through the S3 gateway, and copying a multipart part: 403. KohakuHub's Reset copies nothing.
+- Import (`ImportStart`) and the S3 gateway's multipart-upload listing: they list the bucket, which goes wrong.
+- LakeFS's own garbage collection job (Spark): it lists and bulk-deletes. KohakuHub collects garbage itself.
+- Bucket region discovery: one anonymous probe of the prefix, which fails. LakeFS falls back to the configured region and logs an error. Set `LAKEFS_BLOCKSTORE_S3_DISCOVER_BUCKET_REGION=false` to skip it.
+- Keep `installation.allow_inter_region_storage` at its default (`true`). With `false`, LakeFS checks each new repository's region with that same probe, and repository creation fails.
+
+The CI job "backend tests (S3 endpoint with a path)" runs the backend suite this way, so a change that brings one of these calls back fails there.
+
 ## License
 
 LakeFS 1.87.0 changed its license from Apache 2.0 to the

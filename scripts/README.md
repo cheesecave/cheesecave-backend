@@ -354,8 +354,10 @@ python scripts/clear_s3_storage.py \
 
 **Requirements:**
 - Python 3.10+
-- `boto3` and `rich` packages (`pip install boto3 rich`)
+- `boto3` and `rich` packages (`pip install boto3 rich`), and the `kohakuhub` package (`pip install -e .`)
 - S3 credentials with delete permissions
+
+An endpoint with a path names the real bucket, as KohakuHub reads it (`--endpoint https://<account>.r2.cloudflarestorage.com/<bucket>`): `--bucket` is then a key prefix inside that bucket, and nothing outside it is listed or deleted. `show_s3_usage.py` reads endpoints the same way.
 
 ---
 

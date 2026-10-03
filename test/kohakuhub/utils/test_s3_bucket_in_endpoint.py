@@ -68,6 +68,9 @@ def test_the_layout_is_read_from_the_endpoint(monkeypatch):
     for plain in ("http://minio:9000", "http://minio:9000/", ""):
         monkeypatch.setattr(s3_module.cfg.s3, "endpoint", plain)
         assert s3_module.bucket_in_endpoint() is None
+    # Given explicitly (the maintenance scripts), neither comes from the config
+    assert s3_module.bucket_in_endpoint("https://h.example/real/x", "data") == ("https://h.example", "real", "x/data/")
+    assert s3_module.bucket_in_endpoint("", "data") is None
 
 
 def test_object_requests_reach_the_prefixed_key_in_the_real_bucket():
