@@ -29,6 +29,7 @@ export default defineConfig({
         adminNodeModules,
         "@vue/test-utils/dist/vue-test-utils.esm-bundler.mjs",
       ),
+      "element-plus": resolve(adminNodeModules, "element-plus"),
     },
     dedupe: ["vue", "pinia"],
     conditions: ["module", "browser", "development"],
