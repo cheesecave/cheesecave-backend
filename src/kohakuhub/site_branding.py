@@ -42,6 +42,18 @@ def get_branding() -> dict:
             value = getattr(record, field)
             if value is not None:
                 result[field] = value
+    # Older releases stored animated favicons. Serve their first frame without
+    # modifying the saved row or requiring a data migration.
+    favicon = result["favicon"]
+    prefix = "data:image/gif;base64,"
+    if favicon and favicon.startswith(prefix):
+        try:
+            result["favicon"] = normalize_asset(
+                base64.b64decode(favicon[len(prefix) :], validate=True), "favicon"
+            )
+        except (ValueError, HTTPException):
+            logger.warning("Invalid stored GIF favicon; using the bundled default")
+            result["favicon"] = None
     return result
 
 
@@ -84,11 +96,11 @@ def normalize_asset(contents: bytes, kind: AssetKind, loop: bool = True) -> str:
                 if source.width * source.height > MAX_IMAGE_PIXELS:
                     raise HTTPException(400, detail="Image must be at most 16 million pixels")
                 edge = 512 if kind == "header_logo" else 256
-                if source.format == "GIF":
+                if source.format == "GIF" and kind == "header_logo":
                     normalized = normalize_gif(source, edge, loop)
                     mime = "image/gif"
                 else:
-                    # Other raster formats use their first frame and strip metadata.
+                    # Favicons and other raster formats use their first frame.
                     source.seek(0)
                     image = ImageOps.exif_transpose(source).convert("RGBA")
                     image.thumbnail((edge, edge), Image.Resampling.LANCZOS)
@@ -113,6 +125,8 @@ def normalize_asset(contents: bytes, kind: AssetKind, loop: bool = True) -> str:
 
 
 def update_asset_animation(kind: AssetKind, loop: bool) -> dict:
+    if kind != "header_logo":
+        raise HTTPException(400, detail="Favicon images are static and have no playback settings")
     asset = get_branding()[kind]
     prefix = "data:image/gif;base64,"
     if not asset or not asset.startswith(prefix):

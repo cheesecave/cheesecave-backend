@@ -384,9 +384,9 @@ def animated_gif_bytes(size=(64, 32), loop=4):
     return output.getvalue()
 
 
-@pytest.mark.parametrize("kind,edge", [("header_logo", 512), ("favicon", 256)])
 @pytest.mark.parametrize("loop", [True, False])
-def test_gif_frames_timing_resize_and_upload_playback(branding_client, kind, edge, loop):
+def test_gif_frames_timing_resize_and_upload_playback(branding_client, loop):
+    kind, edge = "header_logo", 512
     session, _ = branding_client
     response = session.post(
         f"{ADMIN_URL}/assets/{kind}",
@@ -411,8 +411,8 @@ def test_gif_frames_timing_resize_and_upload_playback(branding_client, kind, edg
     assert session.get(PUBLIC_URL).json()[kind] == asset
 
 
-@pytest.mark.parametrize("kind", ["header_logo", "favicon"])
-def test_gif_default_repeat_and_lossless_playback_patch(branding_client, kind):
+def test_gif_default_repeat_and_lossless_playback_patch(branding_client):
+    kind = "header_logo"
     session, _ = branding_client
     session.put(ADMIN_URL, headers=HEADERS, json={"site_name": "Animated Hub"})
     other_kind = "favicon" if kind == "header_logo" else "header_logo"
@@ -439,6 +439,85 @@ def test_gif_default_repeat_and_lossless_playback_patch(branding_client, kind):
     assert again.status_code == 200
     assert again.json()[kind] == before[kind]
     assert session.get(PUBLIC_URL).json() == again.json()
+
+
+@pytest.mark.parametrize("loop", [True, False])
+def test_gif_favicon_upload_uses_static_first_frame(branding_client, loop):
+    session, _ = branding_client
+    logo = upload(session, "header_logo", animated_gif_bytes()).json()["header_logo"]
+    response = session.post(
+        f"{ADMIN_URL}/assets/favicon",
+        headers=HEADERS,
+        files={"file": ("favicon.gif", animated_gif_bytes((640, 320)), "image/gif")},
+        data={"loop": str(loop).lower()},
+    )
+    assert response.status_code == 200
+    favicon = response.json()["favicon"]
+    assert favicon.startswith("data:image/png;base64,")
+    with Image.open(BytesIO(base64.b64decode(favicon.split(",", 1)[1]))) as image:
+        assert image.format == "PNG"
+        assert image.n_frames == 1
+        assert image.size == (256, 128)
+        assert image.convert("RGB").getpixel((128, 64)) == (255, 0, 0)
+    assert SiteBranding.get_by_id(1).favicon == favicon
+    assert session.get(PUBLIC_URL).json()["favicon"] == favicon
+    assert response.json()["header_logo"] == logo
+    assert (
+        session.patch(
+            f"{ADMIN_URL}/assets/favicon/animation", headers=HEADERS, json={"loop": not loop}
+        ).status_code
+        == 400
+    )
+    assert session.get(PUBLIC_URL).json()["favicon"] == favicon
+
+
+def test_legacy_gif_favicon_is_static_without_rewriting_saved_data(branding_client):
+    session, _ = branding_client
+    legacy = "data:image/gif;base64," + base64.b64encode(animated_gif_bytes()).decode()
+    SiteBranding.create(id=1, site_name="Existing Hub", header_logo=legacy, favicon=legacy)
+    for path, headers in [(PUBLIC_URL, {}), (ADMIN_URL, HEADERS)]:
+        response = session.get(path, headers=headers)
+        assert response.status_code == 200
+        assert response.json()["site_name"] == "Existing Hub"
+        assert response.json()["header_logo"] == legacy
+        asset = response.json()["favicon"]
+        assert asset.startswith("data:image/png;base64,")
+        with Image.open(BytesIO(base64.b64decode(asset.split(",", 1)[1]))) as image:
+            assert image.n_frames == 1
+            assert image.convert("RGB").getpixel((32, 16)) == (255, 0, 0)
+    assert SiteBranding.get_by_id(1).favicon == legacy
+    assert (
+        session.patch(
+            f"{ADMIN_URL}/assets/favicon/animation", headers=HEADERS, json={"loop": False}
+        ).status_code
+        == 400
+    )
+    assert SiteBranding.get_by_id(1).favicon == legacy
+
+
+def test_gif_favicon_first_frame_transparency_is_preserved(branding_client):
+    session, _ = branding_client
+    first = Image.new("RGBA", (20, 10), (0, 0, 0, 0))
+    first.paste((255, 0, 0, 255), (0, 0, 10, 10))
+    second = Image.new("RGBA", (20, 10), (0, 0, 255, 255))
+    source = BytesIO()
+    first.save(source, "GIF", save_all=True, append_images=[second], duration=100, disposal=2)
+    response = upload(session, "favicon", source.getvalue())
+    assert response.status_code == 200
+    with Image.open(
+        BytesIO(base64.b64decode(response.json()["favicon"].split(",", 1)[1]))
+    ) as image:
+        assert image.getpixel((15, 5))[3] == 0
+        assert image.getpixel((5, 5)) == (255, 0, 0, 255)
+
+
+def test_invalid_legacy_gif_favicon_falls_back_without_losing_other_branding(branding_client):
+    session, _ = branding_client
+    SiteBranding.create(id=1, site_name="Existing Hub", favicon="data:image/gif;base64,broken")
+    response = session.get(PUBLIC_URL)
+    assert response.status_code == 200
+    assert response.json()["site_name"] == "Existing Hub"
+    assert response.json()["favicon"] is None
 
 
 def test_gif_transparency_and_disposal_are_preserved(branding_client):

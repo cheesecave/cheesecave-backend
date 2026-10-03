@@ -313,8 +313,7 @@ export function applyDocumentBranding(value, { admin = false } = {}) {
       document.head.appendChild(link);
     }
     const href = branding.favicon || fallback;
-    // Reassigning the same GIF URL can restart a play-once favicon when a
-    // refresh or an unrelated text save applies otherwise unchanged branding.
+    // Keep the existing icon when a refresh or text save leaves its URL unchanged.
     if (link.getAttribute("href") !== href) link.href = href;
     const type =
       branding.favicon?.match(/^data:(image\/[^;]+);/)?.[1] || "image/svg+xml";

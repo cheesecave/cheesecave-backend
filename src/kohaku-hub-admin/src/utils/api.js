@@ -35,7 +35,7 @@ export async function updateSiteBranding(token, branding) {
 export async function uploadSiteBrandingAsset(token, asset, file, loop = true) {
   const form = new FormData();
   form.append("file", file);
-  form.append("loop", String(loop));
+  if (asset === "header_logo") form.append("loop", String(loop));
   const response = await createAdminClient(token).post(
     `/site-branding/assets/${asset}`,
     form,
