@@ -122,6 +122,12 @@ async def test_list_s3_buckets_falls_back_when_listing_is_unsupported(monkeypatc
     assert result["buckets"][0]["name"] == "hub-storage"
     assert "not supported" in result["buckets"][0]["note"]
 
+    # A key that may list but sees no bucket: the configured one as well
+    fake_s3.list_buckets_error, fake_s3.list_buckets_result = None, {"Buckets": []}
+    result = await storage_router.list_s3_buckets()
+    assert result["buckets"][0]["name"] == "hub-storage"
+    assert result["buckets"][0]["note"] == "Using configured bucket"
+
 
 @pytest.mark.asyncio
 async def test_list_s3_buckets_aggregates_sizes_and_handles_per_bucket_errors(monkeypatch):
@@ -159,6 +165,41 @@ async def test_list_s3_buckets_aggregates_sizes_and_handles_per_bucket_errors(mo
 
 
 @pytest.mark.asyncio
+async def test_an_endpoint_with_the_bucket_in_its_path_shows_only_the_configured_bucket(monkeypatch):
+    """The configured bucket is a key prefix inside the endpoint's bucket
+    (#133): the admin pages see only it, sized within the prefix, never the
+    rest of the real bucket, whatever the key may list."""
+    fake_s3 = _FakeS3(list_buckets_result={"Buckets": [{"Name": "realbucket"}]})
+    sized, failing = [], {"on": False}
+
+    def fake_paginate(**kwargs):
+        sized.append(kwargs)
+        if failing["on"]:
+            raise RuntimeError("denied")
+        return [{"Contents": [{"Size": 4}]}]
+
+    fake_s3.paginator.paginate = fake_paginate
+    monkeypatch.setattr(storage_router, "run_in_s3_executor", _run_sync)
+    monkeypatch.setattr(storage_router, "get_s3_client", lambda: fake_s3)
+    _set_standard_s3(monkeypatch)
+    monkeypatch.setattr(storage_router.cfg.s3, "endpoint", "https://r2.example.com/realbucket")
+
+    result = await storage_router.list_s3_buckets()
+    assert result["buckets"] == [
+        {"name": "hub-storage", "creation_date": "N/A", "total_size": 4, "object_count": 1}
+    ]
+    assert {call["Bucket"] for call in sized} == {"hub-storage"}  # the client adds the prefix
+    failing["on"] = True
+    result = await storage_router.list_s3_buckets()
+    assert result["buckets"][0]["creation_date"] == "N/A" and "denied" in result["buckets"][0]["error"]
+
+    with pytest.raises(HTTPException) as refused:
+        await storage_router.list_s3_objects(bucket="realbucket")
+    assert refused.value.status_code == 400
+    assert fake_s3.list_calls == []
+
+
+@pytest.mark.asyncio
 async def test_list_s3_objects_supports_standard_endpoint(monkeypatch):
     fake_s3 = _FakeS3(
         list_objects_results=[
@@ -187,42 +228,23 @@ async def test_list_s3_objects_supports_standard_endpoint(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_list_s3_objects_supports_r2_style_endpoints(monkeypatch):
-    fake_s3 = _FakeS3(
-        list_objects_results=[
-                {
-                    "Contents": [
-                        {
-                            "Key": "hub-storage/models/a.bin",
-                            "Size": 12,
-                            "LastModified": datetime(2025, 1, 1, tzinfo=timezone.utc),
-                        }
-                    ],
-                "IsTruncated": False,
-                "ResponseMetadata": {"HTTPStatusCode": 200, "RequestId": "req"},
-            }
-        ]
-    )
-    seen = {}
+async def test_list_s3_objects_reports_a_failed_listing(monkeypatch):
+    """The client does the readdressing for an endpoint with a path
+    (test_s3_bucket_in_endpoint.py); a listing S3 refuses is a 500."""
+
+    class _Refusing:
+        def list_objects_v2(self, **kwargs):
+            raise RuntimeError("AccessDenied")
 
     monkeypatch.setattr(storage_router, "run_in_s3_executor", _run_sync)
-    monkeypatch.setattr(storage_router.cfg.s3, "endpoint", "https://r2.example.com/r2-root")
-    monkeypatch.setattr(storage_router.cfg.s3, "bucket", "hub-storage")
-    monkeypatch.setattr(storage_router.cfg.s3, "region", "auto")
-    monkeypatch.setattr(storage_router.cfg.s3, "force_path_style", True)
-    monkeypatch.setattr(storage_router.cfg.s3, "access_key", "key")
-    monkeypatch.setattr(storage_router.cfg.s3, "secret_key", "secret")
-    def fake_boto_client(service_name, **kwargs):
-        seen["client_kwargs"] = kwargs
-        return fake_s3
+    monkeypatch.setattr(storage_router, "get_s3_client", lambda: _Refusing())
+    _set_standard_s3(monkeypatch)
 
-    monkeypatch.setattr(storage_router.boto3, "client", fake_boto_client)
+    with pytest.raises(HTTPException) as failed:
+        await storage_router.list_s3_objects(prefix="models", limit=5)
 
-    result = await storage_router.list_s3_objects(prefix="models", limit=5)
-
-    assert seen["client_kwargs"]["endpoint_url"] == "https://r2.example.com"
-    assert result["objects"][0]["key"] == "models/a.bin"
-    assert result["objects"][0]["full_key"] == "hub-storage/models/a.bin"
+    assert failed.value.status_code == 500
+    assert failed.value.detail == {"error": "AccessDenied"}
 
 
 @pytest.mark.asyncio
@@ -240,9 +262,11 @@ async def test_delete_object_and_prepare_delete_prefix(monkeypatch):
     monkeypatch.setattr(storage_router, "create_confirmation_token", fake_create_confirmation_token)
     monkeypatch.setattr(storage_router, "cleanup_expired_confirmation_tokens", lambda: seen.setdefault("cleanup", True))
     _set_standard_s3(monkeypatch)
-    fake_s3.paginator.paginate = lambda **kwargs: [
-        {"Contents": [{"Key": "models/a.bin"}, {"Key": "models/b.bin"}]}
-    ]
+    def paginate(**kwargs):
+        seen["paginate"] = kwargs
+        return [{"Contents": [{"Key": "models/a.bin"}, {"Key": "models/b.bin"}]}]
+
+    fake_s3.paginator.paginate = paginate
 
     delete_result = await storage_router.delete_s3_object("models/a.bin")
     prepare_result = await storage_router.prepare_delete_prefix("models")
@@ -250,41 +274,9 @@ async def test_delete_object_and_prepare_delete_prefix(monkeypatch):
     assert delete_result["success"] is True
     assert fake_s3.deleted == [{"Bucket": "hub-storage", "Key": "models/a.bin"}]
     assert prepare_result["estimated_objects"] == 2
-    assert seen["token_kwargs"]["action_data"]["actual_prefix"] == "models"
-
-
-@pytest.mark.asyncio
-async def test_prepare_delete_prefix_supports_r2_endpoints(monkeypatch):
-    fake_s3 = _FakeS3()
-    token = SimpleNamespace(token="confirm-2")
-    seen = {}
-
-    monkeypatch.setattr(storage_router, "run_in_s3_executor", _run_sync)
-    monkeypatch.setattr(storage_router.cfg.s3, "endpoint", "https://r2.example.com/base-prefix")
-    monkeypatch.setattr(storage_router.cfg.s3, "bucket", "hub-storage")
-    monkeypatch.setattr(storage_router.cfg.s3, "region", "auto")
-    monkeypatch.setattr(storage_router.cfg.s3, "force_path_style", True)
-    monkeypatch.setattr(storage_router.cfg.s3, "access_key", "key")
-    monkeypatch.setattr(storage_router.cfg.s3, "secret_key", "secret")
-    def fake_boto_client(service_name, **kwargs):
-        seen["client_kwargs"] = kwargs
-        return fake_s3
-
-    def fake_create_confirmation_token(**kwargs):
-        seen["token_kwargs"] = kwargs
-        return token
-
-    monkeypatch.setattr(storage_router.boto3, "client", fake_boto_client)
-    monkeypatch.setattr(storage_router, "create_confirmation_token", fake_create_confirmation_token)
-    monkeypatch.setattr(storage_router, "cleanup_expired_confirmation_tokens", lambda: None)
-    fake_s3.paginator.paginate = lambda **kwargs: [{"Contents": [{"Key": "base-prefix/hub-storage/models/a.bin"}]}]
-
-    result = await storage_router.prepare_delete_prefix("models")
-
-    assert result["estimated_objects"] == 1
-    assert seen["client_kwargs"]["endpoint_url"] == "https://r2.example.com"
-    assert seen["token_kwargs"]["action_data"]["actual_bucket"] == "base-prefix"
-    assert seen["token_kwargs"]["action_data"]["actual_prefix"] == "hub-storage/models"
+    # The configured bucket and the prefix as asked: the client readdresses them
+    assert seen["paginate"] == {"Bucket": "hub-storage", "Prefix": "models"}
+    assert seen["token_kwargs"]["action_data"] == {"display_prefix": "models", "estimated_count": 2}
 
 
 @pytest.mark.asyncio
@@ -309,11 +301,7 @@ async def test_delete_s3_prefix_validates_tokens_and_deletes_batches(monkeypatch
     monkeypatch.setattr(
         storage_router,
         "consume_confirmation_token",
-        lambda token: {
-            "display_prefix": "other",
-            "actual_prefix": "models",
-            "actual_bucket": "hub-storage",
-        },
+        lambda token: {"display_prefix": "other", "estimated_count": 2},
     )
     with pytest.raises(HTTPException) as mismatch:
         await storage_router.delete_s3_prefix("models", "bad-token")
@@ -323,11 +311,7 @@ async def test_delete_s3_prefix_validates_tokens_and_deletes_batches(monkeypatch
     monkeypatch.setattr(
         storage_router,
         "consume_confirmation_token",
-        lambda token: {
-            "display_prefix": "models",
-            "actual_prefix": "models",
-            "actual_bucket": "hub-storage",
-        },
+        lambda token: {"display_prefix": "models", "estimated_count": 2},
     )
     result = await storage_router.delete_s3_prefix("models", "good-token")
 
@@ -337,3 +321,15 @@ async def test_delete_s3_prefix_validates_tokens_and_deletes_batches(monkeypatch
         {"Key": "models/b.bin"},
     ]
     assert any("Failed to delete models/b.bin: denied" in warning for warning in warnings)
+
+    # Quiet: S3 lists only failures, so a clean batch answers nothing at all;
+    # a page without objects is skipped
+    fake_s3.delete_objects_result = {}
+    fake_s3.paginator.paginate = lambda **kwargs: [
+        {},
+        {"Contents": [{"Key": "models/a.bin"}, {"Key": "models/b.bin"}]},
+    ]
+    batches = len(fake_s3.deleted_batches)
+    result = await storage_router.delete_s3_prefix("models", "good-token")
+    assert result["deleted_count"] == 2
+    assert len(fake_s3.deleted_batches) == batches + 1

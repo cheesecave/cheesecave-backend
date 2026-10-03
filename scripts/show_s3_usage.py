@@ -18,7 +18,7 @@ Usage:
         --detailed
 
 Requirements:
-    - boto3 and rich packages
+    - boto3 and rich packages, and the kohakuhub package (pip install -e .)
 """
 
 import argparse
@@ -34,10 +34,12 @@ from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.table import Table
 from rich.tree import Tree
 
+from kohakuhub.utils.s3 import bucket_in_endpoint, readdress
+
 console = Console()
 
 
-def get_s3_client(endpoint, access_key, secret_key, region="us-east-1"):
+def get_s3_client(endpoint, access_key, secret_key, region="us-east-1", bucket=None):
     """Create S3 client with provided credentials.
 
     Args:
@@ -45,13 +47,18 @@ def get_s3_client(endpoint, access_key, secret_key, region="us-east-1"):
         access_key: S3 access key
         secret_key: S3 secret key
         region: S3 region (default: us-east-1)
+        bucket: The bucket the script works on, a key prefix when the
+            endpoint's path names the real bucket
 
     Returns:
         boto3 S3 client
     """
-    return boto3.client(
+    # An endpoint with a path names the real bucket, as KohakuHub reads it:
+    # ``bucket`` is then a key prefix inside it (docs/reference/config.md)
+    layout = bucket_in_endpoint(endpoint, bucket) if bucket else None
+    client = boto3.client(
         "s3",
-        endpoint_url=endpoint,
+        endpoint_url=layout[0] if layout else endpoint,
         aws_access_key_id=access_key,
         aws_secret_access_key=secret_key,
         region_name=region,
@@ -60,6 +67,7 @@ def get_s3_client(endpoint, access_key, secret_key, region="us-east-1"):
             s3={"addressing_style": "path"},
         ),
     )
+    return readdress(client, bucket, layout) if layout else client
 
 
 def format_size(bytes_size):
@@ -299,6 +307,7 @@ def main():
             access_key=args.access_key,
             secret_key=args.secret_key,
             region=args.region,
+            bucket=args.bucket,
         )
     except Exception as e:
         console.print(f"[red]Error connecting to S3: {e}[/red]")

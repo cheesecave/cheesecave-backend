@@ -3,6 +3,7 @@
 import atexit
 from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime, timedelta, timezone
+from urllib.parse import quote, urlparse
 
 import boto3
 from botocore.config import Config as BotoConfig
@@ -99,6 +100,93 @@ MULTIPART_THRESHOLD = property(lambda self: get_multipart_threshold())
 MULTIPART_CHUNK_SIZE = property(lambda self: get_multipart_chunk_size())
 
 
+def bucket_in_endpoint(
+    endpoint: str | None = None, bucket: str | None = None
+) -> tuple[str, str, str] | None:
+    """``(root endpoint, real bucket, key prefix)`` when the endpoint carries the
+    real bucket in its path, as ``https://<account>.r2.cloudflarestorage.com/
+    <bucket>``: ``bucket`` is then a key prefix inside that bucket, after any
+    further path. ``None`` for a plain endpoint (#133). Both default to the
+    configured ones."""
+    parsed = urlparse((cfg.s3.endpoint if endpoint is None else endpoint) or "")
+    parts = [part for part in parsed.path.split("/") if part]
+    if not parts:
+        return None
+    prefix = "/".join(parts[1:] + [cfg.s3.bucket if bucket is None else bucket]) + "/"
+    return f"{parsed.scheme}://{parsed.netloc}", parts[0], prefix
+
+
+class _BucketInEndpoint:
+    """Presents ``cfg.s3.bucket`` as a bucket on a client of the root endpoint.
+
+    S3 reads the first path segment as the bucket, and an SDK only prepends an
+    endpoint's path to the URL: requests naming a key went where they should,
+    but a copy's source (a header) and bucket-level requests (listing, bulk
+    delete, bucket checks) did not (#133). Requests naming the configured
+    bucket now name the real one, keys under the prefix, and listings never
+    leave it; the keys S3 answers come back without the prefix.
+    """
+
+    KEYS = ("Key", "StartAfter", "Marker", "KeyMarker")  # what requests name under the prefix
+    ANSWERED = ("Key", "Prefix", "StartAfter", "Marker", "NextMarker", "KeyMarker", "NextKeyMarker")
+    LISTED = ("Contents", "Versions", "DeleteMarkers", "Deleted", "Errors", "Uploads", "CommonPrefixes")
+
+    def __init__(self, bucket: str, real: str, prefix: str):
+        self.bucket, self.real, self.prefix = bucket, real, prefix
+
+    def request(self, params, model, context, **kwargs):
+        """``before-parameter-build``."""
+        if "CopySource" in params:
+            params["CopySource"] = self._source(params["CopySource"])
+        if params.get("Bucket") != self.bucket:
+            return
+        params["Bucket"] = self.real
+        context["bucket_in_endpoint"] = True
+        for name in self.KEYS:
+            if name in params:
+                params[name] = self.prefix + params[name]
+        if "Prefix" in model.input_shape.members:  # a listing never leaves the prefix
+            params["Prefix"] = self.prefix + params.get("Prefix", "")
+        if "Delete" in params:  # a new list: the caller's is left as it was
+            objects = [{**item, "Key": self.prefix + item["Key"]} for item in params["Delete"]["Objects"]]
+            params["Delete"] = {**params["Delete"], "Objects": objects}
+
+    def _source(self, source: str) -> str:
+        """A copy source arrives as the header's string: botocore's own handler
+        for the operation runs first and URL-quotes a dict's key."""
+        bucket, _, rest = source.lstrip("/").partition("/")
+        if bucket != self.bucket:
+            return source
+        return f"{self.real}/{quote(self.prefix, safe='/~')}{rest}"
+
+    def response(self, parsed, context, **kwargs):
+        """``after-call``: runs last, after botocore decoded listed keys."""
+        if not context.get("bucket_in_endpoint"):
+            return
+        self._relative(parsed)
+        for name in self.LISTED:
+            for item in parsed.get(name) or []:
+                self._relative(item)
+
+    def _relative(self, item: dict) -> None:
+        for name in self.ANSWERED:
+            value = item.get(name)
+            if isinstance(value, str) and value.startswith(self.prefix):
+                item[name] = value[len(self.prefix) :]
+        for name in ("Bucket", "Name"):
+            if item.get(name) == self.real:
+                item[name] = self.bucket
+
+
+def readdress(client, bucket: str, layout: tuple[str, str, str]):
+    """Hook ``client``, made for ``layout``'s root endpoint, so that ``bucket``
+    reads as a bucket (``_BucketInEndpoint``); returns the client."""
+    hooks = _BucketInEndpoint(bucket, layout[1], layout[2])
+    client.meta.events.register_first("before-parameter-build.s3", hooks.request)
+    client.meta.events.register_last("after-call.s3", hooks.response)
+    return client
+
+
 def get_s3_client():
     """Create configured S3 client with configurable signature version.
 
@@ -106,7 +194,9 @@ def get_s3_client():
     - None: Use default (s3v2 for MinIO compatibility)
     - "s3v4": AWS S3, Cloudflare R2 (required for these services)
 
-    Set via KOHAKU_HUB_S3_SIGNATURE_VERSION environment variable.
+    Set via KOHAKU_HUB_S3_SIGNATURE_VERSION environment variable. An endpoint
+    with a path names the real bucket (``bucket_in_endpoint``): the client then
+    talks to the root endpoint and keeps ``cfg.s3.bucket`` as a key prefix.
 
     Returns:
         Configured boto3 S3 client.
@@ -116,15 +206,6 @@ def get_s3_client():
 
     if cfg.s3.force_path_style:
         s3_config["addressing_style"] = "path"
-
-    # For R2/endpoints with bucket in path (e.g., https://r2.com/account-id/bucket)
-    # Check if endpoint contains path components
-    if cfg.s3.endpoint and ("/" in cfg.s3.endpoint.split("//", 1)[1]):
-        # Endpoint has path - treat it as bucket endpoint
-        s3_config["use_accelerate_endpoint"] = False
-        logger.debug(
-            "S3 endpoint contains path - using bucket_endpoint mode for R2 compatibility"
-        )
 
     # Use configured signature version
     sig_version = cfg.s3.signature_version
@@ -140,14 +221,16 @@ def get_s3_client():
             s3=s3_config,
         )
 
-    return boto3.client(
+    layout = bucket_in_endpoint()
+    client = boto3.client(
         "s3",
-        endpoint_url=cfg.s3.endpoint,
+        endpoint_url=layout[0] if layout else cfg.s3.endpoint,
         aws_access_key_id=cfg.s3.access_key,
         aws_secret_access_key=cfg.s3.secret_key,
         region_name=cfg.s3.region,
         config=boto_config,
     )
+    return readdress(client, cfg.s3.bucket, layout) if layout else client
 
 
 def init_storage():

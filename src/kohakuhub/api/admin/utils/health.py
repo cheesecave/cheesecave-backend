@@ -24,7 +24,7 @@ from kohakuhub import lakefs_compat
 from kohakuhub.config import cfg
 from kohakuhub.db import db
 from kohakuhub.logger import get_logger
-from kohakuhub.utils.s3 import get_s3_client
+from kohakuhub.utils.s3 import bucket_in_endpoint, get_s3_client
 
 logger = get_logger("ADMIN")
 
@@ -154,9 +154,11 @@ async def probe_postgres(
     )
 
 
-def _list_buckets_sync() -> str | None:
+def _head_bucket_sync() -> str | None:
+    # The configured bucket, not ListBuckets: a key scoped to one bucket (an R2
+    # API token) may list no buckets, and the bucket is what must be reachable
     s3 = get_s3_client()
-    response = s3.list_buckets()
+    response = s3.head_bucket(Bucket=cfg.s3.bucket)
     server = (
         response.get("ResponseMetadata", {})
         .get("HTTPHeaders", {})
@@ -282,8 +284,9 @@ async def _fetch_minio_admin_version(timeout: float) -> str | None:
     """
     region = cfg.s3.region or "us-east-1"
     try:
+        layout = bucket_in_endpoint()  # the admin API is at the root
         url, headers = _sign_minio_admin_get(
-            endpoint=cfg.s3.endpoint,
+            endpoint=layout[0] if layout else cfg.s3.endpoint,
             path="/minio/admin/v3/info",
             access_key=cfg.s3.access_key,
             secret_key=cfg.s3.secret_key,
@@ -319,19 +322,19 @@ async def _fetch_minio_admin_version(timeout: float) -> str | None:
 async def probe_minio(
     timeout: float = DEFAULT_PROBE_TIMEOUT_SECONDS,
 ) -> dict[str, Any]:
-    """Probe S3 / MinIO via list_buckets, with a best-effort version lookup.
+    """Probe S3 / MinIO via head_bucket, with a best-effort version lookup.
 
-    The S3 ``list_buckets`` call doubles as a liveness check and gives us the
-    ``Server`` header (e.g. ``MinIO``). When the backend identifies itself as
-    MinIO we additionally hit ``/minio/admin/v3/info`` to surface the actual
-    release tag; non-MinIO endpoints (AWS, R2, …) keep the header value as
-    their version string.
+    The S3 ``head_bucket`` call on the configured bucket doubles as a liveness
+    check and gives us the ``Server`` header (e.g. ``MinIO``). When the backend
+    identifies itself as MinIO we additionally hit ``/minio/admin/v3/info`` to
+    surface the actual release tag; non-MinIO endpoints (AWS, R2, …) keep the
+    header value as their version string.
     """
     start = time.perf_counter()
     endpoint = cfg.s3.endpoint
     try:
         server = await asyncio.wait_for(
-            asyncio.to_thread(_list_buckets_sync),
+            asyncio.to_thread(_head_bucket_sync),
             timeout=timeout,
         )
     except asyncio.TimeoutError:
