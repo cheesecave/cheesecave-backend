@@ -24,3 +24,8 @@ Initial split releases share the recorded upstream baseline. Subsequent API
 changes need explicit consumer compatibility checks against web/admin releases
 and the existing huggingface_hub matrix. `/api/version` reports backend build
 identity, not an automatic frontend capability negotiation protocol.
+## Homepage configuration
+
+After deployment, use **Admin → Site → Homepage** to configure the visitor welcome
+card, its illustration and actions. Signed-in users see a personal workspace. See
+[Homepage configuration](deployment/homepage.md) for settings and migration details.

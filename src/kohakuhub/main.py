@@ -16,6 +16,7 @@ from kohakuhub.api import (
     misc,
     settings,
     site_branding,
+    site_homepage,
     stats,
     validation,
 )
@@ -205,6 +206,7 @@ app.include_router(quota, tags=["quota"])
 app.include_router(admin.router, prefix="/admin/api", tags=["admin"])
 app.include_router(misc.router, prefix=cfg.app.api_base, tags=["utils"])
 app.include_router(site_branding.router, prefix=cfg.app.api_base, tags=["site-branding"])
+app.include_router(site_homepage.router, prefix=cfg.app.api_base, tags=["site-homepage"])
 app.include_router(org, prefix="/org", tags=["organizations"])
 app.include_router(git_http.router, tags=["git"])
 app.include_router(ssh_keys.router, tags=["ssh-keys"])

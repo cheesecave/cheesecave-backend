@@ -77,6 +77,26 @@ class SiteBranding(BaseModel):
         table_name = "site_branding"
 
 
+class SiteHomepage(BaseModel):
+    """Homepage overrides; unset columns use the bundled defaults, row ID is 1."""
+
+    id = IntegerField(primary_key=True)
+    enabled = BooleanField(null=True)
+    eyebrow = CharField(max_length=100, null=True)
+    title = CharField(max_length=200, null=True)
+    description = TextField(null=True)
+    primary_label = CharField(max_length=80, null=True)
+    primary_url = CharField(max_length=2048, null=True)
+    secondary_label = CharField(max_length=80, null=True)
+    secondary_url = CharField(max_length=2048, null=True)
+    illustration = CharField(max_length=20, null=True)
+    animation_enabled = BooleanField(null=True)
+    show_repositories = BooleanField(null=True)
+
+    class Meta:
+        table_name = "site_homepage"
+
+
 class User(BaseModel):
     """Unified User/Organization model.
 
@@ -769,6 +789,7 @@ def init_db():
     db.create_tables(
         [
             SiteBranding,
+            SiteHomepage,
             User,
             EmailVerification,
             Session,

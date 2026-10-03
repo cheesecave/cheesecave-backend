@@ -6,7 +6,7 @@ icon: i-carbon-paint-brush
 
 # Site Branding
 
-Open **Site Branding** in the admin portal to edit the site's display name and
+Open **Site → Branding** in the admin portal to edit the site's display name and
 footer introduction. Upload the header logo and favicon separately; each image
 has its own control to restore the bundled default. Saving text and uploading or
 restoring an image are separate operations.
