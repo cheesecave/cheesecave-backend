@@ -2,6 +2,7 @@
 
 import asyncio
 import re
+import weakref
 from collections import OrderedDict
 from datetime import datetime, timezone
 from typing import Literal
@@ -43,24 +44,36 @@ TREE_PAGE_SIZE = 1000
 TREE_EXPAND_PAGE_SIZE = 50
 PATHS_INFO_MAX_PATHS = 1000
 PATHS_INFO_CONCURRENCY = 16
-# Concurrency cap for the per-target ``logCommits`` calls in
-# ``resolve_last_commits_for_paths``. Each call is independent so we can
-# fan them out under a shared async client; 16 mirrors the existing
-# PATHS_INFO_CONCURRENCY budget and stays well under common LakeFS
-# connection-pool limits.
-LAST_COMMIT_LOOKUP_CONCURRENCY = 16
+# A path-filtered ``logCommits`` costs LakeFS a check of nearly every commit
+# of the history whatever ``amount``/``limit`` say (it queues one per commit
+# on a pool every request shares and waits for all of them), and a directory
+# a full diff per commit: on a large repository on R2, hours, and every other
+# lookup queues behind it. So directories get none, and the process runs few
+# file lookups at once, each given up after a while (the request is
+# cancelled, which stops LakeFS's work). ponytail: until last commits are
+# recorded at commit time.
+LAST_COMMIT_LOOKUP_CONCURRENCY = 2
+LAST_COMMIT_LOOKUP_TIMEOUT = 5.0  # seconds, waiting for a slot included
+_lookup_slots: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Semaphore]" = (
+    weakref.WeakKeyDictionary()
+)
 
-# A path's last commit as of a commit, which never changes, per (LakeFS
-# repository, commit, is a directory, path). A path-filtered log walks back
-# to the path's last change, seconds for one untouched over thousands of
-# commits, and LakeFS serves them one at a time: every visitor of a
-# directory would wait for all the others (#101). ponytail: per process,
-# by entry count.
+# A file's last commit as of a commit, which never changes, per (LakeFS
+# repository, commit, path): every visitor of a directory would otherwise
+# cost LakeFS the same lookups (#101). ponytail: per process, by entry count.
 LAST_COMMIT_CACHE_ENTRIES = 100_000
-_last_commits: "OrderedDict[tuple[str, str, bool, str], dict | None]" = OrderedDict()
-_looking_up: dict[tuple[str, str, bool, str], asyncio.Task] = {}
+_last_commits: "OrderedDict[tuple[str, str, str], dict | None]" = OrderedDict()
+_looking_up: dict[tuple[str, str, str], asyncio.Task] = {}
 _COMMIT_ID = re.compile(r"^[0-9a-f]{64}$")
 NAME_PREFIX_MAX_LENGTH = 256
+
+
+def _slots() -> asyncio.Semaphore:
+    """The running event loop's last-commit lookup slots."""
+    loop = asyncio.get_running_loop()
+    if loop not in _lookup_slots:
+        _lookup_slots[loop] = asyncio.Semaphore(LAST_COMMIT_LOOKUP_CONCURRENCY)
+    return _lookup_slots[loop]
 
 
 def _normalize_repo_path(path: str) -> str:
@@ -233,68 +246,46 @@ async def resolve_last_commits_for_paths(
 ) -> dict[str, dict | None]:
     """Resolve the latest commit touching each target path.
 
-    For every entry in ``targets`` (each ``{path: ..., type: 'file'|'directory'}``)
-    issue a ``logCommits`` call with the matching ``objects=[path]`` (file) or
-    ``prefixes=[path/]`` (directory) filter and ``amount=1, limit=true`` so
-    LakeFS returns at most the most recent qualifying commit.
+    For every file in ``targets`` (each ``{path: ..., type: 'file'|'directory'}``)
+    issue a ``logCommits`` call with ``objects=[path]`` and ``amount=1,
+    limit=true``. A directory gets ``None``, and so does a file LakeFS does
+    not answer for within ``LAST_COMMIT_LOOKUP_TIMEOUT`` (why: the comment
+    at ``LAST_COMMIT_LOOKUP_CONCURRENCY``).
 
-    Why this is fast: LakeFS implements path-filtered log via its
-    content-addressed metarange tree (``checkPathListInCommit`` in
-    ``pkg/catalog/catalog.go``) — when a path's containing range hash matches
-    between two commits, LakeFS short-circuits without fetching diff bodies.
-    Each call is single-digit milliseconds regardless of how deep the path
-    sits in the commit log. Earlier revisions of this function reproduced the
-    walk client-side via per-commit ``diff_refs`` calls; that pattern was
-    O(commits-walked) and dominated ``/tree?expand=true`` latency on
-    WAN-deployed instances. See issue #59 for the measured ~60× speedup and
-    the LakeFS-source pointer.
+    Note: ``logCommits`` skips merge commits by default. If a future caller
+    needs first-parent merge traversal they can invoke
+    ``log_commits(..., first_parent=True)`` directly.
 
-    Note: ``logCommits`` skips merge commits by default, matching what the
-    previous diff-walk produced (it inspected only single-parent diffs as
-    well). If a future caller needs first-parent merge traversal they can
-    invoke ``log_commits(..., first_parent=True)`` directly.
-
-    LakeFS version requirement: the ``objects=`` / ``prefixes=`` / ``limit=``
-    parameters used here were introduced in LakeFS v0.54.0, well below the
-    oldest supported release (``kohakuhub.lakefs_compat``).
+    LakeFS version requirement: the ``objects=`` / ``limit=`` parameters
+    used here were introduced in LakeFS v0.54.0, well below the oldest
+    supported release (``kohakuhub.lakefs_compat``).
     """
     if not targets:
         return {}
 
     client = get_lakefs_rest_client()
-    sem = asyncio.Semaphore(LAST_COMMIT_LOOKUP_CONCURRENCY)
     # Only a commit's answers are kept: a branch moves
     keep = bool(_COMMIT_ID.match(revision))
 
-    async def look_up(path: str, kind: str | None) -> tuple[dict | None, bool]:
+    async def ask(path: str) -> dict:
+        async with _slots():
+            return await client.log_commits(
+                repository=lakefs_repo, ref=revision, amount=1, limit=True, objects=[path]
+            )
+
+    async def look_up(path: str) -> tuple[dict | None, bool]:
         """The last commit, and whether LakeFS answered (else it is not kept)."""
-        # ``objects`` for files, ``prefixes`` for directories. The directory
-        # filter must end with ``/`` so LakeFS treats it as a strict prefix,
-        # otherwise paths sharing a basename leading edge would qualify.
-        if kind == "directory":
-            kwargs = {"prefixes": [f"{path}/"]}
-        else:
-            kwargs = {"objects": [path]}
-        async with sem:
-            try:
-                page = await client.log_commits(
-                    repository=lakefs_repo,
-                    ref=revision,
-                    amount=1,
-                    limit=True,
-                    **kwargs,
-                )
-            except Exception as error:
-                logger.debug(
-                    f"log_commits for {kind or 'file'}={path!r} on {lakefs_repo}@{revision}: {error}"
-                )
-                return None, False
+        try:
+            page = await asyncio.wait_for(ask(path), LAST_COMMIT_LOOKUP_TIMEOUT)
+        except Exception as error:  # an error, or no answer in time
+            logger.debug(f"log_commits for {path!r} on {lakefs_repo}@{revision}: {error!r}")
+            return None, False
 
         results = page.get("results") or []
         return (_serialize_last_commit(results[0]) if results else None), True
 
-    async def look_up_and_keep(key, path, kind) -> tuple[dict | None, bool]:
-        commit, answered = await look_up(path, kind)
+    async def look_up_and_keep(key, path) -> tuple[dict | None, bool]:
+        commit, answered = await look_up(path)
         if answered:
             _last_commits[key] = commit
             while len(_last_commits) > LAST_COMMIT_CACHE_ENTRIES:
@@ -305,17 +296,18 @@ async def resolve_last_commits_for_paths(
         path = target.get("path")
         if not path:
             return "", None
-        kind = target.get("type")
+        if target.get("type") == "directory":
+            return path, None
         if not keep:
-            return path, (await look_up(path, kind))[0]
-        key = (lakefs_repo, revision, kind == "directory", path)
+            return path, (await look_up(path))[0]
+        key = (lakefs_repo, revision, path)
         if key in _last_commits:
             _last_commits.move_to_end(key)
             return path, _last_commits[key]
         # Concurrent requests for the same path share one lookup
         task = _looking_up.get(key)
         if task is None or task.get_loop() is not asyncio.get_running_loop():
-            task = _looking_up[key] = asyncio.ensure_future(look_up_and_keep(key, path, kind))
+            task = _looking_up[key] = asyncio.ensure_future(look_up_and_keep(key, path))
             task.add_done_callback(
                 lambda t: _looking_up.pop(key, None) if _looking_up.get(key) is t else None
             )

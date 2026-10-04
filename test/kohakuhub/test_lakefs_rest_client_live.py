@@ -227,8 +227,8 @@ async def test_aclose_mid_session_then_next_call_succeeds(client):
 async def test_tree_expand_true_end_to_end_through_pool(client):
     """Full integration: the ``/tree?expand=true`` route uses the singleton
     pool to fan out per-target ``logCommits`` calls. Verify the response is
-    well-formed and each entry carries a non-null ``lastCommit`` mapped to
-    the seed's two commits.
+    well-formed and each file carries a non-null ``lastCommit`` mapped to
+    the seed's two commits; directories get none.
     """
 
     response = await client.get(
@@ -248,6 +248,9 @@ async def test_tree_expand_true_end_to_end_through_pool(client):
 
     for entry in entries:
         last = entry.get("lastCommit")
+        if entry["type"] == "directory":
+            assert last is None, f"a directory gets no lastCommit: {entry!r}"
+            continue
         assert isinstance(last, dict), f"missing lastCommit on {entry['path']}: {entry!r}"
         for required in ("id", "title", "date"):
             assert required in last, (

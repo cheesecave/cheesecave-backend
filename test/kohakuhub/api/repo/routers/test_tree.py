@@ -142,7 +142,8 @@ async def test_tree_pagination_follows_link_next_header(owner_client):
 
 async def test_paths_info_expanded_directory_has_no_size_like_the_hub(client):
     """The Hub sizes no directory, with ``expand`` or without: it only adds
-    ``lastCommit``. Summing a directory would list everything under it."""
+    ``lastCommit``. Summing a directory would list everything under it. Its
+    ``lastCommit`` is null: LakeFS would diff every commit of the history."""
     response = await client.post(
         "/api/models/owner/demo-model/paths-info/main",
         data={"paths": ["weights"], "expand": "true"},
@@ -151,4 +152,4 @@ async def test_paths_info_expanded_directory_has_no_size_like_the_hub(client):
     assert response.status_code == 200
     (entry,) = response.json()
     assert entry["type"] == "directory" and entry["size"] == 0
-    assert entry["lastCommit"]["id"]
+    assert entry["lastCommit"] is None

@@ -312,13 +312,10 @@ async def test_resolve_last_commits_for_paths_uses_lakefs_path_filter(monkeypatc
         ],
     )
 
-    # Output map: file/dir resolved to their commits, ghost path → None.
+    # Files resolve to their commits, a ghost path to None; a directory is
+    # not looked up at all (see the next tests)
     assert resolved == {
-        "docs": {
-            "id": "commit-5",
-            "title": "Edit docs",
-            "date": tree_api._format_commit_date(1713657500),
-        },
+        "docs": None,
         "weights/model.bin": {
             "id": "commit-7",
             "title": "Refresh model weights",
@@ -328,20 +325,15 @@ async def test_resolve_last_commits_for_paths_uses_lakefs_path_filter(monkeypatc
     }
 
     # Every call asks LakeFS for at most one commit and pins ``limit=true``
-    # so the server stops walking after the first qualifying commit. There
-    # are exactly N calls (one per target), no other primitives used.
-    assert len(seen_calls) == 3
+    # so the server stops walking after the first qualifying commit. One
+    # call per file, none for the directory.
+    assert len(seen_calls) == 2
     for call in seen_calls:
         assert call["repository"] == "lake"
         assert call["ref"] == "main"
         assert call["amount"] == 1
         assert call["limit"] is True
-        # Every call carries either objects= or prefixes= but not both.
-        has_objects = bool(call.get("objects"))
-        has_prefixes = bool(call.get("prefixes"))
-        assert has_objects ^ has_prefixes, (
-            f"each call must use exactly one of objects/prefixes, got {call!r}"
-        )
+        assert call["objects"] and "prefixes" not in call
 
     # Targets list shape sanity-checks.
     assert await tree_api.resolve_last_commits_for_paths("lake", "main", []) == {}
@@ -440,37 +432,22 @@ async def test_resolve_last_commits_for_paths_concurrency_capped(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_resolve_last_commits_for_paths_directory_filter_uses_trailing_slash(
-    monkeypatch,
-):
-    """Directory targets must be passed to LakeFS as a strict-prefix filter
-    (``prefixes=[path + "/"]``). Without the trailing slash, LakeFS would
-    match siblings that share the directory's basename leading edge — e.g.
-    ``prefixes=["docs"]`` would also match ``docs.txt`` or ``docs-old/``.
-    Pin the exact wire shape so this regression cannot creep back in.
-    """
+async def test_resolve_last_commits_for_paths_does_not_look_up_directories(monkeypatch):
+    """A directory's last commit costs LakeFS a full diff per commit of the
+    history (``prefixes=``), hours on a large repository on R2: none is
+    asked for, the directory gets no last commit."""
     seen_calls: list[dict] = []
 
     class _CapturingClient:
         async def log_commits(self, **kwargs):
             seen_calls.append(dict(kwargs))
-            return {
-                "results": [
-                    {
-                        "id": "stub-commit",
-                        "message": "stub",
-                        "creation_date": 0,
-                        "parents": [],
-                    }
-                ],
-                "pagination": {"has_more": False},
-            }
+            return {"results": [{"id": "c", "message": "m", "creation_date": 0}]}
 
     monkeypatch.setattr(tree_api, "get_lakefs_rest_client", lambda: _CapturingClient())
 
-    await tree_api.resolve_last_commits_for_paths(
+    resolved = await tree_api.resolve_last_commits_for_paths(
         "lake",
-        "main",
+        "a" * 64,
         [
             {"path": "docs", "type": "directory"},
             {"path": "nested/sub-tree", "type": "directory"},
@@ -478,23 +455,115 @@ async def test_resolve_last_commits_for_paths_directory_filter_uses_trailing_sla
         ],
     )
 
-    by_target: dict[str, dict] = {}
-    for call in seen_calls:
-        if call.get("objects"):
-            by_target[call["objects"][0]] = call
-        else:
-            by_target[call["prefixes"][0]] = call
+    assert resolved["docs"] is None and resolved["nested/sub-tree"] is None
+    assert resolved["model.bin"]["id"] == "c"
+    assert [call["objects"] for call in seen_calls] == [["model.bin"]]
 
-    # Directory entries are passed with the trailing slash exactly.
-    assert "docs/" in by_target
-    assert by_target["docs/"]["prefixes"] == ["docs/"]
-    assert "objects" not in by_target["docs/"]
-    assert "nested/sub-tree/" in by_target
-    assert by_target["nested/sub-tree/"]["prefixes"] == ["nested/sub-tree/"]
-    # File entries are passed verbatim, NO trailing slash, NO prefix mode.
-    assert "model.bin" in by_target
-    assert by_target["model.bin"]["objects"] == ["model.bin"]
-    assert "prefixes" not in by_target["model.bin"]
+
+class _StallingClient:
+    """A LakeFS that stops answering path-filtered logs until released."""
+
+    def __init__(self):
+        self.answering = asyncio.Event()
+        self.calls = 0
+        self.cancelled = 0
+
+    async def log_commits(self, **kwargs):
+        self.calls += 1
+        try:
+            await self.answering.wait()
+        except asyncio.CancelledError:
+            self.cancelled += 1
+            raise
+        return {"results": [{"id": "late", "message": "m", "creation_date": 0}]}
+
+
+async def test_a_stalled_lookup_gives_up_and_is_asked_again(monkeypatch):
+    """A lookup LakeFS does not answer in time gives no last commit, is
+    cancelled (so LakeFS can drop the work) and is not kept: once LakeFS
+    answers again, the same path, at the same commit, resolves. Before,
+    every later request for that path waited on the stuck lookup until
+    the process restarted."""
+    stalling = _StallingClient()
+    monkeypatch.setattr(tree_api, "get_lakefs_rest_client", lambda: stalling)
+    monkeypatch.setattr(tree_api, "LAST_COMMIT_LOOKUP_TIMEOUT", 0.05)
+    commit = "b" * 64
+    target = [{"path": "README.md", "type": "file"}]
+
+    first, second = await asyncio.gather(
+        tree_api.resolve_last_commits_for_paths("lake", commit, target),
+        tree_api.resolve_last_commits_for_paths("lake", commit, target),
+    )
+
+    assert first == second == {"README.md": None}
+    assert stalling.calls == 1 and stalling.cancelled == 1  # shared, then dropped
+    assert not tree_api._looking_up
+
+    stalling.answering.set()
+    again = await tree_api.resolve_last_commits_for_paths("lake", commit, target)
+
+    assert again["README.md"]["id"] == "late"
+    assert stalling.calls == 2
+
+
+async def test_waiting_for_a_lookup_slot_counts_against_its_time(monkeypatch):
+    """The time a lookup waits for one of the process's few slots counts:
+    a request is never held longer than its lookup time, however many
+    lookups are queued ahead of it."""
+    stalling = _StallingClient()
+    monkeypatch.setattr(tree_api, "get_lakefs_rest_client", lambda: stalling)
+    monkeypatch.setattr(tree_api, "LAST_COMMIT_LOOKUP_TIMEOUT", 0.05)
+    targets = [{"path": f"f{i}.txt", "type": "file"} for i in range(10)]
+
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    resolved = await tree_api.resolve_last_commits_for_paths("lake", "main", targets)
+
+    assert set(resolved.values()) == {None}
+    assert loop.time() - started < 1
+    assert stalling.calls == tree_api.LAST_COMMIT_LOOKUP_CONCURRENCY
+
+
+async def test_lookups_are_capped_across_requests(monkeypatch):
+    """The cap is the process's, not each request's: concurrent requests
+    share it, so a busy directory page cannot fan out on LakeFS."""
+    in_flight = peak = 0
+
+    class _CountingClient:
+        async def log_commits(self, **kwargs):
+            nonlocal in_flight, peak
+            in_flight += 1
+            peak = max(peak, in_flight)
+            await asyncio.sleep(0.01)
+            in_flight -= 1
+            return {"results": []}
+
+    monkeypatch.setattr(tree_api, "get_lakefs_rest_client", lambda: _CountingClient())
+    pages = [
+        [{"path": f"p{page}/f{i}.txt", "type": "file"} for i in range(5)] for page in range(4)
+    ]
+
+    await asyncio.gather(
+        *(tree_api.resolve_last_commits_for_paths("lake", "main", page) for page in pages)
+    )
+
+    assert peak == tree_api.LAST_COMMIT_LOOKUP_CONCURRENCY == 2
+
+
+def test_lookup_slots_work_in_every_event_loop(monkeypatch):
+    """The slots belong to the running event loop: a second loop (another
+    test, a worker thread) gets its own instead of failing on the first's."""
+
+    class _Client:
+        async def log_commits(self, **kwargs):
+            return {"results": [{"id": "c", "message": "m", "creation_date": 0}]}
+
+    monkeypatch.setattr(tree_api, "get_lakefs_rest_client", lambda: _Client())
+    target = [{"path": "a.txt", "type": "file"}]
+
+    for _ in range(2):
+        resolved = asyncio.run(tree_api.resolve_last_commits_for_paths("lake", "main", target))
+        assert resolved["a.txt"]["id"] == "c"
 
 
 @pytest.mark.asyncio
@@ -1654,8 +1723,8 @@ async def test_last_commits_at_a_commit_are_looked_up_once(last_commit_log):
     again = await tree_api.resolve_last_commits_for_paths("lake", COMMIT, targets)
 
     assert all(r == again for r in results)
-    assert again["meta"]["id"] == "c-meta/" and again["README.md"]["id"] == "c-README.md"
-    assert sorted(last_commit_log.calls) == [(COMMIT, "README.md"), (COMMIT, "meta/")]
+    assert again["meta"] is None and again["README.md"]["id"] == "c-README.md"
+    assert last_commit_log.calls == [(COMMIT, "README.md")]
 
 
 @pytest.mark.asyncio
