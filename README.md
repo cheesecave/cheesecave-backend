@@ -122,3 +122,7 @@ The Dataset Viewer backend retains its separate
 [license](src/kohakuhub/datasetviewer/LICENSE). Follow the license applicable to
 each component. Historical monorepo paths in the original licensing guide remain
 as source information; the links above identify the current locations.
+
+See [dated notices](NOTICE.md) for attribution and modification notices.
+
+Categorized [manual regression CI](docs/development/ci.md) is prepared for later runs, with [中文说明](docs/development/ci.zh-CN.md). Preparing this configuration does not enable or trigger GitHub Actions.

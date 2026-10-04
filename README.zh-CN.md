@@ -103,3 +103,7 @@ Admin 同理。网关会重新解析替换后容器的地址。更新后端时�
 [LICENSE](LICENSE) 和 [LICENSING.md](LICENSING.md) 保留原文；Dataset Viewer 后端组件
 保留其独立的 [许可证](src/kohakuhub/datasetviewer/LICENSE)。请按对应组件的许可证使用代码。
 原许可说明中的 monorepo 路径属于历史资料，拆分后的当前路径见上述链接。
+
+修改及署名声明见 [NOTICE.md](NOTICE.md)。
+
+后端已准备 [分类手动回归 CI](docs/development/ci.zh-CN.md)，供以后运行；添加这些配置不会启用或触发 GitHub Actions。

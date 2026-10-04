@@ -256,3 +256,5 @@ __marimo__/
 # Standalone deployment secrets and local Compose overrides
 .env
 compose.override.yml
+
+/docs/licensing-review*.md

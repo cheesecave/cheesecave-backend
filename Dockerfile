@@ -8,7 +8,7 @@ RUN pip install --no-cache-dir uv
 
 WORKDIR /app
 
-COPY ./pyproject.toml ./README.md ./LICENSE ./LICENSING.md /app/
+COPY ./pyproject.toml ./README.md ./LICENSE ./LICENSING.md ./NOTICE.md /app/
 COPY ./provenance /app/provenance
 RUN mkdir -p /app/src/kohakuhub
 RUN echo "" > /app/src/kohakuhub/__init__.py
