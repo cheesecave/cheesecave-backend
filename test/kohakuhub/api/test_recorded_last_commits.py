@@ -357,8 +357,11 @@ async def test_failing_to_record_never_fails_the_change(m, owner_client, monkeyp
     monkeypatch.setattr(m.pc, "record", broken)
     monkeypatch.setattr(m.pc, "record_squash", broken_squash)
     await repo.commit(_file("f.txt", "1"), summary="still committed")
+    again = await repo.commit(_file("f.txt", "2"), summary="again")
+    reverted = await owner_client.post(f"/api/models/{repo.id}/branch/main/revert", json={"ref": again})
     response = await owner_client.post("/api/repos/squash", json={"repo": repo.id, "type": "model"})
 
+    assert reverted.status_code == 200, reverted.text
     assert response.status_code == 200, response.text
     assert _rows(m, repo) == {}  # a listing then asks LakeFS, bounded
 

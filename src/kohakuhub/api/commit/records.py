@@ -325,7 +325,10 @@ async def record_commits(
         for commit_id, wanted in rounds:
             commit = await client.get_commit(repository=lakefs_repo, commit_id=commit_id)
             made_at[commit_id] = datetime.fromtimestamp(commit["creation_date"], tz=timezone.utc)
-            await path_commits.record(repo, branch, {**commit, "id": commit_id}, wanted)
+            try:  # a listing without them asks LakeFS
+                await path_commits.record(repo, branch, {**commit, "id": commit_id}, wanted)
+            except Exception as e:
+                logger.warning(f"Could not record the last commits of {commit_id[:8]}: {e}")
         file_ids = {}
         for batch in _batches(list(lfs_now)):
             file_ids.update(
