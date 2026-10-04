@@ -133,11 +133,13 @@ def check_column_exists(db, cfg, table_name: str, column_name: str) -> bool:
     try:
         cursor = db.cursor()
         if cfg.app.db_backend == "postgres":
+            # Probe the table resolved by search_path, not a same-named table in another schema.
             cursor.execute(
                 """
-                SELECT column_name
-                FROM information_schema.columns
-                WHERE table_name=%s AND column_name=%s
+                SELECT attname
+                FROM pg_catalog.pg_attribute
+                WHERE attrelid=to_regclass(%s) AND attname=%s
+                    AND attnum > 0 AND NOT attisdropped
             """,
                 (table_name, column_name),
             )
