@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
+from peewee import SqliteDatabase
 
 import kohakuhub.api.admin.routers.users as admin_users
 
@@ -49,11 +50,12 @@ class _Query:
         self.offset_value = value
         return self
 
-    def order_by(self, *args):
-        return self
-
     def count(self):
         return len(self.items)
+
+    def order_by(self, field):
+        self.items.sort(key=lambda item: getattr(item, field.name))
+        return self
 
     def __iter__(self):
         items = self.items[self.offset_value :]
@@ -198,6 +200,72 @@ async def test_get_user_info_and_list_users_cover_not_found_and_filters(monkeypa
     _FakeUserModel.select_query = _Query(items=[alice, org])
     listed_with_orgs = await admin_users.list_users(include_orgs=True, limit=10, offset=1)
     assert [item["username"] for item in listed_with_orgs["users"]] == ["org-team"]
+    assert listed_with_orgs["total"] == 2
+
+
+@pytest.mark.asyncio
+async def test_list_users_orders_before_pagination_and_preserves_total(monkeypatch):
+    """Updated users must not drift behind organizations in physical row order."""
+    created_at = datetime(2024, 1, 2, tzinfo=timezone.utc)
+    rows = [
+        SimpleNamespace(
+            id=user_id,
+            username=f"user-{user_id}",
+            email=None,
+            email_verified=True,
+            is_active=True,
+            is_org=user_id > 5,
+            private_quota_bytes=None,
+            public_quota_bytes=None,
+            created_at=created_at,
+        )
+        for user_id in [1, 2, 3, 6, 7, 5]
+    ]
+    monkeypatch.setattr(admin_users, "User", _FakeUserModel)
+    _usage(monkeypatch, {})
+    _FakeUserModel.select_query = _Query(items=rows)
+    first = await admin_users.list_users(include_orgs=True, limit=4, offset=0)
+    assert [user["id"] for user in first["users"]] == [1, 2, 3, 5]
+    assert first["total"] == 6
+
+    _FakeUserModel.select_query = _Query(items=rows)
+    second = await admin_users.list_users(include_orgs=True, limit=4, offset=4)
+    assert [user["id"] for user in second["users"]] == [6, 7]
+    assert second["total"] == 6
+
+
+@pytest.mark.asyncio
+async def test_list_users_total_and_pages_follow_organization_and_search_filters(monkeypatch):
+    """Exercise the real ORM query against an isolated, disposable database."""
+    user_model = admin_users.User
+    database = SqliteDatabase(":memory:")
+    _usage(monkeypatch, {})
+    with user_model.bind_ctx(database, bind_refs=False, bind_backrefs=False):
+        database.create_tables([user_model])
+        for user_id in range(1, 26):
+            user_model.create(
+                id=user_id,
+                username=f"entry-{user_id}",
+                normalized_name=f"entry-{user_id}",
+                is_org=user_id > 5,
+                email=f"user-{user_id}@example.com" if user_id <= 5 else None,
+            )
+        # A user updated after organizations exist must still be in its ID position.
+        user_model.update(email_verified=True).where(user_model.id == 5).execute()
+        first = await admin_users.list_users(include_orgs=True, limit=20, offset=0)
+        second = await admin_users.list_users(include_orgs=True, limit=20, offset=20)
+        assert [user["id"] for user in first["users"]] == list(range(1, 21))
+        assert [user["id"] for user in second["users"]] == list(range(21, 26))
+        assert first["total"] == second["total"] == 25
+
+        users_only = await admin_users.list_users(include_orgs=False, limit=20, offset=0)
+        assert [user["id"] for user in users_only["users"]] == list(range(1, 6))
+        assert users_only["total"] == 5
+
+        searched = await admin_users.list_users(search="user-5@", include_orgs=True)
+        assert [user["id"] for user in searched["users"]] == [5]
+        assert searched["total"] == 1
+    database.close()
 
 
 @pytest.mark.asyncio
@@ -226,9 +294,7 @@ async def test_create_user_and_delete_user_cover_conflicts_force_and_success(mon
         admin_users, "db", SimpleNamespace(atomic=lambda: _AtomicContext(atomic_state))
     )
     monkeypatch.setattr(admin_users.bcrypt, "gensalt", lambda: b"salt")
-    monkeypatch.setattr(
-        admin_users.bcrypt, "hashpw", lambda password, salt: b"hashed-password"
-    )
+    monkeypatch.setattr(admin_users.bcrypt, "hashpw", lambda password, salt: b"hashed-password")
     monkeypatch.setattr(
         admin_users,
         "create_user",
