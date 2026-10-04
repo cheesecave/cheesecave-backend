@@ -34,7 +34,7 @@ server {
     #   /<repo_type>s/<ns>/<name>/tree/<rev>/...         (list files)
     #   /<ns>/<name>/resolve/...                         (model default)
     # The chain tester in the admin SPA exercises these same routes
-    # (see src/kohaku-hub-admin/vite.config.js for the dev-mode mirror)
+    # (see ../cheesecave-admin/vite.config.js for the dev-mode mirror)
     # so misconfigured nginx → CHAIN_EXHAUSTED on every probe.
     location / {
         proxy_pass http://kohakuhub-backend:48888;

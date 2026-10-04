@@ -1,350 +1,45 @@
-# Local Development
+# Standalone backend development
 
-This setup runs the KohakuHub backend locally in your Python virtualenv, while Docker provides the supporting services:
+Work from cheesecave-backend. Python 3.10+, Docker and Bash (WSL or Git Bash on
+Windows) are needed for the existing service helpers. Frontend Node/pnpm
+dependencies belong to the sibling web/admin repositories.
 
-- PostgreSQL for application metadata
-- MinIO for local S3-compatible storage
-- LakeFS for repository versioning
-- Vite dev servers for the main UI and admin UI
-
-It does not require `docker compose`. The scripts below use plain `docker`.
-
-## Prerequisites
-
-- Docker Engine
-- Python 3.10+
-- Node.js 18+
-- An existing virtualenv for backend work
-
-## One-Time Setup
-
-If you prefer a single command surface, run `make help` from the repo root to see the shortcuts below.
-
-### 1. Backend dependencies
-
-```bash
-./venv/bin/pip install -e ".[dev]"
-```
-
-If you already activated the virtualenv:
-
-```bash
+```sh
+python -m venv venv
+# Activate the environment for your shell.
 pip install -e ".[dev]"
-```
-
-### 2. Frontend dependencies
-
-```bash
-pnpm install
-```
-
-### 3. Create your local env file
-
-```bash
-cp .env.dev.example .env.dev
-```
-
-Or:
-
-```bash
 make init-env
-```
-
-The defaults are already wired to the local Docker services and Vite dev servers.
-
-## Start Local Infra
-
-```bash
-./scripts/dev/up_infra.sh
-```
-
-Or:
-
-```bash
 make infra-up
-```
-
-This starts:
-
-- Postgres on `127.0.0.1:25432`
-- MinIO API on `127.0.0.1:29001`
-- MinIO console on `127.0.0.1:29000`
-- LakeFS on `127.0.0.1:28000`
-
-Persistent dev data is stored under `hub-meta/dev/`.
-
-### MinIO CORS (required for in-browser preview)
-
-The pure-client safetensors / parquet preview (issue #27) issues cross-origin
-HTTP `Range` reads against the presigned S3 URL that `/resolve/` 302s to.
-Browsers will block those reads unless MinIO advertises CORS.
-
-`up_infra.sh` already passes `MINIO_API_CORS_ALLOW_ORIGIN=*` to the MinIO
-container by default, which is what both the Vite dev origin
-(`http://127.0.0.1:28300`) and production deploys need. Override it with the
-`DEV_MINIO_CORS_ALLOW_ORIGIN` variable in `.env.dev` if you want to restrict
-it to a specific origin (the value is forwarded verbatim as
-`Access-Control-Allow-Origin`; comma-separated origins also work).
-
-If you already have a MinIO container from before this change, recreate it
-so the env var lands:
-
-```bash
-docker rm -f kohakuhub-dev-minio
-./scripts/dev/up_infra.sh
-```
-
-Smoke-test the CORS response (should include
-`Access-Control-Allow-Origin: *` and `Access-Control-Allow-Methods: GET`):
-
-```bash
-curl -i -X OPTIONS http://127.0.0.1:29001/hub-storage \
-     -H 'Origin: http://127.0.0.1:28300' \
-     -H 'Access-Control-Request-Method: GET'
-```
-
-Without this, the preview modal opens, shows its spinner, then surfaces a
-browser-level CORS error instead of the parsed metadata. Downloads via
-`hf_hub_download` / direct `/resolve/` hits are unaffected — only the
-cross-origin Range probe the SPA does breaks.
-
-## Start The Backend
-
-```bash
-./scripts/dev/run_backend.sh
-```
-
-Or:
-
-```bash
 make backend
-```
-
-What this script does:
-
-- loads `.env.dev`
-- initializes LakeFS on first run
-- writes LakeFS credentials to `hub-meta/dev/lakefs/credentials.env`
-- runs database migrations
-- auto-seeds fixed demo users/orgs/repos on a fresh local environment when `KOHAKU_HUB_DEV_AUTO_SEED=true`
-- starts `uvicorn` with `--reload` on `127.0.0.1:48888`
-
-Swagger docs will be available at `http://127.0.0.1:48888/docs`.
-
-If you want the migrations + demo seed without holding the terminal open for `uvicorn`, run:
-
-```bash
-make seed-demo
-```
-
-This writes a local manifest to `hub-meta/dev/demo-seed-manifest.json`.
-
-To run background tasks, start the worker in another terminal after the backend is up:
-
-```bash
+# In another terminal, after the API has initialized credentials and tables:
 make worker
 ```
 
-See [Background Tasks](background-tasks.md) for how tasks work.
+The persisted PostgreSQL, MinIO, LakeFS and Valkey services, legacy KOHAKU_HUB
+variables and `hub-meta/dev` paths are unchanged. Edit ignored `.env.dev` and
+reuse its persisted LakeFS credentials when restarting. Start each UI from its
+own checkout using its development instructions. The API remains on :48888;
+web uses :5173 and admin :5174 in the standard sibling setup.
 
-## Start The Frontends
-
-Main UI:
-
-```bash
-pnpm run dev:ui
+```sh
+make seed-demo
+make verify-seed-demo
+make test-backend
+make test-backend RANGE_DIR=api/repo/routers
 ```
 
-Or:
-
-```bash
-make ui
-```
-
-Admin UI:
-
-```bash
-pnpm run dev:admin
-```
-
-Or:
-
-```bash
-make admin
-```
-
-Access:
-
-- Main UI: `http://127.0.0.1:5173`
-- Admin UI: `http://127.0.0.1:5174`
-
-The Vite configs already proxy API traffic to the backend at `127.0.0.1:48888`.
-
-## Why `KOHAKU_HUB_INTERNAL_BASE_URL` Exists
-
-For local development, the backend should generate public links that point to the main UI dev server (`5173`), but its own internal follow-up requests should still hit the backend directly (`48888`).
-
-Set in `.env.dev`:
-
-```bash
-KOHAKU_HUB_BASE_URL=http://127.0.0.1:5173
-KOHAKU_HUB_INTERNAL_BASE_URL=http://127.0.0.1:48888
-```
-
-This keeps:
-
-- browser-facing links on the frontend dev server
-- backend self-calls off the Vite proxy path
-
-## First Login / Admin
-
-Main UI seeded account:
-
-- Username: `mai_lin`
-- Password: `KohakuDev123!`
-
-Additional seeded users use the same password:
-
-- `leo_park`
-- `sara_chen`
-- `noah_kim`
-- `ivy_ops`
-
-The seeded data also includes fixed organizations and repositories, including public/private repos, model/dataset/space types, branches, tags, likes, LFS files, and dataset preview files.
-
-It also plants example rows for the admin **Background Tasks** page: one task in each state the page can show (succeeded, failed, queued, delayed retry, running, and running with an expired lease). Their `demo.*` kinds are never registered as handlers, so a running worker leaves them untouched.
-
-Admin UI login does not use a username/password. Open `http://127.0.0.1:5174` and use the token from `.env.dev`.
-
-Default local token:
-
-```bash
-KOHAKU_HUB_ADMIN_SECRET_TOKEN=dev-admin-token-change-me
-```
-
-## Common Commands
-
-Restart infra:
-
-```bash
-./scripts/dev/down_infra.sh
-./scripts/dev/up_infra.sh
-```
-
-Or:
-
-```bash
-make infra-down
-make infra-up
-```
-
-Stop infra only:
-
-```bash
-./scripts/dev/down_infra.sh
-```
-
-Or:
-
-```bash
-make infra-down
-```
-
-Tail a container log:
-
-```bash
-docker logs -f kohakuhub-dev-lakefs
-docker logs -f kohakuhub-dev-minio
-docker logs -f kohakuhub-dev-postgres
-```
-
-## Backend Tests
-
-Backend tests run against the real Postgres, MinIO, and LakeFS services. Use the `make test` entrypoint locally; inherited GitHub Actions and Codecov configuration have been removed before repository splitting.
-
-Start the local infra first:
-
-```bash
-make infra-up
-```
-
-Run the full backend suite with coverage:
-
-```bash
-make test
-```
-
-Run only one backend submodule by passing a path relative to both `test/kohakuhub/` and `src/kohakuhub/`:
-
-```bash
-make test RANGE_DIR=api
-make test RANGE_DIR=api/repo/routers
-```
-
-When `RANGE_DIR` is set, pytest runs `test/kohakuhub/${RANGE_DIR}` and coverage focuses on `src/kohakuhub/${RANGE_DIR}`.
-
-If you keep local test overrides in a repo-root `.env`, load them into your shell before running tests:
-
-```bash
-source .env
-make test
-```
-
-The test code reads environment variables only. It does not load `.env` directly.
-
-### An S3 endpoint with the bucket in its path
-
-Production can keep its objects inside another bucket: `KOHAKU_HUB_S3_ENDPOINT` ends with that bucket (`.../my-bucket`), and `KOHAKU_HUB_S3_BUCKET` is a key prefix inside it. For this layout, use MinIO with one bucket, a key allowed only on it, and LakeFS on the same endpoint. `test/kohakuhub/test_s3_bucket_in_endpoint_stack.py`, skipped otherwise, checks what is really stored. To run it locally, start such a MinIO and LakeFS, then point the test environment at them:
-
-```bash
-export KOHAKU_HUB_S3_ENDPOINT=http://127.0.0.1:<minio-port>/realbucket
-export KOHAKU_HUB_S3_PUBLIC_ENDPOINT=$KOHAKU_HUB_S3_ENDPOINT
-export KOHAKU_HUB_S3_ACCESS_KEY=<key allowed on realbucket> KOHAKU_HUB_S3_SECRET_KEY=<its secret>
-export KOHAKU_HUB_LAKEFS_ENDPOINT=http://127.0.0.1:<lakefs-port>
-make test
-```
-
-## Reset Local Data
-
-`make reset-local-data` is intentionally destructive. The script prints a bold red warning, explains the consequences, and asks for a single `y/N` confirmation before it clears the local app state through the in-process local reset helper.
-
-The reset flow no longer deletes `hub-meta/dev/` directly. Instead, it:
-
-- deletes all LakeFS repositories through the local LakeFS API
-- clears the configured S3 bucket through the storage client
-- rebuilds the KohakuHub application schema
-- removes the local demo seed manifest
-
-This avoids Docker bind-mount ownership issues and keeps the local infra containers running so you can re-seed immediately.
-
-If you want a clean local reset followed by fresh demo data bootstrapping:
-
-```bash
-make reset-and-seed
-```
-
-That command still goes through the same single `y/N` confirmation before anything is deleted.
-
-## Troubleshooting
-
-### Docker service ports are already taken
-
-Adjust the port mappings inside [`scripts/dev/up_infra.sh`](/home/zhangshaoang/wtf-projects/KohakuHub/scripts/dev/up_infra.sh) and keep `.env.dev` in sync.
-
-### LakeFS says it is already initialized but credentials are missing
-
-The bootstrap credentials are only returned once. If `hub-meta/dev/lakefs-data/` still exists but `hub-meta/dev/lakefs/credentials.env` was removed, either:
-
-- restore the credentials file, or
-- delete `hub-meta/dev/lakefs-data/` and initialize again
-
-### Backend cannot connect to Postgres
-
-Check:
-
-```bash
-docker logs kohakuhub-dev-postgres
-cat .env.dev
-```
-
-Make sure `KOHAKU_HUB_DATABASE_URL` matches `DEV_POSTGRES_*`.
+Backend tests mirror `src/kohakuhub` under `test/kohakuhub`. `make test` runs
+only the backend; frontend suites are run from their respective repositories.
+Full backend coverage retains its 80% gate. Dependencies and fixtures from
+PostgreSQL, MinIO and LakeFS are required for service-backed tests. Inherited
+GitHub Actions and Codecov configuration were removed before splitting; run
+Python/huggingface_hub compatibility and storage-layout checks locally as needed.
+
+`make infra-down` stops development services while preserving data.
+`make reset-local-data` and `make reset-and-seed` erase persisted local demo
+data through the existing warning/confirmation helper. These are development
+operations; they are not a production migration or backup workflow.
+
+For complete sibling source images or independent release deployment, see
+[Docker deployment](../deployment/docker.md). Do not apply old monorepo root
+pnpm targets or dist-directory mounts to this backend checkout.

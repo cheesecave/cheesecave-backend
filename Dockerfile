@@ -8,7 +8,8 @@ RUN pip install --no-cache-dir uv
 
 WORKDIR /app
 
-COPY ./pyproject.toml .
+COPY ./pyproject.toml ./README.md ./LICENSE ./LICENSING.md /app/
+COPY ./provenance /app/provenance
 RUN mkdir -p /app/src/kohakuhub
 RUN echo "" > /app/src/kohakuhub/__init__.py
 RUN uv pip install --system -e .
@@ -25,5 +26,9 @@ ARG KOHAKU_HUB_GIT_SHA=
 ARG KOHAKU_HUB_BUILD_TIME=
 ENV KOHAKU_HUB_GIT_SHA=${KOHAKU_HUB_GIT_SHA} KOHAKU_HUB_BUILD_TIME=${KOHAKU_HUB_BUILD_TIME}
 
+LABEL org.opencontainers.image.title="CheeseCave Backend" \
+      org.opencontainers.image.source="https://github.com/cheesecave/cheesecave-backend" \
+      org.opencontainers.image.revision=${KOHAKU_HUB_GIT_SHA}
+
 EXPOSE 48888
-CMD ["/app/startup.py"]
+CMD ["python", "/app/startup.py"]

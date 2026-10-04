@@ -1,4 +1,4 @@
-# KohakuHub Configuration Example
+# CheeseCave backend configuration (legacy KOHAKU_HUB environment names remain supported)
 # NOTE: This is for DIRECT uvicorn execution (development/testing only)
 # For Docker deployment, use docker-compose.yml or generate with:
 #   python scripts/generate_docker_compose.py
@@ -96,7 +96,7 @@ download_session_cleanup_threshold = 100  # Trigger cleanup when sessions > this
 download_keep_sessions_days = 30  # Keep sessions from last N days
 debug_log_payloads = false  # Log commit payloads (development only)
 # Site identification
-site_name = "KohakuHub"  # Customizable site name (e.g., "MyCompany Hub")
+site_name = "CheeseCave"  # Customizable site name (e.g., "MyCompany Hub")
 # Log Settings
 log_level = "INFO"  # Low level logs will be filted (avaiable options: "DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL" )
 log_format = "terminal"  # Output logs to "file" or "terminal" (maybe sql in future) 

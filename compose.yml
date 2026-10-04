@@ -1,4 +1,3 @@
-# Compatibility example; compose.yml is the maintained default.
 # CheeseCave image-based deployment. Set secrets and release references in .env.
 # Each image variable accepts an immutable tag or a complete name@sha256:digest.
 services:

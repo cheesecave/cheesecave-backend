@@ -16,6 +16,7 @@ def _open_bytes(_path, _mode):
 
 
 def test_validate_production_safety_and_parser_helpers():
+    assert hub_config.AppConfig().site_name == "CheeseCave"
     config = hub_config.Config(
         s3=hub_config.S3Config(),
         lakefs=hub_config.LakeFSConfig(),
@@ -29,9 +30,9 @@ def test_validate_production_safety_and_parser_helpers():
     assert any("keep_versions=1" in warning for warning in warnings)
     assert any("512 bytes" in warning for warning in warnings)
 
-    assert hub_config.update_recursive({"app": {"base_url": "a"}}, {"app": {"api_base": "/api"}}) == {
-        "app": {"base_url": "a", "api_base": "/api"}
-    }
+    assert hub_config.update_recursive(
+        {"app": {"base_url": "a"}}, {"app": {"api_base": "/api"}}
+    ) == {"app": {"base_url": "a", "api_base": "/api"}}
     assert hub_config._parse_quota(None) is None
     assert hub_config._parse_quota("") is None
     assert hub_config._parse_quota("None") is None

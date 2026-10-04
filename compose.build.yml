@@ -1,0 +1,26 @@
+# Optional sibling source builds: docker compose -f compose.yml -f compose.build.yml up -d --build
+services:
+  hub-api:
+    build:
+      context: .
+      args:
+        KOHAKU_HUB_GIT_SHA: ${KOHAKU_HUB_GIT_SHA:-}
+        KOHAKU_HUB_BUILD_TIME: ${KOHAKU_HUB_BUILD_TIME:-}
+  khub-worker:
+    build:
+      context: .
+      args:
+        KOHAKU_HUB_GIT_SHA: ${KOHAKU_HUB_GIT_SHA:-}
+        KOHAKU_HUB_BUILD_TIME: ${KOHAKU_HUB_BUILD_TIME:-}
+  hub-web:
+    build:
+      context: ../cheesecave-web
+      args:
+        VITE_GIT_COMMIT: ${CHEESECAVE_WEB_GIT_SHA:-}
+        VITE_GIT_DIRTY: ${CHEESECAVE_WEB_GIT_DIRTY:-false}
+  hub-admin:
+    build:
+      context: ../cheesecave-admin
+      args:
+        VITE_GIT_COMMIT: ${CHEESECAVE_ADMIN_GIT_SHA:-}
+        VITE_GIT_DIRTY: ${CHEESECAVE_ADMIN_GIT_DIRTY:-false}

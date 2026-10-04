@@ -1,189 +1,108 @@
----
-title: Docker Deployment
-description: Complete Docker Compose setup guide for KohakuHub.
-icon: i-carbon-container-services
----
+# CheeseCave deployment with independent images
 
-# Docker Deployment
+Run Compose from **cheesecave-backend**. The backend owns the gateway, PostgreSQL,
+LakeFS, MinIO, Valkey, API and background worker deployment. Main web and admin
+are separate images; neither frontend source nor dist directory is required by
+the release deployment.
 
-This guide provides a complete walkthrough for deploying KohakuHub using Docker Compose.
+## Configure a fresh installation
 
-## Quick Deploy (Recommended)
-
-This is the easiest and fastest way to get KohakuHub running.
-
-### 1. Clone the Repository
-
-```bash
-git clone https://github.com/KohakuBlueleaf/KohakuHub.git
-cd KohakuHub
+```sh
+python scripts/generate_docker_compose.py --generate-config
+# Edit the ignored .env: public URLs, three image references, secrets and UID/GID.
+docker compose config
 ```
 
-### 2. Configure and Deploy
+The helper creates secrets without overwriting an existing file. It does not
+start containers. `.env.compose.example` documents all release variables. The
+former interactive monorepo generator and root pnpm deployment workflow are
+retired. `scripts/deploy.py` prints the native Compose commands only.
 
-First, run the interactive script to generate your `docker-compose.yml` file. This will guide you through setting up the database, storage, and other services.
+`CHEESECAVE_BACKEND_IMAGE`, `CHEESECAVE_WEB_IMAGE`, and `CHEESECAVE_ADMIN_IMAGE`
+accept full image references, including `registry/name@sha256:digest`. Their
+`:local` defaults are for the source-build overlay; no published CheeseCave
+image is assumed. For an image-only installation, set references to images
+you have built and published, then run:
 
-```bash
-python scripts/generate_docker_compose.py
+```sh
+docker compose pull
+docker compose up -d
 ```
 
-Then, run the deployment script. This will automatically build the frontend applications and start all the Docker services.
+Provision the bind-mounted `hub-meta/lakefs-data` and `hub-meta/valkey-data`
+directories with the UID/GID configured in `.env`. Existing data lives in the
+same `hub-meta/` and `hub-storage/` paths. Use deployment-specific overrides
+for external databases/storage rather than copying old generated configs.
+The default LakeFS image is pinned to Apache-2.0 release 1.86.0. See
+[lakefs.md](lakefs.md) and [production.md](production.md) for external R2 details.
 
-```bash
-python scripts/deploy.py
+The API runs existing migrations and initializes LakeFS credentials in
+`hub-meta/hub-api`. Worker replicas use the **same backend image and environment**,
+read those credentials through a read-only mount, and wait for the API's tables.
+Do not launch a different backend build as the worker against the same database.
+
+## Optional source builds
+
+Use three sibling checkouts:
+
+```text
+CheeseCave/
+  cheesecave-backend/
+  cheesecave-web/
+  cheesecave-admin/
 ```
 
-That's it! The application is now running.
-
-## Step-by-Step Setup
-
-If you need more control over the setup process, you can follow these manual steps.
-
-### 1. Clone the Repository
-
-```bash
-git clone https://github.com/KohakuBlueleaf/KohakuHub.git
-cd KohakuHub
+```sh
+# Optional build identity; /api/version still uses its compatibility API identifier.
+export KOHAKU_HUB_GIT_SHA="$(git rev-parse HEAD)"
+export KOHAKU_HUB_BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+export CHEESECAVE_WEB_GIT_SHA="$(git -C ../cheesecave-web rev-parse HEAD)"
+export CHEESECAVE_ADMIN_GIT_SHA="$(git -C ../cheesecave-admin rev-parse HEAD)"
+export CHEESECAVE_WEB_GIT_DIRTY=false
+export CHEESECAVE_ADMIN_GIT_DIRTY=false
+# Set a UI's DIRTY value to true if its `git status --porcelain` is nonempty.
+docker compose -f compose.yml -f compose.build.yml build
+docker compose -f compose.yml -f compose.build.yml up -d
 ```
 
-### 2. Generate `docker-compose.yml`
+These opt-in build arguments identify the backend through `/api/version` and
+the separate UI builds through their footers. Blank SHA values mean unknown;
+set dirty markers accurately for worktree builds. Source identity is distinct
+from the pinned image digest. Supply each checkout's commit SHA explicitly
+when building images; no inherited CI pipeline remains enabled.
 
-Copy the example file and manually edit it to fit your environment.
+The API and worker build from this checkout, web/admin from their siblings. The
+base Compose needs no sibling checkout once release images exist.
 
-```bash
-cp docker-compose.example.yml docker-compose.yml
+## Independent updates and rollback
+
+After changing only `CHEESECAVE_WEB_IMAGE` in `.env`:
+
+```sh
+docker compose pull hub-web
+docker compose up -d --no-deps hub-web
 ```
 
-### 3. Build the Frontend
+For admin, use `hub-admin` instead. These commands recreate only that frontend;
+API, worker, infrastructure and the other UI retain their images. The gateway
+uses Docker DNS with a five-second validity and variable upstream addresses,
+so it picks up a recreated container's IP without a gateway restart. Keep
+`/admin/` in the admin image's served paths; the gateway does not strip it.
 
-Before starting the services, you need to build the frontend applications:
+Rollback a UI by restoring its previous pinned image reference and repeating
+the same `up -d --no-deps` command. For backend updates, update **both** `hub-api`
+and `khub-worker` together; check migration and job compatibility before any
+backend rollback. `docker-compose.example.yml` is a compatibility copy of the
+maintained `compose.yml`, not a second deployment design.
 
-```bash
-pnpm install
-pnpm run build
-```
+## Routes and persistent identities
 
-### 4. Start the Services
+The public gateway keeps `/` for web, `/admin/` for admin, and `/admin/api/`,
+`/api/`, `/org/`, Git smart HTTP, Git LFS, and typed/legacy resolve routes for
+the backend. Cookies and bearer authentication pass through the same origin.
 
-To start all services in detached mode, run:
-
-```bash
-docker-compose up -d --build
-```
-
-To have `GET /api/version` report which code the deployment runs (its `build.git_sha` and `build.build_time`), pass them when building:
-
-```bash
-docker-compose build \
-  --build-arg KOHAKU_HUB_GIT_SHA=$(git rev-parse HEAD) \
-  --build-arg KOHAKU_HUB_BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-docker-compose up -d
-```
-
-Without them, `build.git_sha` is read from the checkout when the service runs from one, and is `null` otherwise.
-
-## Security Configuration
-
-It is **critical** to change the default secrets before deploying to production.
-
-### Generate Secret Keys
-
-You can generate secure random strings for your secrets using the following commands:
-
-```bash
-# Generate a 64-character random string for session and admin tokens
-python scripts/generate_secret.py 64
-
-# Or use openssl
-openssl rand -base64 48
-```
-
-Update the following variables in your `docker-compose.yml` with the generated secrets:
-
-- `KOHAKU_HUB_SESSION_SECRET`
-- `KOHAKU_HUB_ADMIN_SECRET_TOKEN`
-- `LAKEFS_AUTH_ENCRYPT_SECRET_KEY`
-
-## Services
-
-The Docker Compose setup includes the following services:
-
-- **hub-ui**: Nginx server for the frontend application (port `28080`).
-- **hub-api**: The main FastAPI backend (port `48888`).
-- **khub-worker**: Runs durable background tasks from the same image as
-  `hub-api` and shares its environment. `hub-api` runs migrations and writes
-  the LakeFS credentials the worker reads. See
-  [Background Tasks](../development/background-tasks.md).
-- **postgres**: PostgreSQL database for metadata (port `5432`).
-- **lakefs**: LakeFS for data versioning (port `28000`). Pinned to
-  `treeverse/lakefs:1.86.0`; supported releases are 1.48.1 – 1.86.0, except
-  1.70.0. See [LakeFS Compatibility](lakefs.md).
-- **minio**: MinIO for S3-compatible object storage (ports `29000` and `29001`).
-
-### Running several workers
-
-`khub-worker` can run several replicas against the same queue. PostgreSQL
-hands each task to exactly one of them (`FOR UPDATE SKIP LOCKED`), so you do
-not need to copy the service. Pick the number at startup:
-
-```bash
-KOHAKU_HUB_WORKER_REPLICAS=3 docker compose up -d
-# or
-docker compose up -d --scale khub-worker=3
-```
-
-`KOHAKU_HUB_WORKER_REPLICAS` can also go in the `.env` file next to
-`docker-compose.yml`. It defaults to 1. Run `up -d` again with another number
-to add or remove replicas. A replica that is stopped hands its running tasks
-back to the queue, and another replica continues them.
-
-Things to keep in mind:
-
-- **Container names.** Replicas are named `<project>-khub-worker-1`, `-2`, and
-  so on, so the service sets no `container_name`. Read their logs together
-  with `docker compose logs -f khub-worker`.
-- **Seeing them.** Every replica registers itself. **Background Tasks →
-  Workers** in the admin panel lists them by hostname (the container id) with
-  their status and load, and the page header shows how many are online.
-- **Total parallelism.** Tasks running at once add up to replicas ×
-  `KOHAKU_HUB_WORKER_CONCURRENCY` (4 by default).
-- **Database connections.** Each replica holds its own PostgreSQL connection,
-  so check `max_connections` before running many.
-- **SQLite.** On a SQLite deployment, run one replica: SQLite writes are
-  serialized.
-- **Several hosts.** Docker Compose sets a fixed number of replicas on one
-  host; it does not scale automatically. To spread workers across machines,
-  run `khub-worker` on each host against the same PostgreSQL, LakeFS and
-  object storage.
-
-## Managing the Application
-
-### View Logs
-
-To view the logs for all services, use:
-
-```bash
-docker-compose logs -f
-```
-
-To view the logs for a specific service, use:
-
-```bash
-docker-compose logs -f hub-api
-```
-
-### Stop the Services
-
-To stop all running services, use:
-
-```bash
-docker-compose down
-```
-
-## Accessing the Application
-
-- **Web UI**: `http://localhost:28080`
-- **Admin Portal**: `http://localhost:28080/admin`
-- **API Docs**: `http://localhost:48888/docs`
-- **LakeFS UI**: `http://localhost:28000`
-- **MinIO Console**: `http://localhost:29000`
+Project/repository names change to CheeseCave. Python imports remain
+`kohakuhub`; `KOHAKU_HUB_*`, `HUB_CONFIG`, database/table names, migration
+numbers, LakeFS repository identifiers and object key prefixes stay compatible.
+Renaming a checkout is not a data migration. Preserve configured credentials
+and historical storage layout during an existing installation's cutover.

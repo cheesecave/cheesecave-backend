@@ -3,9 +3,9 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "kohaku-hub"
+name = "cheesecave-backend"
 version = "0.0.1"
-description = "A self-hosted HuggingFace alternative"
+description = "CheeseCave backend: a self-hosted Hugging Face compatible repository service"
 authors = [
     { name = "Shih-Ying Yeh(KohakuBlueLeaf)", email = "apolloyeh0123@gmail.com" },
 ]
@@ -45,7 +45,7 @@ dependencies = [
     "uvicorn",
     "pillow",
 ]
-urls = { "Homepage" = "https://kblueleaf.net/Kohaku-Hub" }
+urls = { "Homepage" = "https://github.com/cheesecave/cheesecave-backend", "Upstream" = "https://github.com/deepghs/KohakuHub" }
 
 [project.optional-dependencies]
 dev = [
