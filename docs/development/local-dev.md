@@ -260,7 +260,7 @@ docker logs -f kohakuhub-dev-postgres
 
 ## Backend Tests
 
-Backend tests run against the real Postgres, MinIO, and LakeFS services. The same `make test` entrypoint is used locally and in GitHub Actions.
+Backend tests run against the real Postgres, MinIO, and LakeFS services. Use the `make test` entrypoint locally; inherited GitHub Actions and Codecov configuration have been removed before repository splitting.
 
 Start the local infra first:
 
@@ -294,7 +294,7 @@ The test code reads environment variables only. It does not load `.env` directly
 
 ### An S3 endpoint with the bucket in its path
 
-Production can keep its objects inside another bucket: `KOHAKU_HUB_S3_ENDPOINT` ends with that bucket (`.../my-bucket`), and `KOHAKU_HUB_S3_BUCKET` is a key prefix inside it. The CI job "backend tests (S3 endpoint with a path)" runs the whole suite that way: MinIO with one bucket, a key allowed only on it, and LakeFS on the same endpoint (see `.github/workflows/fullstack-tests.yml`). Then `test/kohakuhub/test_s3_bucket_in_endpoint_stack.py`, skipped otherwise, checks what is really stored. To run it locally, start such a MinIO and LakeFS, then point the test environment at them:
+Production can keep its objects inside another bucket: `KOHAKU_HUB_S3_ENDPOINT` ends with that bucket (`.../my-bucket`), and `KOHAKU_HUB_S3_BUCKET` is a key prefix inside it. For this layout, use MinIO with one bucket, a key allowed only on it, and LakeFS on the same endpoint. `test/kohakuhub/test_s3_bucket_in_endpoint_stack.py`, skipped otherwise, checks what is really stored. To run it locally, start such a MinIO and LakeFS, then point the test environment at them:
 
 ```bash
 export KOHAKU_HUB_S3_ENDPOINT=http://127.0.0.1:<minio-port>/realbucket
