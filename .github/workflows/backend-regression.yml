@@ -1,0 +1,197 @@
+name: Backend regression (manual only)
+run-name: Backend ${{ inputs.category }} regression by @${{ github.actor }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      category:
+        description: Regression category to run when Actions is deliberately enabled
+        type: choice
+        required: true
+        default: fast
+        options: [fast, migrations, services, hf, all]
+
+permissions:
+  contents: read
+concurrency:
+  group: backend-regression-${{ github.ref }}-${{ inputs.category }}
+  cancel-in-progress: false
+defaults:
+  run:
+    shell: bash
+env:
+  PYTHONPATH: ${{ github.workspace }}/src:${{ github.workspace }}
+  KOHAKU_HUB_DB_BACKEND: postgres
+  KOHAKU_HUB_DATABASE_URL: postgresql://hub_test:hub_test_password@127.0.0.1:25432/kohakuhub_test
+  KOHAKU_HUB_S3_ENDPOINT: http://127.0.0.1:29001
+  KOHAKU_HUB_S3_PUBLIC_ENDPOINT: http://127.0.0.1:29001
+  KOHAKU_HUB_S3_ACCESS_KEY: minioadmin
+  KOHAKU_HUB_S3_SECRET_KEY: minioadmin
+  KOHAKU_HUB_S3_BUCKET: hub-storage
+  KOHAKU_HUB_S3_REGION: us-east-1
+  KOHAKU_HUB_LAKEFS_ENDPOINT: http://127.0.0.1:28000
+  KOHAKU_HUB_LAKEFS_REPO_NAMESPACE: hf
+  KOHAKU_HUB_LAKEFS_CREDENTIALS_FILE: ${{ github.workspace }}/hub-meta/test/backend-service/lakefs-credentials.env
+  KOHAKU_HUB_CACHE_ENABLED: "false"
+  KOHAKU_HUB_CACHE_URL: redis://127.0.0.1:26379/0
+  KOHAKU_HUB_CACHE_TEST_URL: redis://127.0.0.1:26379/0
+  COMPOSE_PROJECT_NAME: cheesecave-ci-${{ github.run_id }}-${{ github.run_attempt }}
+
+jobs:
+  fast:
+    if: ${{ inputs.category == 'fast' || inputs.category == 'all' }}
+    env:
+      KOHAKU_HUB_DB_BACKEND: sqlite
+      KOHAKU_HUB_DATABASE_URL: "sqlite:///:memory:"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install backend test dependencies
+        run: python -m pip install -e ".[dev]"
+      - name: Run isolated unit and API regressions
+        run: |
+          mkdir -p lint-reports/ci
+          python -m pytest test/kohakuhub -p scripts.ci.select_tests --ci-category fast -q --junitxml=lint-reports/ci/fast.xml 2>&1 | tee lint-reports/ci/fast.log
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        if: ${{ always() }}
+        with:
+          name: backend-fast-py${{ matrix.python }}
+          path: lint-reports/ci/
+          retention-days: 7
+          if-no-files-found: warn
+
+  migrations:
+    if: ${{ inputs.category == 'migrations' || inputs.category == 'all' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install backend test dependencies
+        run: python -m pip install -e ".[dev]"
+      - name: Start isolated migration PostgreSQL
+        run: docker compose -f scripts/ci/compose.yml up -d --wait --wait-timeout 180 postgres
+      - name: Run SQLite and PostgreSQL migration regressions
+        run: |
+          mkdir -p lint-reports/ci
+          python -m pytest test/kohakuhub -p scripts.ci.select_tests --ci-category migrations -q --junitxml=lint-reports/ci/migrations.xml 2>&1 | tee lint-reports/ci/migrations.log
+      - name: Collect infrastructure logs and remove temporary data
+        if: ${{ always() }}
+        run: |
+          mkdir -p lint-reports/ci
+          docker compose -f scripts/ci/compose.yml logs --no-color > lint-reports/ci/services.log 2>&1 || true
+          docker compose -f scripts/ci/compose.yml down --volumes --remove-orphans
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        if: ${{ always() }}
+        with:
+          name: backend-migrations
+          path: lint-reports/ci/
+          retention-days: 7
+          if-no-files-found: warn
+
+  services:
+    if: ${{ inputs.category == 'services' || inputs.category == 'all' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        cache: ["true", "false"]
+    env:
+      KOHAKU_HUB_CACHE_ENABLED: ${{ matrix.cache }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install backend test dependencies
+        run: python -m pip install -e ".[dev]"
+      - name: Start isolated service stack
+        run: docker compose -f scripts/ci/compose.yml up -d --wait --wait-timeout 180
+      - name: Run complete backend suite with the existing coverage gate
+        run: |
+          mkdir -p lint-reports/ci
+          python -m pytest test/kohakuhub -p scripts.ci.select_tests --ci-category services -q --cov=src/kohakuhub --cov-config=.coveragerc --cov-fail-under=80 --cov-report=xml:lint-reports/ci/coverage.xml --junitxml=lint-reports/ci/services.xml 2>&1 | tee lint-reports/ci/tests.log
+      - name: Collect infrastructure logs and remove temporary data
+        if: ${{ always() }}
+        run: |
+          mkdir -p lint-reports/ci
+          docker compose -f scripts/ci/compose.yml logs --no-color > lint-reports/ci/services.log 2>&1 || true
+          docker compose -f scripts/ci/compose.yml down --volumes --remove-orphans
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        if: ${{ always() }}
+        with:
+          name: backend-services-cache-${{ matrix.cache }}
+          path: lint-reports/ci/
+          retention-days: 7
+          if-no-files-found: warn
+
+  hf:
+    if: ${{ inputs.category == 'hf' || inputs.category == 'all' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        hub: ["0.20.3", "0.36.2", "1.6.0", "latest"]
+    env:
+      HUGGINGFACE_HUB_VERSION: ${{ matrix.hub }}
+      KOHAKU_HUB_CACHE_ENABLED: "true"
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install backend dependencies and the selected HF client
+        run: |
+          python -m pip install -e ".[dev]"
+          if [[ "$HUGGINGFACE_HUB_VERSION" == "latest" ]]; then
+            python -m pip install --upgrade huggingface_hub
+          else
+            python -m pip install --upgrade "huggingface_hub==$HUGGINGFACE_HUB_VERSION"
+          fi
+      - name: Start isolated service stack
+        run: docker compose -f scripts/ci/compose.yml up -d --wait --wait-timeout 180
+      - name: Run HF compatibility regressions
+        run: |
+          mkdir -p lint-reports/ci
+          python -m pytest test/kohakuhub -p scripts.ci.select_tests --ci-category hf -q --junitxml=lint-reports/ci/hf.xml 2>&1 | tee lint-reports/ci/hf.log
+      - name: Collect infrastructure logs and remove temporary data
+        if: ${{ always() }}
+        run: |
+          mkdir -p lint-reports/ci
+          docker compose -f scripts/ci/compose.yml logs --no-color > lint-reports/ci/services.log 2>&1 || true
+          docker compose -f scripts/ci/compose.yml down --volumes --remove-orphans
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        if: ${{ always() }}
+        with:
+          name: backend-hf-${{ matrix.hub }}
+          path: lint-reports/ci/
+          retention-days: 7
+          if-no-files-found: warn
