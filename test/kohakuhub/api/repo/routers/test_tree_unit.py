@@ -13,6 +13,13 @@ from fastapi.responses import JSONResponse
 import kohakuhub.api.repo.routers.tree as tree_api
 
 
+@pytest.fixture(autouse=True)
+def _nothing_recorded(monkeypatch):
+    """These repositories are fakes without rows: every last commit is
+    looked up (recorded ones: test_recorded_last_commits.py)."""
+    monkeypatch.setattr(tree_api.path_commits, "recorded", lambda repository, revision, paths: {})
+
+
 class _FakeLakeFSClient:
     def __init__(self, *, list_responses=None, stat_map=None, list_map=None):
         self.list_responses = list(list_responses or [])

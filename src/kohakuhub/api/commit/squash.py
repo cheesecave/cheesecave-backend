@@ -28,7 +28,7 @@ from datetime import datetime, timedelta, timezone
 
 import httpx
 
-from kohakuhub import tasks, usage
+from kohakuhub import path_commits, tasks, usage
 from kohakuhub.api.commit.records import OperationRefused, refused_by_lakefs
 from kohakuhub.api.repo.utils import operation_lock
 from kohakuhub.db import (
@@ -281,6 +281,12 @@ async def squash(
             dropped,
             whole_repository and failure is None,
         )
+        try:  # its commit is now every path's last
+            path_commits.record_squash(
+                repo, branch, await client.get_commit(repository=lakefs_repo, commit_id=commit)
+            )
+        except Exception as e:
+            logger.warning(f"Could not record the last commits of {commit[:8]}: {e}")
     if failure is not None:
         logger.warning(
             f"Squashed {repo.full_id}@{branch}, but not all refs went: {failure}"

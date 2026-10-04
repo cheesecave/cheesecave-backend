@@ -15,6 +15,7 @@ import uuid
 from kohakuhub import tasks
 from kohakuhub import storage_cleanup  # noqa: F401 - registers the storage cleanup tasks
 from kohakuhub import usage  # noqa: F401 - registers the usage recount tasks
+from kohakuhub import path_commits
 from kohakuhub.config import cfg
 from kohakuhub.db import BackgroundTask, BackgroundWorker, db
 from kohakuhub.lakefs_rest_client import close_lakefs_rest_client
@@ -138,6 +139,7 @@ class Worker:
     def _resync_periodic(self) -> None:
         try:
             tasks.ensure_periodic_tasks()
+            path_commits.ensure_backfill()
         except Exception as e:
             logger.exception("Failed to schedule periodic tasks", e)
             _reset_connection()

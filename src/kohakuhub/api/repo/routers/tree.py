@@ -11,6 +11,7 @@ from urllib.parse import urlencode
 from fastapi import APIRouter, Depends, Form, Query, Request
 from fastapi.responses import JSONResponse
 
+from kohakuhub import path_commits
 from kohakuhub.config import cfg
 from kohakuhub.auth.dependencies import get_optional_user
 from kohakuhub.auth.permissions import check_repo_read_permission
@@ -48,10 +49,11 @@ PATHS_INFO_CONCURRENCY = 16
 # of the history whatever ``amount``/``limit`` say (it queues one per commit
 # on a pool every request shares and waits for all of them), and a directory
 # a full diff per commit: on a large repository on R2, hours, and every other
-# lookup queues behind it. So directories get none, and the process runs few
-# file lookups at once, each given up after a while (the request is
-# cancelled, which stops LakeFS's work). ponytail: until last commits are
-# recorded at commit time.
+# lookup queues behind it. Main's last commits are recorded as commits land
+# (kohakuhub.path_commits); for the rest (another revision, a path not
+# recorded yet) directories get none, and the process runs few file lookups
+# at once, each given up after a while (the request is cancelled, which
+# stops LakeFS's work).
 LAST_COMMIT_LOOKUP_CONCURRENCY = 2
 LAST_COMMIT_LOOKUP_TIMEOUT = 5.0  # seconds, waiting for a slot included
 _lookup_slots: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Semaphore]" = (
@@ -317,6 +319,25 @@ async def resolve_last_commits_for_paths(
     return {path: commit for path, commit in pairs if path}
 
 
+async def _expand_last_commits(
+    repository: Repository,
+    lakefs_repo: str,
+    revision: str,
+    resolved_revision: str,
+    targets: list[dict[str, str]],
+) -> dict[str, dict | None]:
+    """The last commits main has recorded (kohakuhub.path_commits); the
+    rest the bounded LakeFS way."""
+    found = {
+        path: _serialize_last_commit(commit)
+        for path, commit in path_commits.recorded(
+            repository, revision, [t["path"] for t in targets if t.get("path")]
+        ).items()
+    }
+    rest = [t for t in targets if t.get("path") not in found]
+    return {**await resolve_last_commits_for_paths(lakefs_repo, resolved_revision, rest), **found}
+
+
 async def _process_single_path(
     lakefs_repo: str,
     revision: str,
@@ -506,10 +527,8 @@ async def list_repo_tree(
             for obj in page_results
         ]
         try:
-            last_commit_map = await resolve_last_commits_for_paths(
-                lakefs_repo=lakefs_repo,
-                revision=resolved_revision,
-                targets=targets,
+            last_commit_map = await _expand_last_commits(
+                repo_row, lakefs_repo, revision, resolved_revision, targets
             )
         except Exception as error:
             if is_lakefs_not_found_error(error) and is_lakefs_revision_error(error):
@@ -611,10 +630,8 @@ async def get_paths_info(
             {"path": entry["path"], "type": entry["type"]} for entry in existing_entries
         ]
         try:
-            last_commit_map = await resolve_last_commits_for_paths(
-                lakefs_repo=lakefs_repo,
-                revision=resolved_revision,
-                targets=targets,
+            last_commit_map = await _expand_last_commits(
+                repo_row, lakefs_repo, revision, resolved_revision, targets
             )
         except Exception as error:
             if is_lakefs_not_found_error(error) and is_lakefs_revision_error(error):

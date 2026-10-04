@@ -86,13 +86,13 @@ class Repo:
         )
         return oid
 
-    async def commit(self, *ops, branch="main"):
+    async def commit(self, *ops, branch="main", summary="change"):
         for op in ops:
             if op["key"] == "lfsFile":
                 self.put(op["value"].pop("_content"))
         response = await self.client.post(
             f"/api/models/{self.id}/commit/{branch}",
-            content=encode_ndjson([{"key": "header", "value": {"summary": "change"}}, *ops]),
+            content=encode_ndjson([{"key": "header", "value": {"summary": summary}}, *ops]),
             headers={"Content-Type": "application/x-ndjson"},
         )
         assert response.status_code == 200, response.text

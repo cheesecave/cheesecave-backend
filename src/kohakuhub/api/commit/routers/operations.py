@@ -9,7 +9,7 @@ import json
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
-from kohakuhub import usage
+from kohakuhub import path_commits, usage
 from kohakuhub.config import cfg
 from kohakuhub.db import File, Repository, User
 from kohakuhub.db_operations import (
@@ -1005,6 +1005,22 @@ async def commit(
     except Exception as e:
         logger.warning(f"Failed to record commit in database: {e}")
         # Don't fail the commit if DB recording fails
+
+    # The last commit of each path it changed (a listing without it asks LakeFS)
+    try:
+        await path_commits.record(
+            repo_row,
+            revision,
+            commit_result,
+            [
+                op["value"]["path"]
+                for op in operations
+                if op["key"] in ("file", "lfsFile", "deletedFile", "deletedFolder", "copyFile")
+                and op["value"].get("path")
+            ],
+        )
+    except Exception as e:
+        logger.warning(f"Failed to record the last commits of {commit_id[:8]}: {e}")
 
     # Generate commit URL
     commit_url = (

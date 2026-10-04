@@ -698,6 +698,8 @@ def test_the_migration_adds_the_lock(s):
 def test_the_migration_reports_a_failure(s, monkeypatch):
     migration = _migration()
     monkeypatch.setattr(migration, "is_applied", lambda db, cfg: False)
+    # The later migrations are applied here: they would make it skip
+    monkeypatch.setattr(migration, "should_skip_due_to_future_migrations", lambda *args: False)
 
     def broken(timestamp_type, serial):
         raise RuntimeError("boom")
