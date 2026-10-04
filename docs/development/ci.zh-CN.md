@@ -21,8 +21,8 @@
 配置而跳过，原因保留在 JUnit 和日志中；不能据此宣称覆盖所有 Python/HF/LakeFS 版本
 及 bucket-in-endpoint 部署组合。
 
-手动运行要求 workflow 先存在于默认分支。本次先提交到 `feat/ci-regression`，不更新
-`main`。将来由所有者集成 workflow 并主动启用 Actions，再在 GitHub Actions UI 选择
+workflow 已集成到默认分支 `main`，但 Actions 仍保持关闭。将来由所有者主动
+启用 Actions 后，再在 GitHub Actions UI 选择
 **Backend regression (manual only)**、分支和分类。此说明和配置不会启用或触发 Actions。
 
 ## 本地命令与隔离

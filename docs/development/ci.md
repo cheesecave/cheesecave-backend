@@ -25,9 +25,8 @@ a SQLite-only limitation or a deployment-specific configuration; the JUnit repor
 and log retain those reasons. These categories do not claim to certify every Python,
 HF client, older LakeFS release or bucket-in-endpoint deployment combination.
 
-Future manual use: the workflow must first exist on the default branch. This change
-is initially committed on `feat/ci-regression`, without updating `main`. After the
-owner deliberately enables Actions and integrates the workflow, choose **Backend regression
+The workflow is integrated on the default branch, `main`. A future manual run
+still requires the owner to deliberately enable Actions. After doing so, choose **Backend regression
 (manual only)**, a branch/ref and category in the GitHub Actions UI. This document
 and configuration do not enable Actions or perform a dispatch.
 
