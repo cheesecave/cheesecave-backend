@@ -183,6 +183,29 @@ class LakeFSRestClient:
         self._check_response(response)
         return response.content
 
+    async def get_object_prefix(
+        self, repository: str, ref: str, path: str, max_bytes: int
+    ) -> bytes:
+        """Read a bounded prefix, even if storage ignores the Range header."""
+        url = f"{self.base_url}/repositories/{repository}/refs/{ref}/objects"
+        chunks = bytearray()
+        async with self._httpx().stream(
+            "GET",
+            url,
+            params={"path": path},
+            auth=self.auth,
+            headers={"Range": f"bytes=0-{max_bytes - 1}"},
+            timeout=3.0,
+        ) as response:
+            if response.is_error:
+                # Do not buffer an arbitrary error body just to classify a failure.
+                response.raise_for_status()
+            async for chunk in response.aiter_bytes(chunk_size=4096):
+                chunks.extend(chunk[: max_bytes - len(chunks)])
+                if len(chunks) >= max_bytes:
+                    break
+        return bytes(chunks)
+
     async def stat_object(
         self, repository: str, ref: str, path: str, user_metadata: bool = True
     ) -> dict[str, Any]:

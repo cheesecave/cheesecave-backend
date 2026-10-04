@@ -183,7 +183,6 @@ def test_apply_repo_sorting_and_filter_privacy_cover_all_sort_modes(monkeypatch)
 
     monkeypatch.setattr(repo_info, "Repository", _FakeRepositoryModel)
     monkeypatch.setattr(repo_info, "Commit", _FakeCommitModel)
-    monkeypatch.setattr(repo_info, "UserOrganization", _FakeUserOrganizationModel)
     monkeypatch.setattr(repo_info, "JOIN", SimpleNamespace(LEFT_OUTER="left"))
     monkeypatch.setattr(
         repo_info,
@@ -205,13 +204,10 @@ def test_apply_repo_sorting_and_filter_privacy_cover_all_sort_modes(monkeypatch)
     filtered_public = repo_info._filter_repos_by_privacy(public_query, None)
     assert filtered_public.where_calls
 
-    _FakeUserOrganizationModel.select_query = _Query(
-        items=[SimpleNamespace(organization=SimpleNamespace(username="org-team"))]
-    )
     private_query = _Query()
     filtered_private = repo_info._filter_repos_by_privacy(
         private_query,
-        SimpleNamespace(username="alice"),
+        SimpleNamespace(id=11, username="alice"),
         author="alice",
     )
     assert filtered_private.where_calls
@@ -259,8 +255,12 @@ async def test_get_repo_info_covers_invalid_type_not_found_siblings_and_storage_
 
     async def call(user=None, expand=None, blobs=False):
         response = await repo_info.get_repo_info.__wrapped__(
-            "alice", "demo", request=_request("/api/models/alice/demo"),
-            user=user, expand=expand, blobs=blobs,
+            "alice",
+            "demo",
+            request=_request("/api/models/alice/demo"),
+            user=user,
+            expand=expand,
+            blobs=blobs,
         )
         ok = getattr(response, "status_code", 200) == 200 and hasattr(response, "body")
         return json.loads(response.body) if ok else response
@@ -328,9 +328,7 @@ async def test_get_repo_info_covers_invalid_type_not_found_siblings_and_storage_
     from kohakuhub.auth.permissions import RepoReadDeniedError
 
     def _raise_read_denied(repo, user):
-        raise RepoReadDeniedError(
-            SimpleNamespace(full_id="alice/demo", repo_type="model")
-        )
+        raise RepoReadDeniedError(SimpleNamespace(full_id="alice/demo", repo_type="model"))
 
     monkeypatch.setattr(repo_info, "check_repo_read_permission", _raise_read_denied)
     with pytest.raises(RepoReadDeniedError):
@@ -371,7 +369,6 @@ async def test_list_routes_cover_trending_invalid_path_and_user_repo_error_paths
     )
 
     monkeypatch.setattr(repo_info, "Repository", _FakeRepositoryModel)
-    monkeypatch.setattr(repo_info, "UserOrganization", _FakeUserOrganizationModel)
     # Force the LakeFS fallback path for these unit tests — the SQL aggregate
     # itself is exercised by the integration tests and a dedicated unit test
     # below.
@@ -391,7 +388,7 @@ async def test_list_routes_cover_trending_invalid_path_and_user_repo_error_paths
     )
     monkeypatch.setattr(
         "kohakuhub.api.utils.trending.get_trending_repositories",
-        lambda rt, limit, days: [repo_row],
+        lambda rt, limit, days, scope=None: [repo_row],
     )
 
     _FakeRepositoryModel.select_queries = [_Query(items=[repo_row])]
@@ -424,7 +421,9 @@ async def test_list_routes_cover_trending_invalid_path_and_user_repo_error_paths
         lambda username: SimpleNamespace(username=username),
     )
     monkeypatch.setattr(repo_info, "get_organization", lambda username: None)
-    monkeypatch.setattr(repo_info, "_filter_repos_by_privacy", lambda query, user, author=None: query)
+    monkeypatch.setattr(
+        repo_info, "filter_readable_repositories", lambda query, user, author=None: query
+    )
 
     for sort in ["likes", "downloads"]:
         _FakeRepositoryModel.select_queries = [

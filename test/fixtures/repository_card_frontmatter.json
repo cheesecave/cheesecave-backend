@@ -1,0 +1,32 @@
+[
+  {
+    "name": "bom",
+    "source": "\ufeff---\npipeline_tag: image-to-text\n---\n# Card\n",
+    "metadata": { "pipeline_tag": "image-to-text" }
+  },
+  {
+    "name": "crlf",
+    "source": "---\r\nlicense: mit\r\nlanguage: [en, zh]\r\n---\r\n# Card\n",
+    "metadata": { "license": "mit", "language": ["en", "zh"] }
+  },
+  {
+    "name": "dash-delimiter-at-eof",
+    "source": "---\nlicense: mit\n---",
+    "metadata": { "license": "mit" }
+  },
+  {
+    "name": "dot-delimiter-at-eof",
+    "source": "---\nlibrary_name: transformers\n...",
+    "metadata": { "library_name": "transformers" }
+  },
+  {
+    "name": "yaml-1.2-language-code",
+    "source": "---\nlanguage: no\n---\n",
+    "metadata": { "language": "no" }
+  },
+  {
+    "name": "not-frontmatter",
+    "source": "# Card\n---\nlicense: mit\n---\n",
+    "metadata": {}
+  }
+]

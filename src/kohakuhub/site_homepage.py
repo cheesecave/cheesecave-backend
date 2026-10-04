@@ -114,10 +114,12 @@ def get_public_homepage() -> tuple[dict, bool]:
 
 def update_homepage(values: dict) -> dict:
     # Update individual columns atomically, preserving concurrent edits to other fields.
-    if values:
-        (
-            SiteHomepage.insert(id=1, **values)
-            .on_conflict(conflict_target=[SiteHomepage.id], update=values)
-            .execute()
-        )
-    return get_homepage()
+    with SiteHomepage._meta.database.atomic():
+        if values:
+            (
+                SiteHomepage.insert(id=1, **values)
+                .on_conflict(conflict_target=[SiteHomepage.id], update=values)
+                .execute()
+            )
+        # A corrupt legacy field must roll back the write as well as fail its response.
+        return get_homepage()

@@ -77,7 +77,7 @@ def calculate_trending_scores(repo_type: str, days: int = 7) -> dict[int, float]
 
 
 def get_trending_repositories(
-    repo_type: str, limit: int = 20, days: int = 7
+    repo_type: str, limit: int = 20, days: int = 7, scope=None
 ) -> list[Repository]:
     """Get trending repositories sorted by trending score.
 
@@ -91,18 +91,23 @@ def get_trending_repositories(
     """
     # Calculate scores for all repos
     scores = calculate_trending_scores(repo_type, days)
+    candidates = (scope if scope is not None else Repository.select()).where(
+        (Repository.repo_type == repo_type) & (Repository.private == False)
+    )
 
     if not scores:
         # No trending data, fall back to recent
-        return list(
-            Repository.select()
-            .where((Repository.repo_type == repo_type) & (Repository.private == False))
-            .order_by(Repository.created_at.desc())
-            .limit(limit)
-        )
+        return list(candidates.order_by(Repository.created_at.desc()).limit(limit))
 
     # Sort by score and get top repos
-    sorted_repo_ids = sorted(scores.items(), key=lambda x: x[1], reverse=True)[:limit]
+    eligible_ids = set(
+        candidates.select(Repository.id).where(Repository.id.in_(list(scores))).scalars()
+    )
+    sorted_repo_ids = sorted(
+        ((repo_id, score) for repo_id, score in scores.items() if repo_id in eligible_ids),
+        key=lambda x: x[1],
+        reverse=True,
+    )[:limit]
 
     # Fetch repositories in score order
     repos = []

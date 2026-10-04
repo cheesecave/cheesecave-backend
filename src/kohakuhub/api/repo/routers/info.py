@@ -8,7 +8,7 @@ from peewee import JOIN, fn
 
 from kohakuhub.config import cfg
 from kohakuhub.constants import DATETIME_FORMAT_ISO
-from kohakuhub.db import Commit, Repository, User, UserOrganization
+from kohakuhub.db import Commit, Repository, User
 from kohakuhub.db_operations import (
     get_organization,
     get_repository,
@@ -19,6 +19,7 @@ from kohakuhub.auth.dependencies import get_optional_user
 from kohakuhub.auth.permissions import (
     check_repo_read_permission,
     check_repo_write_permission,
+    filter_readable_repositories,
 )
 from kohakuhub.utils.lakefs import get_lakefs_client, resolve_lakefs_repo
 from kohakuhub.api.fallback import (
@@ -280,46 +281,8 @@ async def get_repo_info(
 
 
 def _filter_repos_by_privacy(q, user: Optional[User], author: Optional[str] = None):
-    """Helper to filter repositories by privacy settings.
-
-    Args:
-        q: Peewee query object
-        user: Current authenticated user (optional)
-        author: Target author/namespace being queried (optional)
-
-    Returns:
-        Filtered query
-    """
-    if user:
-        # Authenticated user can see:
-        # 1. All public repos
-        # 2. Their own private repos
-        # 3. Private repos in organizations they're a member of
-
-        # Get user's organizations using FK relationship
-        user_orgs = [
-            uo.organization.username
-            for uo in UserOrganization.select(UserOrganization, User)
-            .join(User, on=(UserOrganization.organization == User.id))
-            .where(UserOrganization.user == user)
-        ]
-
-        # Build query: public OR (private AND owned by user or user's orgs)
-        q = q.where(
-            (Repository.private == False)
-            | (
-                (Repository.private == True)
-                & (
-                    (Repository.namespace == user.username)
-                    | (Repository.namespace.in_(user_orgs))
-                )
-            )
-        )
-    else:
-        # Not authenticated: only show public repos
-        q = q.where(Repository.private == False)
-
-    return q
+    """Compatibility wrapper for older internal callers; policy lives in auth."""
+    return filter_readable_repositories(q, user, author)
 
 
 async def _list_repos_internal(
@@ -351,14 +314,14 @@ async def _list_repos_internal(
         q = q.where(Repository.namespace == author)
 
     # Apply privacy filtering
-    q = _filter_repos_by_privacy(q, user, author)
+    q = filter_readable_repositories(q, user)
 
     # Apply sorting
     if sort == "trending":
         # Use trending algorithm (recent activity with decay)
         from kohakuhub.api.utils.trending import get_trending_repositories
 
-        rows = get_trending_repositories(rt, limit=limit, days=7)
+        rows = get_trending_repositories(rt, limit=limit, days=7, scope=q)
     else:
         rows = list(_apply_repo_sorting(q, rt, sort).limit(limit))
 
@@ -468,10 +431,8 @@ async def list_repos(
 async def list_user_repos(
     username: str,
     request: Request,
-    limit: int = Query(
-        100, ge=1, le=100000
-    ),  # Very high limit to support "get all repos"
-    sort: str = Query("recent", pattern="^(recent|likes|downloads)$"),
+    limit: int = Query(100, ge=1, le=100000),  # Very high limit to support "get all repos"
+    sort: str = Query("recent", pattern="^(recent|updated|likes|downloads)$"),
     fallback: bool = True,
     user: User | None = Depends(get_optional_user),
 ):
@@ -482,7 +443,7 @@ async def list_user_repos(
     Args:
         username: Username or organization name
         limit: Maximum number of results per type
-        sort: Sort order (recent, likes, downloads) - default: recent
+        sort: Sort order (recent, updated, likes, downloads) - default: recent
         user: Current authenticated user (optional)
 
     Returns:
@@ -512,17 +473,10 @@ async def list_user_repos(
         )
 
         # Apply privacy filtering
-        q = _filter_repos_by_privacy(q, user, username)
+        q = filter_readable_repositories(q, user)
 
-        # Apply sorting
-        if sort == "likes":
-            q = q.order_by(Repository.likes_count.desc())
-        elif sort == "downloads":
-            q = q.order_by(Repository.downloads.desc())
-        else:  # recent (default)
-            q = q.order_by(Repository.created_at.desc())
-
-        rows = list(q.limit(limit))
+        # Reuse the list ordering, including main-branch activity before limiting.
+        rows = list(_apply_repo_sorting(q, repo_type, sort).limit(limit))
 
         key = repo_type + "s"
         # Same SQL-first / LakeFS-fallback shape as _list_repos_internal.

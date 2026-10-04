@@ -37,9 +37,16 @@ def test_repo_read_permission_covers_admin_public_owner_and_unauthenticated_path
         namespace="owner", full_id="owner/public", repo_type="model", private=False
     )
     private_repo = SimpleNamespace(
-        namespace="owner", full_id="owner/private", repo_type="model", private=True
+        id=7,
+        owner_id=11,
+        namespace="owner",
+        full_id="owner/private",
+        repo_type="model",
+        private=True,
     )
-    owner = SimpleNamespace(username="owner")
+    owner = SimpleNamespace(id=11, username="owner")
+    query = SimpleNamespace(where=lambda expression: query, exists=lambda: True)
+    monkeypatch.setattr(permissions.Repository, "select", lambda *fields: query)
 
     assert permissions.check_repo_read_permission(private_repo, None, is_admin=True) is True
     assert permissions.check_repo_read_permission(public_repo, None) is True

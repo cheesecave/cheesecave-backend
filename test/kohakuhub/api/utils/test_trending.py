@@ -15,6 +15,9 @@ class _Expr:
 
 
 class _Field:
+    def in_(self, values):
+        return _Expr()
+
     def __eq__(self, other):
         return _Expr()
 
@@ -34,6 +37,12 @@ class _Query:
 
     def join(self, model):
         return self
+
+    def select(self, *fields):
+        return self
+
+    def scalars(self):
+        return iter(item.id for item in self.items)
 
     def where(self, *args, **kwargs):
         return self
@@ -118,12 +127,18 @@ def test_get_trending_repositories_falls_back_to_recent_public_repos(monkeypatch
 
 
 def test_get_trending_repositories_filters_private_and_missing_repo_records(monkeypatch):
-    public_repo = SimpleNamespace(full_id="owner/public", private=False)
-    private_repo = SimpleNamespace(full_id="owner/private", private=True)
+    public_repo = SimpleNamespace(id=1, full_id="owner/public", private=False)
+    private_repo = SimpleNamespace(id=2, full_id="owner/private", private=True)
     results = [public_repo, private_repo, None]
 
     class _FakeRepositoryModel:
         id = _Field()
+        repo_type = _Field()
+        private = _Field()
+
+        @staticmethod
+        def select():
+            return _Query([public_repo, private_repo])
 
         @staticmethod
         def get_or_none(expr):

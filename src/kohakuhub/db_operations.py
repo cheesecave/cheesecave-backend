@@ -584,7 +584,7 @@ def create_commit(
     author = User who made the commit
     owner = Repository owner (denormalized from repository.owner)
     """
-    return Commit.create(
+    record = Commit.create(
         commit_id=commit_id,
         repository=repository,
         repo_type=repo_type,
@@ -595,6 +595,11 @@ def create_commit(
         message=message,
         description=description,
     )
+    if branch == "main":
+        from kohakuhub.repository_discovery import mark_dirty
+
+        mark_dirty(repository.id)
+    return record
 
 
 def get_commit(commit_id: str, repository: Repository) -> Commit | None:

@@ -10,6 +10,7 @@ from kohakuhub.api.admin.routers.invitations import router as invitations_router
 from kohakuhub.api.admin.routers.quota import router as quota_router
 from kohakuhub.api.admin.routers.repositories import router as repositories_router
 from kohakuhub.api.admin.routers.search import router as search_router
+from kohakuhub.api.admin.routers.site_appearance import router as site_appearance_router
 from kohakuhub.api.admin.routers.site_branding import router as site_branding_router
 from kohakuhub.api.admin.routers.site_homepage import router as site_homepage_router
 from kohakuhub.api.admin.routers.stats import router as stats_router
@@ -28,6 +29,7 @@ __all__ = [
     "quota_router",
     "repositories_router",
     "search_router",
+    "site_appearance_router",
     "site_branding_router",
     "site_homepage_router",
     "stats_router",

@@ -15,6 +15,7 @@ from peewee import (
     BlobField,
     BooleanField,
     CharField,
+    Check,
     DateField,
     DateTimeField,
     ForeignKeyField,
@@ -97,6 +98,17 @@ class SiteHomepage(BaseModel):
         table_name = "site_homepage"
 
 
+class SiteAppearance(BaseModel):
+    """Footer and theme overrides stored independently in singleton row 1."""
+
+    id = IntegerField(primary_key=True)
+    footer = TextField(null=True)
+    theme = TextField(null=True)
+
+    class Meta:
+        table_name = "site_appearance"
+
+
 class User(BaseModel):
     """Unified User/Organization model.
 
@@ -136,6 +148,24 @@ class User(BaseModel):
     avatar = BlobField(null=True)  # Binary JPEG data
     avatar_updated_at = DateTimeField(null=True)  # Track updates for cache busting
     created_at = DateTimeField(default=partial(datetime.now, tz=timezone.utc))
+
+
+class UserFollow(BaseModel):
+    """Following is an interest signal, never a repository permission."""
+
+    id = AutoField()
+    follower = ForeignKeyField(User, backref="following", on_delete="CASCADE", index=False)
+    followed = ForeignKeyField(User, backref="followers", on_delete="CASCADE", index=False)
+    created_at = DateTimeField(default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
+
+    class Meta:
+        table_name = "user_follow"
+        constraints = [Check("follower_id != followed_id")]
+        indexes = (
+            (("follower", "followed"), True),
+            (("follower", "created_at", "id"), False),
+            (("followed", "created_at", "id"), False),
+        )
 
 
 class EmailVerification(BaseModel):
@@ -244,6 +274,34 @@ class Repository(BaseModel):
             (("repo_type", "namespace", "name"), True),
             (("namespace", "private"), False),  # summing a namespace's usage
         )
+
+
+class RepositoryMetadata(BaseModel):
+    """Bounded README index and a publish fence for background discovery work."""
+
+    repository = ForeignKeyField(Repository, primary_key=True, on_delete="CASCADE")
+    main_sha = CharField(max_length=64, null=True)
+    source_repo = CharField(null=True)
+    metadata = TextField(default="{}")
+    state = CharField(max_length=16, default="pending", index=True)
+    checked_at = DateTimeField(null=True)
+    retry_at = DateTimeField(null=True)
+    lease_token = CharField(max_length=36, null=True)
+    lease_until = DateTimeField(null=True)
+    generation = IntegerField(default=0)
+
+    class Meta:
+        table_name = "repository_metadata"
+
+
+class RepositoryFacet(BaseModel):
+    repository = ForeignKeyField(Repository, on_delete="CASCADE", index=True)
+    key = CharField(max_length=16)
+    value = CharField(max_length=200)
+
+    class Meta:
+        table_name = "repository_facet"
+        indexes = ((("repository", "key", "value"), True), (("key", "value", "repository"), False))
 
 
 class File(BaseModel):
@@ -790,12 +848,16 @@ def init_db():
         [
             SiteBranding,
             SiteHomepage,
+            SiteAppearance,
             User,
+            UserFollow,
             EmailVerification,
             Session,
             Token,
             UserExternalToken,
             Repository,
+            RepositoryMetadata,
+            RepositoryFacet,
             File,
             PathCommit,
             StagingUpload,

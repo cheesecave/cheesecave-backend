@@ -15,6 +15,8 @@ from kohakuhub.api import (
     likes,
     misc,
     settings,
+    social,
+    site_appearance,
     site_branding,
     site_homepage,
     stats,
@@ -42,6 +44,7 @@ from kohakuhub.api.git.routers import http as git_http
 from kohakuhub.api.git.routers import lfs, ssh_keys
 from kohakuhub.api.repo.routers import crud as repo_crud
 from kohakuhub.api.repo.routers import info as repo_info
+from kohakuhub.api.repo.routers import discovery as repo_discovery
 from kohakuhub.api.repo.routers import tree as repo_tree
 from kohakuhub.api.xet.routers import cas as xet_cas
 from kohakuhub.api.xet.routers import xet as xet_token
@@ -91,6 +94,9 @@ async def lifespan(app: FastAPI):
         # worker exits cleanly. Without this the keepalive sockets leak
         # at shutdown and can hold the process from terminating.
         from kohakuhub.lakefs_rest_client import close_lakefs_rest_client
+        from kohakuhub.repository_discovery import close_indexing
+
+        await close_indexing()
         await close_lakefs_rest_client()
         await _close_cache()
 
@@ -190,6 +196,7 @@ app.include_router(auth_router, prefix=cfg.app.api_base)
 app.include_router(external_tokens.router, prefix=cfg.app.api_base, tags=["auth"])
 app.include_router(repo_crud.router, prefix=cfg.app.api_base, tags=["repositories"])
 app.include_router(repo_info.router, prefix=cfg.app.api_base, tags=["repositories"])
+app.include_router(repo_discovery.router, prefix=cfg.app.api_base, tags=["discovery"])
 app.include_router(repo_tree.router, prefix=cfg.app.api_base, tags=["repositories"])
 app.include_router(files.router, prefix=cfg.app.api_base, tags=["files"])
 app.include_router(commits, prefix=cfg.app.api_base, tags=["commits"])
@@ -200,12 +207,14 @@ app.include_router(branches.router, prefix=cfg.app.api_base, tags=["branches"])
 app.include_router(settings.router, prefix=cfg.app.api_base, tags=["settings"])
 app.include_router(avatar.router, prefix=cfg.app.api_base, tags=["avatars"])
 app.include_router(likes.router, prefix=cfg.app.api_base, tags=["likes"])
+app.include_router(social.router, prefix=cfg.app.api_base, tags=["social"])
 app.include_router(stats.router, prefix=cfg.app.api_base, tags=["stats"])
 app.include_router(invitation, prefix=cfg.app.api_base, tags=["invitations"])
 app.include_router(quota, tags=["quota"])
 app.include_router(admin.router, prefix="/admin/api", tags=["admin"])
 app.include_router(misc.router, prefix=cfg.app.api_base, tags=["utils"])
 app.include_router(site_branding.router, prefix=cfg.app.api_base, tags=["site-branding"])
+app.include_router(site_appearance.router, prefix=cfg.app.api_base, tags=["site-appearance"])
 app.include_router(site_homepage.router, prefix=cfg.app.api_base, tags=["site-homepage"])
 app.include_router(org, prefix="/org", tags=["organizations"])
 app.include_router(git_http.router, tags=["git"])

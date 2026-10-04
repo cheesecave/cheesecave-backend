@@ -6,15 +6,18 @@ icon: i-carbon-paint-brush
 
 # Site Branding
 
-Open **Site → Branding** in the admin portal to edit the site's display name and
-footer introduction. Upload the header logo and favicon separately; each image
+Open **Site → Branding** in the admin portal to edit the site's display name.
+The footer introduction is managed in **Site → Footer**, alongside navigation
+groups. Project attribution, copyright and license information are fixed. Upload
+the header logo and favicon separately; each image
 has its own control to restore the bundled default. Saving text and uploading or
 restoring an image are separate operations.
 
 The site name appears in the public header, footer heading, browser title, and
 administration header/title. The footer introduction is plain text, including
 line breaks. Existing KohakuHub descriptions in the home page, About page, and
-documentation, as well as footer links and project/license credits, stay intact.
+documentation remain separate. See [Site appearance](./site-appearance.md) for
+footer links, project/license credits, and the public site's theme settings.
 
 ## Images and persistence
 

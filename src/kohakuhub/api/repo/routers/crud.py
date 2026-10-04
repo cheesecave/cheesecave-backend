@@ -154,7 +154,6 @@ LAKEFS_CONFLICT_RETRY_MESSAGE = (
 LAKEFS_RECYCLING_HOLD_SECONDS = 2.0
 
 
-
 def _is_lakefs_repo_id_taken_error(error: Exception) -> bool:
     """Return True for the LakeFS 409 raised while an id is still held.
 
@@ -688,6 +687,9 @@ def _update_repository_database_records(
         Repository.update(owner=to_owner).where(Repository.id == repo_row.id).execute()
         File.update(owner=to_owner).where(File.repository == repo_row).execute()
         Commit.update(owner=to_owner).where(Commit.repository == repo_row).execute()
+    from kohakuhub.repository_discovery import mark_dirty
+
+    mark_dirty(repo_row.id)
 
 
 @router.post("/repos/move")

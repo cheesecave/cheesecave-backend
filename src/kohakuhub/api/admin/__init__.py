@@ -27,6 +27,7 @@ from kohakuhub.api.admin.routers import (
     quota_router,
     repositories_router,
     search_router,
+    site_appearance_router,
     site_branding_router,
     site_homepage_router,
     stats_router,
@@ -54,6 +55,7 @@ router.include_router(credentials_router, tags=["admin-credentials"])
 router.include_router(cache_router, tags=["admin-cache"])
 router.include_router(tasks_router, tags=["admin-tasks"])
 router.include_router(site_branding_router, tags=["admin-site-branding"])
+router.include_router(site_appearance_router, tags=["admin-site-appearance"])
 router.include_router(site_homepage_router, tags=["admin-site-homepage"])
 
 __all__ = ["router"]

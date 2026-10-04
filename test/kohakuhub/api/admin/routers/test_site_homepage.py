@@ -1,6 +1,8 @@
 """Homepage API checks use isolated SQLite storage and real admin authentication."""
 
 from unittest.mock import Mock
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -165,6 +167,38 @@ def test_invalid_stored_links_never_reach_the_public_page(homepage_client):
     response = session.get(PUBLIC_URL)
     assert response.json() == site_homepage.default_homepage()
     assert response.headers["X-Site-Homepage-Fallback"] == "true"
+
+
+def test_invalid_existing_configuration_rolls_back_admin_partial_save(homepage_client):
+    session, _ = homepage_client
+    SiteHomepage.create(id=1, title="", enabled=True, description="Keep this")
+    response = session.put(
+        ADMIN_URL, headers=HEADERS, json={"enabled": False, "description": "Changed"}
+    )
+    assert response.status_code == 500
+    record = SiteHomepage.get_by_id(1)
+    assert record.enabled is True and record.description == "Keep this" and record.title == ""
+    # The same API can repair the corrupt field in an otherwise valid patch.
+    assert session.put(ADMIN_URL, headers=HEADERS, json={"title": "Repaired"}).status_code == 200
+
+
+def test_concurrent_homepage_partial_updates_keep_both_fields(homepage_client):
+    _, database = homepage_client
+    barrier = Barrier(2)
+
+    def save(patch):
+        with database.connection_context():
+            barrier.wait(timeout=5)
+            return site_homepage.update_homepage(patch)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [
+            pool.submit(save, patch) for patch in ({"enabled": False}, {"title": "Both saved"})
+        ]
+        for future in futures:
+            future.result(timeout=10)
+    assert site_homepage.get_homepage()["enabled"] is False
+    assert site_homepage.get_homepage()["title"] == "Both saved"
 
 
 def test_init_db_creates_homepage_table(monkeypatch):

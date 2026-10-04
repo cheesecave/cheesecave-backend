@@ -4,9 +4,40 @@ from typing import Optional
 
 from fastapi import HTTPException
 
-from kohakuhub.db import Repository, User
+from kohakuhub.db import Repository, User, UserOrganization
 from kohakuhub.constants import ERROR_USER_AUTH_REQUIRED
 from kohakuhub.db_operations import get_organization, get_user_organization
+
+
+def repository_owner_interest(user: User, repository=Repository):
+    """Own namespace or current organization membership, evaluated by SQL."""
+    organizations = (
+        UserOrganization.select(UserOrganization.organization)
+        .join(User, on=(UserOrganization.organization == User.id))
+        .where((UserOrganization.user == user.id) & (User.is_org == True))
+    )
+    return (repository.owner == user.id) | repository.owner.in_(organizations)
+
+
+def repository_read_predicate(user: Optional[User], repository=Repository):
+    """The owner FK is authoritative; namespace strings do not grant read access."""
+    public = repository.private == False
+    return public if user is None else public | repository_owner_interest(user, repository)
+
+
+def filter_readable_repositories(query, user: Optional[User], author: Optional[str] = None):
+    query = query.where(repository_read_predicate(user))
+    if author is not None:
+        query = query.where(Repository.namespace == author)
+    return query
+
+
+def compile_repository_predicate(predicate, database):
+    """Compile the same Peewee policy for native SQL, including aliases and parameters."""
+    context = database.get_sql_context()
+    with context(subquery=True):
+        context.sql(predicate)
+    return context.query()
 
 
 class RepoReadDeniedError(Exception):
@@ -39,12 +70,12 @@ class RepoReadDeniedError(Exception):
     branch, and matches what HF returns to authenticated callers. Note
     that "wire-shape identical" is **not the same as** "fully
     indistinguishable": the authed-no-access path executes additional
-    DB lookups (``get_organization``, ``get_user_organization``) that
-    the anon path doesn't, leaving a sub-millisecond timing-side-channel
+    database check with an organization-membership subquery that
+    the anon path doesn't, leaving a timing-side-channel
     that could in principle be exploited at scale. Treating that as
     out-of-scope for now — HF's own backend has the equivalent
-    asymmetry, and a constant-time path would mean adding 2 always-
-    needless DB hits to every anon read. Document the gap honestly
+    asymmetry, and a constant-time path would add an otherwise
+    unnecessary database check to every anon read. Document the gap honestly
     rather than overclaim equivalence.
     """
 
@@ -119,7 +150,7 @@ def check_repo_read_permission(
     """Check if user can read a repository.
 
     Public repos: anyone can read
-    Private repos: only creator or org members can read
+    Private repos: only the owner or current organization members can read
 
     Args:
         repo: The repository to check
@@ -149,16 +180,12 @@ def check_repo_read_permission(
     if not user:
         raise RepoReadDeniedError(repo)
 
-    # Check if user is the creator (namespace matches username)
-    if repo.namespace == user.username:
+    if (
+        Repository.select(Repository.id)
+        .where((Repository.id == repo.id) & repository_read_predicate(user))
+        .exists()
+    ):
         return True
-
-    # Check if namespace is an organization and user is a member
-    org = get_organization(repo.namespace)
-    if org:
-        membership = get_user_organization(user, org)
-        if membership:
-            return True
 
     raise RepoReadDeniedError(repo)
 
