@@ -246,8 +246,9 @@ paths_info = response.json()
 **Notes:**
 
 - Paths that don't exist are silently omitted from the response
-- A directory's `size` is always `0`, with `expand` or without, as on the Hub: summing it would list everything under it. Its `lastCommit` is `null` for now: LakeFS can only answer it by diffing every commit of the history, which takes hours on a large repository.
-- With `expand=true`, a file's `lastCommit` is `null` when LakeFS does not answer within a few seconds; asking again later gives it.
+- A directory's `size` is always `0`, with `expand` or without, as on the Hub: summing it would list everything under it.
+- With `expand=true` on `main`, `lastCommit` comes from what each commit recorded: a file's is the last commit that changed it, a directory's the last that changed anything under it (deletions included); after a squash, the squash commit. A repository from before these records gets them from the worker's backfill; until then its paths are looked up as on other revisions.
+- On another revision, a file's `lastCommit` is looked up in LakeFS and is `null` when LakeFS does not answer within a few seconds (asking again later gives it); a directory's is `null`, since LakeFS can only answer it by diffing every commit of the history.
 - For directories, include trailing slash (`models/`) or omit it (`models`) - both work
 - The `lfs` field is `null` for non-LFS files
 - `last_commit` and `security` fields are reserved for future use

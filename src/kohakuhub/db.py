@@ -199,6 +199,9 @@ class Repository(BaseModel):
     operation_until = DateTimeField(null=True)
     # A repository squash's commit: the commits it does not reach are gone
     history_root = CharField(max_length=64, null=True)
+    # Whether main's paths have their last commits in path_commit; a
+    # repository from before them is recorded by kohakuhub.path_commits.backfill
+    last_commits_recorded = BooleanField(default=True)
 
     # LFS settings (NULL = use server defaults from config)
     lfs_threshold_bytes = IntegerField(
@@ -241,6 +244,23 @@ class File(BaseModel):
 
     class Meta:
         indexes = ((("repository", "path_in_repo"), True),)
+
+
+class PathCommit(BaseModel):
+    """The last commit that changed a path (a file, or anything under a
+    folder) on a branch, recorded as commits land (kohakuhub.path_commits)."""
+
+    id = AutoField()
+    repository = ForeignKeyField(Repository, on_delete="CASCADE", index=True)
+    branch = CharField()
+    path = CharField()  # no leading or trailing slash
+    commit_id = CharField(max_length=64)
+    title = TextField(default="")
+    date = BigIntegerField()  # the commit's creation date, epoch seconds (LakeFS)
+
+    class Meta:
+        table_name = "path_commit"
+        indexes = ((("repository", "branch", "path"), True),)
 
 
 class StagingUpload(BaseModel):
@@ -756,6 +776,7 @@ def init_db():
             UserExternalToken,
             Repository,
             File,
+            PathCommit,
             StagingUpload,
             UserOrganization,
             Commit,

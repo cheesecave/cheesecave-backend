@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 import httpx
 from peewee import EXCLUDED
 
-from kohakuhub import usage
+from kohakuhub import path_commits, usage
 from kohakuhub.api.commit import availability
 from kohakuhub.api.commit.routers.operations import calculate_git_blob_sha1
 from kohakuhub.config import cfg
@@ -322,11 +322,13 @@ async def record_commits(
         # Each round's LFS versions, attributed to the commit that brought them
         # and dated when it was made: a commit that landed after it stays newer
         made_at = {}
-        for commit_id, _ in rounds:
-            created = (await client.get_commit(repository=lakefs_repo, commit_id=commit_id))[
-                "creation_date"
-            ]
-            made_at[commit_id] = datetime.fromtimestamp(created, tz=timezone.utc)
+        for commit_id, wanted in rounds:
+            commit = await client.get_commit(repository=lakefs_repo, commit_id=commit_id)
+            made_at[commit_id] = datetime.fromtimestamp(commit["creation_date"], tz=timezone.utc)
+            try:  # a listing without them asks LakeFS
+                await path_commits.record(repo, branch, {**commit, "id": commit_id}, wanted)
+            except Exception as e:
+                logger.warning(f"Could not record the last commits of {commit_id[:8]}: {e}")
         file_ids = {}
         for batch in _batches(list(lfs_now)):
             file_ids.update(
