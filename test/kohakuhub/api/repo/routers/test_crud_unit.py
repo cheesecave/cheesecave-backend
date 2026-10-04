@@ -308,6 +308,12 @@ async def test_move_repo_covers_validation_quota_and_metadata_only_success(monke
     history, other branches and tags. Since migration 016 the LakeFS id lives on
     the row, so the row can keep it across a rename.
     """
+    # The fake owner exists without depending on the service suite's seed data.
+    monkeypatch.setattr(
+        repo_crud,
+        "_namespace_owner",
+        lambda namespace: SimpleNamespace(id=1, username="owner") if namespace == "owner" else None,
+    )
     repo_row = SimpleNamespace(
         private=False,
         repo_type="model",
@@ -969,6 +975,12 @@ async def test_move_repo_reports_a_lost_rename_race_as_exists(monkeypatch):
     """Two moves (or a move and a create) racing for the same target: the unique
     (repo_type, namespace, name) index rejects the loser, which must see the
     ordinary "already exists" answer rather than a 500."""
+    # The fake owner exists without depending on the service suite's seed data.
+    monkeypatch.setattr(
+        repo_crud,
+        "_namespace_owner",
+        lambda namespace: SimpleNamespace(id=1, username="owner") if namespace == "owner" else None,
+    )
     repo_row = SimpleNamespace(
         private=False,
         repo_type="model",
@@ -1062,6 +1074,12 @@ async def test_create_repo_reports_a_concurrent_winner_as_exists_not_retry(monke
 
 def _move_env(monkeypatch, repo_row, siblings):
     """Stubs for move tests: `siblings` are the target namespace's repositories."""
+    # The fake owner exists without depending on the service suite's seed data.
+    monkeypatch.setattr(
+        repo_crud,
+        "_namespace_owner",
+        lambda namespace: SimpleNamespace(id=1, username="owner") if namespace == "owner" else None,
+    )
     updates = []
     monkeypatch.setattr(repo_crud, "check_repo_delete_permission", lambda repo, user, is_admin=False: None)
     monkeypatch.setattr(repo_crud, "check_namespace_permission", lambda namespace, user, is_admin=False: None)
