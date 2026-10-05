@@ -6,7 +6,12 @@ import httpx
 import pytest
 import pytest_asyncio
 
-from test.kohakuhub.support.bootstrap import ADMIN_TOKEN, DEFAULT_PASSWORD
+from test.kohakuhub.support.bootstrap import (
+    ADMIN_TOKEN,
+    DEFAULT_PASSWORD,
+    backend_module_snapshot,
+    backend_modules_swapped,
+)
 from test.kohakuhub.support.live_server import start_live_server, stop_live_server
 from test.kohakuhub.support.service_bootstrap import apply_service_test_env
 from test.kohakuhub.support.service_state import create_service_test_state
@@ -28,6 +33,25 @@ _BACKEND_FIXTURE_NAMES = {
     "live_server_url",
     "hf_api_token",
 }
+# The kohakuhub modules the test files imported (see _standalone_modules)
+_COLLECTED_MODULES = {}
+
+
+def pytest_collection_finish(session):
+    _COLLECTED_MODULES.update(backend_module_snapshot())
+
+
+@pytest.fixture(autouse=True)
+def _standalone_modules(request):
+    """A test without the backend fixtures runs on the kohakuhub modules the
+    test files imported. The backend fixtures reload every one of them; code
+    that imports inside a function would otherwise get the reloaded copy and
+    mix it with the test's (test_backend_module_swap_unit.py)."""
+    if _BACKEND_FIXTURE_NAMES.intersection(request.fixturenames):
+        yield
+        return
+    with backend_modules_swapped(_COLLECTED_MODULES):
+        yield
 
 
 @pytest.fixture(scope="session")

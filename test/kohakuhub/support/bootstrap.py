@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import importlib
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
+from types import ModuleType
 
 ROOT_DIR = Path(__file__).resolve().parents[3]
 SRC_DIR = ROOT_DIR / "src"
@@ -27,6 +29,27 @@ def clear_backend_modules() -> None:
     to_delete = [name for name in sys.modules if name.startswith("kohakuhub")]
     for name in to_delete:
         del sys.modules[name]
+
+
+def backend_module_snapshot() -> dict[str, ModuleType]:
+    """The kohakuhub modules imported now, by name."""
+    return {name: module for name, module in sys.modules.items() if name.startswith("kohakuhub")}
+
+
+@contextmanager
+def backend_modules_swapped(modules: dict[str, ModuleType]) -> Iterator[None]:
+    """Run with ``modules`` as the kohakuhub modules, then put back the ones
+    in place before. What gets first imported meanwhile joins ``modules``, so
+    it never leaks into the other set."""
+    before = backend_module_snapshot()
+    clear_backend_modules()
+    sys.modules.update(modules)
+    try:
+        yield
+    finally:
+        modules.update(backend_module_snapshot())
+        clear_backend_modules()
+        sys.modules.update(before)
 
 
 @dataclass(slots=True)
