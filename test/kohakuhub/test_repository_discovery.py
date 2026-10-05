@@ -358,7 +358,8 @@ async def test_readme_candidates_share_deadline_and_do_not_hide_storage_errors(m
 
     monkeypatch.setattr(discovery, "README_TIMEOUT_SECONDS", 0.03)
     monkeypatch.setattr(discovery.asyncio, "wait_for", record_deadline)
-    with pytest.raises(TimeoutError):
+    # asyncio.TimeoutError: the builtin TimeoutError only from Python 3.11 on
+    with pytest.raises(asyncio.TimeoutError):
         await discovery.read_card_prefix(client, "repo", "sha")
     assert client.get_object_prefix.await_count == 2
     assert deadlines == [0.03] and cancelled
