@@ -1,14 +1,11 @@
-name: Backend regression
-run-name: Backend ${{ (inputs.category || 'all') }} regression by @${{ github.actor }}
+name: Backend regression (manual only)
+run-name: Backend ${{ inputs.category }} regression by @${{ github.actor }}
 
 on:
-  pull_request:
-  push:
-    branches: [main]
   workflow_dispatch:
     inputs:
       category:
-        description: Regression category to run (pull requests and pushes run all)
+        description: Regression category to run when Actions is deliberately enabled
         type: choice
         required: true
         default: fast
@@ -17,8 +14,8 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: backend-regression-${{ github.ref }}-${{ (inputs.category || 'all') }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: backend-regression-${{ github.ref }}-${{ inputs.category }}
+  cancel-in-progress: false
 defaults:
   run:
     shell: bash
@@ -42,7 +39,7 @@ env:
 
 jobs:
   fast:
-    if: ${{ (inputs.category || 'all') == 'fast' || (inputs.category || 'all') == 'all' }}
+    if: ${{ inputs.category == 'fast' || inputs.category == 'all' }}
     env:
       KOHAKU_HUB_DB_BACKEND: sqlite
       KOHAKU_HUB_DATABASE_URL: "sqlite:///:memory:"
@@ -76,7 +73,7 @@ jobs:
           if-no-files-found: warn
 
   migrations:
-    if: ${{ (inputs.category || 'all') == 'migrations' || (inputs.category || 'all') == 'all' }}
+    if: ${{ inputs.category == 'migrations' || inputs.category == 'all' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
@@ -111,7 +108,7 @@ jobs:
           if-no-files-found: warn
 
   services:
-    if: ${{ (inputs.category || 'all') == 'services' || (inputs.category || 'all') == 'all' }}
+    if: ${{ inputs.category == 'services' || inputs.category == 'all' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     strategy:
@@ -137,16 +134,6 @@ jobs:
         run: |
           mkdir -p lint-reports/ci
           python -m pytest test/kohakuhub -p scripts.ci.select_tests --ci-category services -q --cov=src/kohakuhub --cov-config=.coveragerc --cov-fail-under=80 --cov-report=xml:lint-reports/ci/coverage.xml --junitxml=lint-reports/ci/services.xml 2>&1 | tee lint-reports/ci/tests.log
-      - name: Upload coverage to Codecov
-        if: ${{ !cancelled() }}
-        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
-        with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          files: lint-reports/ci/coverage.xml
-          flags: backend
-          name: backend-services-cache-${{ matrix.cache }}
-          disable_search: true
-          fail_ci_if_error: false
       - name: Collect infrastructure logs and remove temporary data
         if: ${{ always() }}
         run: |
@@ -162,7 +149,7 @@ jobs:
           if-no-files-found: warn
 
   hf:
-    if: ${{ (inputs.category || 'all') == 'hf' || (inputs.category || 'all') == 'all' }}
+    if: ${{ inputs.category == 'hf' || inputs.category == 'all' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     strategy:

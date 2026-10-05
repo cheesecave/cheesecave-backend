@@ -1,0 +1,423 @@
+name: Backend tests
+
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backend-tests-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  backend-tests:
+    name: backend unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version:
+          - "3.10"
+          - "3.11"
+          - "3.12"
+        huggingface-hub-version:
+          - "0.20.3"
+          - "0.30.2"
+          - "0.36.2"
+          - "1.0.1"
+          - "1.6.0"
+          - "2.0.0"
+          - "latest"
+    env:
+      KOHAKU_HUB_DATABASE_URL: postgresql://hub_test:hub_test_password@127.0.0.1:25432/kohakuhub_test
+      KOHAKU_HUB_S3_ENDPOINT: http://127.0.0.1:29001
+      KOHAKU_HUB_S3_PUBLIC_ENDPOINT: http://127.0.0.1:29001
+      KOHAKU_HUB_S3_ACCESS_KEY: minioadmin
+      KOHAKU_HUB_S3_SECRET_KEY: minioadmin
+      KOHAKU_HUB_S3_BUCKET: hub-storage
+      KOHAKU_HUB_S3_REGION: us-east-1
+      KOHAKU_HUB_LAKEFS_ENDPOINT: http://127.0.0.1:28000
+      KOHAKU_HUB_LAKEFS_REPO_NAMESPACE: hf
+      KOHAKU_HUB_LAKEFS_CREDENTIALS_FILE: ${{ github.workspace }}/hub-meta/test/backend-service/lakefs-credentials.env
+      HUGGINGFACE_HUB_VERSION: ${{ matrix.huggingface-hub-version }}
+      # Run the matrix with the L2 cache enabled to exercise the read-through
+      # path on every Python × huggingface_hub combination. The cache-OFF
+      # silent-degradation contract is covered by the dedicated
+      # ``backend-tests-cache-disabled`` job below — splitting it out keeps
+      # the main matrix size from doubling.
+      KOHAKU_HUB_CACHE_ENABLED: "true"
+      KOHAKU_HUB_CACHE_URL: redis://127.0.0.1:26379/0
+      # Cache tests in test_cache.py read this to find the Valkey instance.
+      KOHAKU_HUB_CACHE_TEST_URL: redis://127.0.0.1:26379/0
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: hub_test
+          POSTGRES_PASSWORD: hub_test_password
+          POSTGRES_DB: kohakuhub_test
+        ports:
+          - 25432:5432
+        options: >-
+          --health-cmd "pg_isready -U hub_test -d kohakuhub_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+      minio:
+        # quay.io/minio/minio no longer serves anonymous pulls; use the
+        # community-maintained build of the same server.
+        image: pgsty/minio:RELEASE.2026-08-04T00-00-00Z
+        env:
+          MINIO_ROOT_USER: minioadmin
+          MINIO_ROOT_PASSWORD: minioadmin
+        ports:
+          - 29001:9000
+          - 29000:29000
+        command: server /data --console-address ":29000"
+        options: >-
+          --health-cmd "curl -f http://127.0.0.1:9000/minio/health/live || exit 1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+      lakefs:
+        image: treeverse/lakefs:1.86.0 # the bundled release (docs/deployment/lakefs.md)
+        env:
+          LAKEFS_DATABASE_TYPE: local
+          LAKEFS_DATABASE_LOCAL_PATH: /tmp/lakefs/metadata.db
+          LAKEFS_BLOCKSTORE_TYPE: s3
+          LAKEFS_BLOCKSTORE_S3_ENDPOINT: http://minio:9000
+          LAKEFS_BLOCKSTORE_S3_BUCKET: hub-storage
+          LAKEFS_BLOCKSTORE_S3_FORCE_PATH_STYLE: "true"
+          LAKEFS_BLOCKSTORE_S3_CREDENTIALS_ACCESS_KEY_ID: minioadmin
+          LAKEFS_BLOCKSTORE_S3_CREDENTIALS_SECRET_ACCESS_KEY: minioadmin
+          LAKEFS_BLOCKSTORE_S3_REGION: us-east-1
+          LAKEFS_AUTH_ENCRYPT_SECRET_KEY: 0123456789abcdef0123456789abcdef
+          LAKEFS_LOGGING_FORMAT: text
+          LAKEFS_LISTEN_ADDRESS: 0.0.0.0:8000
+        ports:
+          - 28000:8000
+        options: >-
+          --health-cmd "wget --spider --quiet http://127.0.0.1:8000/_health || exit 1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 20
+      valkey:
+        image: valkey/valkey:8-alpine
+        # CI is fresh per job — no need for RDB persistence here; the
+        # production / dev defaults that turn it on are covered by the
+        # docker-compose example and up_infra.sh respectively.
+        options: >-
+          --health-cmd "valkey-cli ping"
+          --health-interval 10s
+          --health-timeout 3s
+          --health-retries 5
+        ports:
+          - 26379:6379
+
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install backend dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+          if [ "${HUGGINGFACE_HUB_VERSION}" = "latest" ]; then
+            python -m pip install --upgrade huggingface_hub
+          else
+            python -m pip install --upgrade "huggingface_hub==${HUGGINGFACE_HUB_VERSION}"
+          fi
+
+      - name: Run backend tests with coverage
+        run: |
+          make test-backend
+
+      - name: Upload backend coverage to Codecov
+        if: ${{ !cancelled() }}
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: coverage.xml
+          disable_search: true
+          flags: backend,py${{ matrix.python-version }},hf${{ matrix.huggingface-hub-version }}
+          name: backend-tests-py${{ matrix.python-version }}-hf${{ matrix.huggingface-hub-version }}
+          fail_ci_if_error: false
+          verbose: true
+
+      - name: Upload backend coverage artifact
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: backend-coverage-py${{ matrix.python-version }}-hf${{ matrix.huggingface-hub-version }}
+          path: coverage.xml
+
+  backend-tests-cache-disabled:
+    # The "cache must never be on the correctness critical path" contract
+    # has its own dedicated job: a single Python / huggingface_hub combo
+    # with KOHAKU_HUB_CACHE_ENABLED=false. If the suite ever takes a hard
+    # dependency on cache state (e.g. a missing write-through invalidate
+    # makes a test pass only because cache hides the bug), this job goes
+    # red. Splitting it out instead of doubling the main matrix saves
+    # ~18 GitHub Actions minutes per push.
+    #
+    # It also runs on the oldest LakeFS release KohakuHub supports, so that
+    # claim stays true (docs/deployment/lakefs.md, kohakuhub.lakefs_compat).
+    name: backend tests (cache disabled, LakeFS ${{ matrix.lakefs }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        lakefs:
+          - "1.86.0" # bundled
+          - "1.48.1" # oldest supported
+    env:
+      KOHAKU_HUB_DATABASE_URL: postgresql://hub_test:hub_test_password@127.0.0.1:25432/kohakuhub_test
+      KOHAKU_HUB_S3_ENDPOINT: http://127.0.0.1:29001
+      KOHAKU_HUB_S3_PUBLIC_ENDPOINT: http://127.0.0.1:29001
+      KOHAKU_HUB_S3_ACCESS_KEY: minioadmin
+      KOHAKU_HUB_S3_SECRET_KEY: minioadmin
+      KOHAKU_HUB_S3_BUCKET: hub-storage
+      KOHAKU_HUB_S3_REGION: us-east-1
+      KOHAKU_HUB_LAKEFS_ENDPOINT: http://127.0.0.1:28000
+      KOHAKU_HUB_LAKEFS_REPO_NAMESPACE: hf
+      KOHAKU_HUB_LAKEFS_CREDENTIALS_FILE: ${{ github.workspace }}/hub-meta/test/backend-service/lakefs-credentials.env
+      # Cache is OFF for this job. The cache module's own tests still run
+      # against the Valkey service via KOHAKU_HUB_CACHE_TEST_URL — they
+      # validate the cache layer itself, not the rest of the suite.
+      KOHAKU_HUB_CACHE_ENABLED: "false"
+      KOHAKU_HUB_CACHE_TEST_URL: redis://127.0.0.1:26379/0
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: hub_test
+          POSTGRES_PASSWORD: hub_test_password
+          POSTGRES_DB: kohakuhub_test
+        ports:
+          - 25432:5432
+        options: >-
+          --health-cmd "pg_isready -U hub_test -d kohakuhub_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+      minio:
+        # quay.io/minio/minio no longer serves anonymous pulls; use the
+        # community-maintained build of the same server.
+        image: pgsty/minio:RELEASE.2026-08-04T00-00-00Z
+        env:
+          MINIO_ROOT_USER: minioadmin
+          MINIO_ROOT_PASSWORD: minioadmin
+        ports:
+          - 29001:9000
+          - 29000:29000
+        command: server /data --console-address ":29000"
+        options: >-
+          --health-cmd "curl -f http://127.0.0.1:9000/minio/health/live || exit 1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+      lakefs:
+        image: treeverse/lakefs:${{ matrix.lakefs }}
+        env:
+          LAKEFS_DATABASE_TYPE: local
+          LAKEFS_DATABASE_LOCAL_PATH: /tmp/lakefs/metadata.db
+          LAKEFS_BLOCKSTORE_TYPE: s3
+          LAKEFS_BLOCKSTORE_S3_ENDPOINT: http://minio:9000
+          LAKEFS_BLOCKSTORE_S3_BUCKET: hub-storage
+          LAKEFS_BLOCKSTORE_S3_FORCE_PATH_STYLE: "true"
+          LAKEFS_BLOCKSTORE_S3_CREDENTIALS_ACCESS_KEY_ID: minioadmin
+          LAKEFS_BLOCKSTORE_S3_CREDENTIALS_SECRET_ACCESS_KEY: minioadmin
+          LAKEFS_BLOCKSTORE_S3_REGION: us-east-1
+          LAKEFS_AUTH_ENCRYPT_SECRET_KEY: 0123456789abcdef0123456789abcdef
+          LAKEFS_LOGGING_FORMAT: text
+          LAKEFS_LISTEN_ADDRESS: 0.0.0.0:8000
+        ports:
+          - 28000:8000
+        options: >-
+          --health-cmd "wget --spider --quiet http://127.0.0.1:8000/_health || exit 1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 20
+      valkey:
+        # Still need a reachable Valkey for the cache-module tests
+        # (they assert the helper's contract; that contract stands or
+        # falls regardless of whether the rest of the API uses the cache).
+        image: valkey/valkey:8-alpine
+        options: >-
+          --health-cmd "valkey-cli ping"
+          --health-interval 10s
+          --health-timeout 3s
+          --health-retries 5
+        ports:
+          - 26379:6379
+
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install backend dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+          python -m pip install --upgrade huggingface_hub
+
+      - name: Run backend tests with cache disabled
+        run: |
+          make test-backend
+
+      - name: Upload backend coverage to Codecov
+        if: ${{ !cancelled() }}
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: coverage.xml
+          flags: backend,cache-off,lakefs${{ matrix.lakefs }}
+          name: backend-tests-cache-off-lakefs${{ matrix.lakefs }}
+          disable_search: true
+          fail_ci_if_error: false
+
+  backend-tests-s3-endpoint-path:
+    # Production's layout (#133): the real bucket sits in the S3 endpoint's
+    # path, KohakuHub's bucket is a key prefix inside it, and the one key
+    # (shared with LakeFS) may only touch that bucket, as an R2 API token
+    # scoped to one bucket. The whole suite runs this way, plus the tests in
+    # test_s3_bucket_in_endpoint_stack.py, which check what is really stored.
+    name: backend tests (S3 endpoint with a path)
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      KOHAKU_HUB_DATABASE_URL: postgresql://hub_test:hub_test_password@127.0.0.1:25432/kohakuhub_test
+      KOHAKU_HUB_S3_ENDPOINT: http://127.0.0.1:29001/realbucket
+      KOHAKU_HUB_S3_PUBLIC_ENDPOINT: http://127.0.0.1:29001/realbucket
+      KOHAKU_HUB_S3_ACCESS_KEY: hubuser
+      KOHAKU_HUB_S3_SECRET_KEY: hubpass123
+      KOHAKU_HUB_S3_BUCKET: hub-storage
+      KOHAKU_HUB_S3_REGION: us-east-1
+      KOHAKU_HUB_LAKEFS_ENDPOINT: http://127.0.0.1:28000
+      KOHAKU_HUB_LAKEFS_REPO_NAMESPACE: hf
+      KOHAKU_HUB_LAKEFS_CREDENTIALS_FILE: ${{ github.workspace }}/hub-meta/test/backend-service/lakefs-credentials.env
+      KOHAKU_HUB_CACHE_ENABLED: "false"
+      KOHAKU_HUB_CACHE_TEST_URL: redis://127.0.0.1:26379/0
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: hub_test
+          POSTGRES_PASSWORD: hub_test_password
+          POSTGRES_DB: kohakuhub_test
+        ports:
+          - 25432:5432
+        options: >-
+          --health-cmd "pg_isready -U hub_test -d kohakuhub_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+      minio:
+        image: pgsty/minio:RELEASE.2026-08-04T00-00-00Z
+        env:
+          MINIO_ROOT_USER: minioadmin
+          MINIO_ROOT_PASSWORD: minioadmin
+        ports:
+          - 29001:9000
+        command: server /data
+        options: >-
+          --health-cmd "curl -f http://127.0.0.1:9000/minio/health/live || exit 1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+      lakefs:
+        image: treeverse/lakefs:1.86.0
+        env:
+          LAKEFS_DATABASE_TYPE: local
+          LAKEFS_DATABASE_LOCAL_PATH: /tmp/lakefs/metadata.db
+          LAKEFS_BLOCKSTORE_TYPE: s3
+          # The same endpoint as KohakuHub's: it checks no key at startup, so
+          # the user created below is in place before it is first used
+          LAKEFS_BLOCKSTORE_S3_ENDPOINT: http://minio:9000/realbucket
+          LAKEFS_BLOCKSTORE_S3_FORCE_PATH_STYLE: "true"
+          LAKEFS_BLOCKSTORE_S3_CREDENTIALS_ACCESS_KEY_ID: hubuser
+          LAKEFS_BLOCKSTORE_S3_CREDENTIALS_SECRET_ACCESS_KEY: hubpass123
+          LAKEFS_BLOCKSTORE_S3_REGION: us-east-1
+          LAKEFS_AUTH_ENCRYPT_SECRET_KEY: 0123456789abcdef0123456789abcdef
+          LAKEFS_LOGGING_FORMAT: text
+          LAKEFS_LISTEN_ADDRESS: 0.0.0.0:8000
+        ports:
+          - 28000:8000
+        options: >-
+          --health-cmd "wget --spider --quiet http://127.0.0.1:8000/_health || exit 1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 20
+      valkey:
+        image: valkey/valkey:8-alpine
+        options: >-
+          --health-cmd "valkey-cli ping"
+          --health-interval 10s
+          --health-timeout 3s
+          --health-retries 5
+        ports:
+          - 26379:6379
+
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Create the real bucket and a key scoped to it
+        # S3 on realbucket only; server info too, so that the health probe
+        # looking up the MinIO release (asked at the root) is checked live.
+        # The script is single-quoted: keep apostrophes out of it.
+        run: |
+          docker exec "${{ job.services.minio.id }}" sh -c '
+            set -e
+            mc alias set local http://127.0.0.1:9000 minioadmin minioadmin
+            mc mb local/realbucket
+            printf "%s" "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":[\"s3:*\"],\"Resource\":[\"arn:aws:s3:::realbucket\",\"arn:aws:s3:::realbucket/*\"]},{\"Effect\":\"Allow\",\"Action\":[\"admin:ServerInfo\"]}]}" > /tmp/realbucket-only.json
+            mc admin user add local hubuser hubpass123
+            mc admin policy create local realbucket-only /tmp/realbucket-only.json
+            mc admin policy attach local realbucket-only --user hubuser
+          '
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install backend dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+          python -m pip install --upgrade huggingface_hub
+
+      - name: Run backend tests against an endpoint with a path
+        run: |
+          make test-backend
+
+      - name: Upload backend coverage to Codecov
+        if: ${{ !cancelled() }}
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: coverage.xml
+          flags: backend,s3-endpoint-path
+          name: backend-tests-s3-endpoint-path
+          disable_search: true
+          fail_ci_if_error: false
