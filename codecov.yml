@@ -1,0 +1,9 @@
+coverage:
+  status:
+    project:
+      default:
+        # A small drop from base is not a regression on its own.
+        threshold: 1%
+    patch:
+      default:
+        threshold: 1%
