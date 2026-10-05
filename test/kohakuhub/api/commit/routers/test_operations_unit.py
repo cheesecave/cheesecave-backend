@@ -495,6 +495,7 @@ async def test_commit_route_covers_parse_dispatch_noop_and_success_paths(monkeyp
     monkeypatch.setattr(commit_ops, "resolve_lakefs_repo", lambda repo: "model:owner/repo")
     monkeypatch.setattr(commit_ops, "get_lakefs_client", lambda: client)
     monkeypatch.setattr(commit_ops.cfg.app, "base_url", "https://hub.example.com")
+    monkeypatch.setattr(commit_ops, "_file_rows", lambda repo_arg, touched: {})
     monkeypatch.setattr(commit_ops.cfg.app, "debug_log_payloads", False)
     monkeypatch.setattr(commit_ops.cfg.app, "lfs_auto_gc", True)
     monkeypatch.setattr(commit_ops, "process_regular_file", lambda **kwargs: _async_return(False))

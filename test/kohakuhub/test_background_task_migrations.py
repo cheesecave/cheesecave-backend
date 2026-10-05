@@ -27,6 +27,13 @@ from kohakuhub.db import (
 )
 
 MIGRATIONS = Path(__file__).resolve().parents[2] / "scripts" / "db_migrations"
+PATH_COLUMNS = {
+    ("file", "path_in_repo"),
+    ("path_commit", "path"),
+    ("stagingupload", "path_in_repo"),
+    ("lfsobjecthistory", "path_in_repo"),
+    ("lfs_head_ref", "path_in_repo"),
+}
 TABLES = (
     "background_task",
     "background_task_event",
@@ -88,8 +95,26 @@ def _load_021():
     return _load("021_lfs_gc_tombstones.py")
 
 
+def _load_031():
+    return _load("031_long_repo_paths.py")
+
+
 def _chain():
-    return _load_017(), _load_018(), _load_019(), _load_020(), _load_021()
+    # 031 widens lfs_head_ref.path_in_repo, which 021 creates, to the TEXT init_db makes
+    return _load_017(), _load_018(), _load_019(), _load_020(), _load_021(), _load_031()
+
+
+def _sqlite_widened(schema):
+    """SQLite cannot change a column's declared type and never enforced its
+    length: 031 leaves the VARCHAR(255) of a repository path as it is there."""
+    widened = {}
+    for table, (columns, indexes, foreign_keys) in schema.items():
+        columns = {
+            name: ("text", *rest) if (table, name) in PATH_COLUMNS and kind == "varchar(255)" else (kind, *rest)
+            for name, (kind, *rest) in columns.items()
+        }
+        widened[table] = (columns, indexes, foreign_keys)
+    return widened
 
 
 def _schema(database):
@@ -167,7 +192,7 @@ def test_migrations_017_to_021_match_init_db_on_sqlite(tmp_path, monkeypatch):
         assert migration.run() is True
         assert migration.run() is True
 
-    assert _schema(migrated) == _sqlite_reference(tmp_path / "reference.db")
+    assert _sqlite_widened(_schema(migrated)) == _sqlite_reference(tmp_path / "reference.db")
     assert migrated.execute_sql('SELECT cancel_requested FROM "background_task"').fetchall() == [
         (0,)
     ]
@@ -181,7 +206,7 @@ def test_migration_018_resumes_a_partially_added_column_set(tmp_path, monkeypatc
 
     for migration in later:
         assert migration.run() is True
-    assert _schema(migrated) == _sqlite_reference(tmp_path / "reference.db")
+    assert _sqlite_widened(_schema(migrated)) == _sqlite_reference(tmp_path / "reference.db")
 
 
 @pytest.mark.parametrize("loader", [_load_017, _load_018, _load_019, _load_020, _load_021])
