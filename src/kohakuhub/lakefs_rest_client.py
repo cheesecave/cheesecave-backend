@@ -989,6 +989,16 @@ class LakeFSRestClient:
         )
         self._check_response(response)
 
+    async def reset_uncommitted(
+        self, repository: str, branch: str, path: str, prefix: bool = False
+    ) -> None:
+        """Drop the uncommitted change at ``path`` on ``branch`` (everything
+        under it with ``prefix``), back to the branch's head."""
+        url = f"{self.base_url}/repositories/{repository}/branches/{branch}"
+        body = {"type": "common_prefix" if prefix else "object", "path": path}
+        response = await self._httpx().put(url, json=body, auth=self.auth, timeout=None)
+        self._check_response(response)
+
 
 _singleton_client: LakeFSRestClient | None = None
 

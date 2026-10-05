@@ -3,6 +3,7 @@ listing reads it instead of asking LakeFS (kohakuhub.path_commits)."""
 
 from __future__ import annotations
 
+from datetime import timedelta
 import importlib.util
 from pathlib import Path
 
@@ -229,6 +230,123 @@ async def test_the_backfill_records_a_squashed_repository(m, owner_client):
     assert _rows(m, repo) == {"a": "squashed", "a/f.txt": "squashed", "g.txt": "after"}
 
 
+def _unrecord(m, *repos):
+    R, P = m.db.Repository, m.db.PathCommit
+    rows = [R.get(R.full_id == repo.id) for repo in repos]
+    for row in rows:
+        P.delete().where(P.repository == row).execute()
+    R.update(last_commits_recorded=False).where(R.id.in_([row.id for row in rows])).execute()
+    return rows
+
+
+async def test_the_backfill_records_a_history_with_a_path_over_255_characters(m, owner_client):
+    """2026-10-05 (cheesecave-backend#1): a 265-character path in one
+    repository's history made the backfill fail there, on every attempt,
+    and no repository after it was ever recorded."""
+    long = "_pathtest3/" + "x" * 250 + ".txt"
+    repo = await _repo(m, owner_client, "pc-long-history")
+    await repo.commit(_file(long, "x"), _file("_pathtest3/ok.txt", "ok"), summary="test-long")
+    await repo.commit(_file("after.txt", "a"), summary="after")
+    later = await _repo(m, owner_client, "pc-long-later")
+    await later.commit(_file("b.txt", "b"), summary="later")
+    recorded = _rows(m, repo), _rows(m, later)
+    assert recorded[0][long] == "test-long"
+    rows = _unrecord(m, repo, later)
+
+    await m.pc.backfill({}, _Context())
+
+    assert (_rows(m, repo), _rows(m, later)) == recorded
+    R = m.db.Repository
+    assert {R.get_by_id(row.id).last_commits_recorded for row in rows} == {True}
+
+
+async def test_one_failing_repository_does_not_hold_back_the_others(m, owner_client, monkeypatch):
+    broken = await _repo(m, owner_client, "pc-broken")
+    await broken.commit(_file("a.txt", "a"), summary="a")
+    fine = await _repo(m, owner_client, "pc-fine")
+    await fine.commit(_file("b.txt", "b"), summary="b")
+    recorded = _rows(m, fine)
+    broken_row, fine_row = _unrecord(m, broken, fine)
+    backfill_repository = m.pc.backfill_repository
+
+    async def record(client, repository):
+        if repository.id == broken_row.id:
+            raise RuntimeError("cannot record")
+        return await backfill_repository(client, repository)
+
+    monkeypatch.setattr(m.pc, "backfill_repository", record)
+    context = _Context()
+    with pytest.raises(RuntimeError, match=f"1 of 2 .*{broken.id}"):
+        await m.pc.backfill({}, context)
+
+    R = m.db.Repository
+    assert R.get_by_id(broken_row.id).last_commits_recorded is False  # retried later
+    assert R.get_by_id(fine_row.id).last_commits_recorded is True
+    assert _rows(m, fine) == recorded
+    assert context.done[-1] == (2, 2)
+
+
+async def test_the_backfill_waits_after_a_failure(m, owner_client):
+    """A failed backfill is retried after a pause, not queued again every
+    minute by the worker's resync (982 failed tasks in production)."""
+    repo = await _repo(m, owner_client, "pc-wait")
+    _unrecord(m, repo)
+    T, tasks = m.db.BackgroundTask, m.tasks
+    T.delete().where(T.kind == m.pc.BACKFILL_KIND).execute()
+
+    def failed(ago):
+        task = m.pc.ensure_backfill()
+        finished = tasks.utcnow() - ago
+        T.update(status=tasks.FAILED, finished_at=finished, dedupe_key=None).where(T.id == task).execute()
+        return finished
+
+    finished = failed(timedelta(0))
+    waiting = T.get_by_id(m.pc.ensure_backfill())
+    assert waiting.run_after == finished + m.pc.BACKFILL_RETRY_AFTER
+
+    T.delete().where(T.kind == m.pc.BACKFILL_KIND).execute()
+    failed(m.pc.BACKFILL_RETRY_AFTER * 2)  # long ago: no need to wait
+    task = m.pc.ensure_backfill()
+    assert T.get_by_id(task).run_after <= tasks.utcnow()
+    T.delete().where(T.kind == m.pc.BACKFILL_KIND).execute()
+
+
+async def test_no_second_backfill_while_one_is_still_trying(m, owner_client):
+    """A claimed task has no dedupe key (kohakuhub.tasks.claim_next), so
+    the resync once queued another every minute while one was retrying."""
+    repo = await _repo(m, owner_client, "pc-trying")
+    _unrecord(m, repo)
+    T, tasks = m.db.BackgroundTask, m.tasks
+    T.delete().where(T.kind == m.pc.BACKFILL_KIND).execute()
+    task = m.pc.ensure_backfill()
+
+    for status in (tasks.RUNNING, tasks.QUEUED):  # running, then waiting to retry
+        T.update(status=status, dedupe_key=None, attempts=2).where(T.id == task).execute()
+        assert m.pc.ensure_backfill() is None
+    assert T.select().where(T.kind == m.pc.BACKFILL_KIND).count() == 1
+    T.delete().where(T.kind == m.pc.BACKFILL_KIND).execute()
+
+
+async def test_the_backfill_skips_a_path_too_long_to_store(m, owner_client, monkeypatch):
+    """A historical path over the limit is left to the bounded LakeFS
+    lookup; the folders above it are still recorded."""
+    repo = await _repo(m, owner_client, "pc-too-long")
+    await repo.commit(_file("deep/f.txt", "f"), summary="only")
+    _unrecord(m, repo)
+    too_long = "deep/" + "z" * 1100
+    changed = m.pc._changed
+
+    async def with_a_long_path(client, lakefs_repo, commit):
+        return [*await changed(client, lakefs_repo, commit), too_long]
+
+    monkeypatch.setattr(m.pc, "_changed", with_a_long_path)
+    await m.pc.backfill({}, _Context())
+
+    assert _rows(m, repo) == {"deep": "only", "deep/f.txt": "only"}
+    R = m.db.Repository
+    assert R.get(R.full_id == repo.id).last_commits_recorded is True
+
+
 class _Context:
     def __init__(self):
         self.stages, self.done = [], []
@@ -294,6 +412,7 @@ def test_the_migration_skips_when_a_later_one_is_applied(m, monkeypatch):
 
 def test_the_migration_reports_a_failure(m, monkeypatch):
     migration = _migration()
+    monkeypatch.setattr(migration, "should_skip_due_to_future_migrations", lambda *args: False)
     monkeypatch.setattr(migration, "is_applied", lambda db, cfg: False)
     monkeypatch.setattr(migration, "_migrate", lambda *args: (_ for _ in ()).throw(RuntimeError("boom")))
     assert migration.run() is False
