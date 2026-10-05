@@ -12,15 +12,17 @@ repository from before the rows is recorded by ``backfill``.
 """
 
 import asyncio
+from datetime import timedelta
 from typing import Any, Iterable
 
 from peewee import EXCLUDED
 
 from kohakuhub import tasks, usage
-from kohakuhub.db import PathCommit, Repository
+from kohakuhub.db import BackgroundTask, PathCommit, Repository
 from kohakuhub.lakefs_rest_client import get_lakefs_rest_client
 from kohakuhub.logger import get_logger
 from kohakuhub.utils.lakefs import resolve_lakefs_repo
+from kohakuhub.utils.repo_paths import too_long
 from kohakuhub.api.repo.utils.hf import is_lakefs_not_found_error
 
 logger = get_logger("PATH_COMMITS")
@@ -29,6 +31,9 @@ BRANCH = usage.MAIN
 BACKFILL_KIND = "last_commits.backfill"
 ROW_BATCH = 500
 LAKEFS_PAGE = 1000
+# After a failed backfill, before the next: the worker's resync would queue
+# one every minute, each failing the same way
+BACKFILL_RETRY_AFTER = timedelta(hours=1)
 
 
 def with_folders(paths: Iterable[str]) -> set[str]:
@@ -42,17 +47,23 @@ def with_folders(paths: Iterable[str]) -> set[str]:
 
 
 def _rows(repo: Repository, commit: dict, paths: Iterable[str]) -> list[dict]:
-    return [
-        {
-            "repository": repo,
-            "branch": BRANCH,
-            "path": path,
-            "commit_id": commit["id"],
-            "title": commit.get("message", ""),
-            "date": int(commit.get("creation_date") or 0),
-        }
-        for path in sorted(with_folders(paths))
-    ]
+    rows = []
+    for path in sorted(with_folders(paths)):
+        if too_long(path):
+            # From before commits refused it; a listing asks LakeFS for it
+            logger.warning(f"Not recording a {len(path.encode())}-byte path of {repo.full_id}")
+            continue
+        rows.append(
+            {
+                "repository": repo,
+                "branch": BRANCH,
+                "path": path,
+                "commit_id": commit["id"],
+                "title": commit.get("message", ""),
+                "date": int(commit.get("creation_date") or 0),
+            }
+        )
+    return rows
 
 
 async def _write(rows: list[dict], replace: bool) -> None:
@@ -160,29 +171,46 @@ async def backfill_repository(client, repo: Repository) -> int:
 @tasks.task(BACKFILL_KIND, timeout=24 * 3600, max_attempts=5)
 async def backfill(payload: dict[str, Any], ctx: tasks.TaskContext) -> None:
     """Record every repository from before the rows, one at a time; each is
-    marked once done, so a retry resumes with the next."""
+    marked once done, so a retry resumes with the next. One that fails does
+    not hold back the rest: it stays unrecorded, the task fails once all
+    were tried, and a retry tries it again."""
     client = get_lakefs_rest_client()
     R = Repository
     pending = R.select().where(R.last_commits_recorded == False)  # noqa: E712
-    total, done = pending.count(), 0
+    total, done, failed = pending.count(), 0, []
     for repo in pending.order_by(R.id):
         ctx.stage(f"recording {repo.full_id}")
         try:
             commits = await backfill_repository(client, repo)
         except Exception as error:
             if not is_lakefs_not_found_error(error):
-                raise
+                logger.warning(f"Could not record the last commits of {repo.full_id}: {error!r}")
+                failed.append(f"{repo.full_id} ({type(error).__name__}: {error})")
+                done += 1
+                ctx.progress(done, total)
+                continue
             commits = 0  # its LakeFS repository is gone: nothing to record
         R.update(last_commits_recorded=True).where(R.id == repo.id).execute()
         done += 1
         ctx.progress(done, total)
         logger.info(f"Recorded the last commits of {repo.full_id} ({commits} commit(s))")
+    if failed:
+        raise RuntimeError(f"Could not record {len(failed)} of {total} repositories: " + "; ".join(failed))
 
 
 def ensure_backfill() -> int | None:
     """Queue the backfill while a repository is not recorded; ``None`` if
-    none is, or one is queued already."""
-    R = Repository
+    none is, or one is queued already. After a failed one the next waits
+    ``BACKFILL_RETRY_AFTER``."""
+    R, T = Repository, BackgroundTask
     if not R.select().where(R.last_commits_recorded == False).exists():  # noqa: E712
         return None
-    return tasks.enqueue(BACKFILL_KIND, dedupe_key=BACKFILL_KIND)
+    backfills = T.select(T.status, T.finished_at).where(T.kind == BACKFILL_KIND)
+    if backfills.where(T.status.not_in(tasks.FINISHED)).exists():
+        return None  # one is still trying: claiming it cleared its dedupe key
+    last = backfills.order_by(T.id.desc()).first()
+    run_after = None
+    if last is not None and last.status == tasks.FAILED:
+        retry_at = last.finished_at + BACKFILL_RETRY_AFTER
+        run_after = retry_at if retry_at > tasks.utcnow() else None
+    return tasks.enqueue(BACKFILL_KIND, dedupe_key=BACKFILL_KIND, run_after=run_after)

@@ -7,11 +7,12 @@ import base64
 import hashlib
 import json
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from kohakuhub import path_commits, usage
 from kohakuhub.config import cfg
-from kohakuhub.db import File, Repository, User
+from kohakuhub.db import File, Repository, User, db
 from kohakuhub.db_operations import (
     create_commit,
     create_file,
@@ -25,6 +26,7 @@ from kohakuhub.logger import get_logger
 from kohakuhub.auth.dependencies import get_current_user
 from kohakuhub.auth.permissions import check_repo_write_permission
 from kohakuhub.utils.lakefs import get_lakefs_client, resolve_lakefs_repo
+from kohakuhub.utils.repo_paths import MAX_PATH_BYTES, too_long
 from kohakuhub.utils.s3 import get_object_metadata, object_exists
 from kohakuhub.api.repo.utils import operation_lock
 from kohakuhub.api.repo.utils.gc import track_lfs_object
@@ -747,6 +749,170 @@ async def process_copy_file(
     }
 
 
+# Operations that put something at their path
+CREATING = ("file", "lfsFile", "copyFile")
+
+
+def _path_too_long(path: str) -> HTTPException:
+    message = f"A path is longer than {MAX_PATH_BYTES} bytes (UTF-8), the limit for a repository path"
+    return HTTPException(
+        400,
+        detail={"error": f"{message}: {path[:100]}..."},
+        # A header holds Latin-1 only: the path stays in the body
+        headers={"X-Error-Code": HFErrorCode.BAD_REQUEST, "X-Error-Message": message},
+    )
+
+
+def _touched(operations: list[dict]) -> tuple[list[str], list[str]]:
+    """The paths the operations change, and the folders they delete."""
+    paths, folders = [], []
+    for op in operations:
+        path = op["value"].get("path")
+        if not path:
+            continue
+        if op["key"] == "deletedFolder":
+            folders.append(path.strip("/") + "/")
+        else:
+            paths.append(path)
+    return paths, folders
+
+
+def _file_rows(repo: Repository, touched: tuple[list[str], list[str]]) -> dict[int, dict]:
+    """The File rows of the touched paths, by id."""
+    paths, folders = touched
+    rows = {}
+    for start in range(0, len(paths), 500):
+        query = File.select().where(
+            (File.repository == repo) & File.path_in_repo.in_(paths[start : start + 500])
+        )
+        rows.update((row["id"], row) for row in query.dicts())
+    for folder in folders:
+        query = File.select().where(
+            (File.repository == repo) & File.path_in_repo.startswith(folder)
+        )
+        rows.update((row["id"], row) for row in query.dicts())
+    return rows
+
+
+async def _undo(
+    client,
+    lakefs_repo: str,
+    branch: str,
+    repo: Repository,
+    touched: tuple[list[str], list[str]],
+    before: dict[int, dict],
+) -> None:
+    """Leave the branch and the File rows as they were before a commit that
+    failed: what it staged would otherwise go into the next commit on the
+    branch, whoever makes it. Best effort: a failure here is logged and the
+    first failure is what the client sees."""
+    try:
+        with db.atomic():  # no await inside: no other request's statements
+            for row_id, row in _file_rows(repo, touched).items():
+                if row_id not in before:
+                    File.delete().where(File.id == row_id).execute()
+                elif row != before[row_id]:
+                    File.update(**before[row_id]).where(File.id == row_id).execute()
+    except Exception as e:
+        logger.warning(f"Could not restore the File rows of {repo.full_id}: {e}")
+    paths, folders = touched
+    for path, prefix in [(p, False) for p in paths] + [(f, True) for f in folders]:
+        try:
+            await client.reset_uncommitted(
+                repository=lakefs_repo, branch=branch, path=path, prefix=prefix
+            )
+        except Exception as e:
+            logger.warning(f"Could not drop what a failed commit staged at {path!r}: {e}")
+
+
+async def _stage_operations(
+    operations: list[dict], repo_row: Repository, lakefs_repo: str, revision: str
+) -> tuple[bool, list[dict]]:
+    """Stage each operation on the branch; whether any changed something,
+    and the LFS files to track once committed."""
+    files_changed = False
+    pending_lfs_tracking = []
+
+    for op in operations:
+        key = op["key"]
+        value = op["value"]
+        path = value.get("path")
+        logger.info(f"Processing {key}: {path}")
+
+        match key:
+            case "file":
+                # Regular file with inline content
+                changed = await process_regular_file(
+                    path=path,
+                    content_b64=value.get("content"),
+                    encoding=(value.get("encoding") or "").lower(),
+                    repo=repo_row,
+                    lakefs_repo=lakefs_repo,
+                    revision=revision,
+                )
+                files_changed = files_changed or changed
+
+            case "lfsFile":
+                # LFS file already in S3
+                changed, lfs_info = await process_lfs_file(
+                    path=path,
+                    oid=value.get("oid"),
+                    size=value.get("size"),
+                    algo=value.get("algo", "sha256"),
+                    repo=repo_row,
+                    lakefs_repo=lakefs_repo,
+                    revision=revision,
+                )
+                files_changed = files_changed or changed
+                if lfs_info:
+                    logger.debug(
+                        f"[COMMIT_OP] Adding LFS file to tracking queue: {path} "
+                        f"(sha256={lfs_info['sha256'][:8]}, size={lfs_info['size']:,})"
+                    )
+                    pending_lfs_tracking.append(lfs_info)
+                else:
+                    logger.warning(
+                        f"[COMMIT_OP] process_lfs_file returned NO tracking info for: {path} "
+                        f"(oid={value.get('oid', 'MISSING')[:8]})"
+                    )
+
+            case "deletedFile":
+                # Delete single file
+                changed = await process_deleted_file(
+                    path=path,
+                    repo=repo_row,
+                    lakefs_repo=lakefs_repo,
+                    revision=revision,
+                )
+                files_changed = files_changed or changed
+
+            case "deletedFolder":
+                # Delete folder recursively
+                changed = await process_deleted_folder(
+                    path=path,
+                    repo=repo_row,
+                    lakefs_repo=lakefs_repo,
+                    revision=revision,
+                )
+                files_changed = files_changed or changed
+
+            case "copyFile":
+                # Copy file
+                changed, lfs_info = await process_copy_file(
+                    dest_path=path,
+                    src_path=value.get("srcPath"),
+                    src_revision=value.get("srcRevision", revision),
+                    repo=repo_row,
+                    lakefs_repo=lakefs_repo,
+                    revision=revision,
+                )
+                files_changed = files_changed or changed
+                if lfs_info:
+                    pending_lfs_tracking.append(lfs_info)
+
+    return files_changed, pending_lfs_tracking
+
+
 @router.post("/{repo_type}s/{namespace}/{name}/commit/{revision}")
 async def commit(
     repo_type: RepoType,
@@ -849,86 +1015,22 @@ async def commit(
     if header is None:
         raise HTTPException(400, detail={"error": "Missing commit header"})
 
-    # Process operations using match-case
-    files_changed = False
-    pending_lfs_tracking = []
-
+    # Refused before anything is staged: nothing is left behind
     for op in operations:
-        key = op["key"]
-        value = op["value"]
-        path = value.get("path")
-        logger.info(f"Processing {key}: {path}")
+        if op["key"] in CREATING and too_long(op["value"].get("path") or ""):
+            raise _path_too_long(op["value"]["path"])
 
-        match key:
-            case "file":
-                # Regular file with inline content
-                changed = await process_regular_file(
-                    path=path,
-                    content_b64=value.get("content"),
-                    encoding=(value.get("encoding") or "").lower(),
-                    repo=repo_row,
-                    lakefs_repo=lakefs_repo,
-                    revision=revision,
-                )
-                files_changed = files_changed or changed
-
-            case "lfsFile":
-                # LFS file already in S3
-                changed, lfs_info = await process_lfs_file(
-                    path=path,
-                    oid=value.get("oid"),
-                    size=value.get("size"),
-                    algo=value.get("algo", "sha256"),
-                    repo=repo_row,
-                    lakefs_repo=lakefs_repo,
-                    revision=revision,
-                )
-                files_changed = files_changed or changed
-                if lfs_info:
-                    logger.debug(
-                        f"[COMMIT_OP] Adding LFS file to tracking queue: {path} "
-                        f"(sha256={lfs_info['sha256'][:8]}, size={lfs_info['size']:,})"
-                    )
-                    pending_lfs_tracking.append(lfs_info)
-                else:
-                    logger.warning(
-                        f"[COMMIT_OP] process_lfs_file returned NO tracking info for: {path} "
-                        f"(oid={value.get('oid', 'MISSING')[:8]})"
-                    )
-
-            case "deletedFile":
-                # Delete single file
-                changed = await process_deleted_file(
-                    path=path,
-                    repo=repo_row,
-                    lakefs_repo=lakefs_repo,
-                    revision=revision,
-                )
-                files_changed = files_changed or changed
-
-            case "deletedFolder":
-                # Delete folder recursively
-                changed = await process_deleted_folder(
-                    path=path,
-                    repo=repo_row,
-                    lakefs_repo=lakefs_repo,
-                    revision=revision,
-                )
-                files_changed = files_changed or changed
-
-            case "copyFile":
-                # Copy file
-                changed, lfs_info = await process_copy_file(
-                    dest_path=path,
-                    src_path=value.get("srcPath"),
-                    src_revision=value.get("srcRevision", revision),
-                    repo=repo_row,
-                    lakefs_repo=lakefs_repo,
-                    revision=revision,
-                )
-                files_changed = files_changed or changed
-                if lfs_info:
-                    pending_lfs_tracking.append(lfs_info)
+    touched = _touched(operations)
+    before = _file_rows(repo_row, touched)
+    try:
+        files_changed, pending_lfs_tracking = await _stage_operations(
+            operations, repo_row, lakefs_repo, revision
+        )
+    except Exception as error:
+        await _undo(client, lakefs_repo, revision, repo_row, touched, before)
+        if isinstance(error, HTTPException):
+            raise
+        raise HTTPException(500, detail={"error": f"Commit failed: {error}"}) from error
 
     # If no files changed, return early
     if not files_changed:
@@ -961,9 +1063,15 @@ async def commit(
                 message=commit_msg,
                 metadata={"description": commit_desc} if commit_desc else None,
             )
-    except HTTPException:
-        raise  # refused while an operation holds the repository
+    except (HTTPException, httpx.HTTPStatusError) as error:
+        # Refused (an operation holds the repository, or LakeFS said no):
+        # nothing was committed
+        await _undo(client, lakefs_repo, revision, repo_row, touched, before)
+        if isinstance(error, HTTPException):
+            raise
+        raise HTTPException(500, detail={"error": f"Commit failed: {error}"}) from error
     except Exception as e:
+        # No answer: the commit may have landed, so the branch stays as it is
         raise HTTPException(500, detail={"error": f"Commit failed: {str(e)}"})
 
     # Poll to verify commit is accessible (LakeFS needs time to process large commits)

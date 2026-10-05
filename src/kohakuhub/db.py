@@ -309,7 +309,7 @@ class File(BaseModel):
     repository = ForeignKeyField(
         Repository, backref="files", on_delete="CASCADE", index=True
     )
-    path_in_repo = CharField(index=True)
+    path_in_repo = TextField(index=True)
     size = BigIntegerField(default=0)  # Changed from IntegerField to support files >2GB
     sha256 = CharField(index=True)
     lfs = BooleanField(default=False)
@@ -331,7 +331,7 @@ class PathCommit(BaseModel):
     id = AutoField()
     repository = ForeignKeyField(Repository, on_delete="CASCADE", index=True)
     branch = CharField()
-    path = CharField()  # no leading or trailing slash
+    path = TextField()  # no leading or trailing slash
     commit_id = CharField(max_length=64)
     title = TextField(default="")
     date = BigIntegerField()  # the commit's creation date, epoch seconds (LakeFS)
@@ -348,7 +348,7 @@ class StagingUpload(BaseModel):
     )
     repo_type = CharField(index=True)
     revision = CharField(index=True)
-    path_in_repo = CharField()
+    path_in_repo = TextField()
     sha256 = CharField(default="")
     size = BigIntegerField(default=0)  # Changed from IntegerField to support files >2GB
     upload_id = CharField(null=True)
@@ -423,7 +423,7 @@ class LFSObjectHistory(BaseModel):
     repository = ForeignKeyField(
         Repository, backref="lfs_history", on_delete="CASCADE", index=True
     )
-    path_in_repo = CharField(index=True)  # File path
+    path_in_repo = TextField(index=True)  # File path
     sha256 = CharField(index=True)  # LFS object hash
     size = BigIntegerField()  # Changed from IntegerField to support files >2GB
     commit_id = CharField(index=True)  # LakeFS commit ID
@@ -768,7 +768,7 @@ class LfsHeadRef(BaseModel):
 
     repository = ForeignKeyField(Repository, on_delete="CASCADE", index=True)
     branch = CharField()
-    path_in_repo = CharField()
+    path_in_repo = TextField()
     sha256 = CharField(max_length=64, index=True)
     created_at = DateTimeField(default=utcnow)
 
