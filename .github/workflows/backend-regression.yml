@@ -137,6 +137,16 @@ jobs:
         run: |
           mkdir -p lint-reports/ci
           python -m pytest test/kohakuhub -p scripts.ci.select_tests --ci-category services -q --cov=src/kohakuhub --cov-config=.coveragerc --cov-fail-under=80 --cov-report=xml:lint-reports/ci/coverage.xml --junitxml=lint-reports/ci/services.xml 2>&1 | tee lint-reports/ci/tests.log
+      - name: Upload coverage to Codecov
+        if: ${{ !cancelled() }}
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: lint-reports/ci/coverage.xml
+          flags: backend
+          name: backend-services-cache-${{ matrix.cache }}
+          disable_search: true
+          fail_ci_if_error: false
       - name: Collect infrastructure logs and remove temporary data
         if: ${{ always() }}
         run: |
