@@ -1,0 +1,70 @@
+name: Manual production deployment
+run-name: Deploy backend ${{ github.sha }} by @${{ github.actor }}
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-deployment
+  cancel-in-progress: false
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Require a manual run on main
+        env:
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+        run: test "$EVENT" = workflow_dispatch && test "$REF" = refs/heads/main
+
+  deploy:
+    needs: guard
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Check the deployment client
+        run: python -m unittest discover -s test/deployment -v
+      - name: Build one immutable backend image for API and worker
+        run: |
+          set -euo pipefail
+          # The restricted server accepts Docker archives, not OCI layouts.
+          # Use an explicit exporter independent of the runner's image store.
+          docker buildx create --use --driver docker-container
+          docker buildx build --platform linux/amd64 --provenance=false \
+            --build-arg "KOHAKU_HUB_GIT_SHA=$GITHUB_SHA" \
+            --build-arg "KOHAKU_HUB_BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --output "type=docker,compression=uncompressed,dest=$RUNNER_TEMP/deployment.tar" \
+            --tag "cheesecave-backend:ci-$GITHUB_SHA" .
+      - name: Compress only the checked backend image
+        run: |
+          set -euo pipefail
+          gzip -n "$RUNNER_TEMP/deployment.tar"
+          test "$(stat -c %s "$RUNNER_TEMP/deployment.tar.gz")" -le 1073741824
+      - name: Upload, verify and publish through restricted SSH
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: >-
+          python scripts/ci_deploy.py deploy --component backend
+          --commit "$GITHUB_SHA" --archive "$RUNNER_TEMP/deployment.tar.gz"
+          --receipt "$RUNNER_TEMP/deployment-receipt.json"
+      - name: Retain deployment receipt
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: backend-deployment-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/deployment-receipt.json
+          if-no-files-found: ignore
+          retention-days: 30
