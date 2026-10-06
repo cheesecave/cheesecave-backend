@@ -33,23 +33,7 @@ jobs:
           persist-credentials: false
       - name: Check the deployment client
         run: python -m unittest discover -s test/deployment -v
-      - name: Build one immutable backend image for API and worker
-        run: |
-          set -euo pipefail
-          # The restricted server accepts Docker archives, not OCI layouts.
-          # Use an explicit exporter independent of the runner's image store.
-          docker buildx create --use --driver docker-container
-          docker buildx build --platform linux/amd64 --provenance=false \
-            --build-arg "KOHAKU_HUB_GIT_SHA=$GITHUB_SHA" \
-            --build-arg "KOHAKU_HUB_BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            --output "type=docker,compression=uncompressed,dest=$RUNNER_TEMP/deployment.tar" \
-            --tag "cheesecave-backend:ci-$GITHUB_SHA" .
-      - name: Compress only the checked backend image
-        run: |
-          set -euo pipefail
-          gzip -n "$RUNNER_TEMP/deployment.tar"
-          test "$(stat -c %s "$RUNNER_TEMP/deployment.tar.gz")" -le 1073741824
-      - name: Upload, verify and publish through restricted SSH
+      - name: Build and deploy on the server through restricted SSH
         env:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
@@ -57,8 +41,7 @@ jobs:
           DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
           DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
         run: >-
-          python scripts/ci_deploy.py deploy --component backend
-          --commit "$GITHUB_SHA" --archive "$RUNNER_TEMP/deployment.tar.gz"
+          python scripts/ci_deploy.py --commit "$GITHUB_SHA"
           --receipt "$RUNNER_TEMP/deployment-receipt.json"
       - name: Retain deployment receipt
         if: always()
