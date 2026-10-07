@@ -317,6 +317,76 @@ async def test_complete_with_a_valid_ticket_reaches_the_storage(client):
 
     # authorized; the storage then refuses an upload id that never existed
     assert response.status_code == 500
+    assert "Failed to complete multipart upload" in response.text
+
+
+async def test_odd_tickets_are_a_clean_401_not_a_server_error(client):
+    body = {"oid": OID, "size": 1}
+    complete_body = {"oid": OID, "upload_id": "u1", "parts": [{"partNumber": 1, "etag": "e"}]}
+    for ticket in ("².x", "٣.x", "9" * 5000 + ".x"):
+        verify = await client.post(f"{PUBLIC[1]}/verify", params={"ticket": ticket}, json=body)
+        complete = await client.post(
+            f"{PUBLIC[1]}/complete/u1", params={"ticket": ticket}, json=complete_body
+        )
+        assert verify.status_code == 401, ticket[:10]
+        assert complete.status_code == 401, ticket[:10]
+
+
+async def test_a_valid_ticket_works_for_any_caller_including_a_signed_in_outsider(
+    outsider_client,
+):
+    # the ticket is the credential here: it does not depend on who presents it
+    lfs = _ticket_module()
+    ticket = lfs.issue_lfs_ticket("verify", "owner/demo-model", OID)
+
+    response = await outsider_client.post(
+        f"{PUBLIC[1]}/verify", params={"ticket": ticket}, json={"oid": OID, "size": 1}
+    )
+
+    assert response.status_code == 404
+    assert "Object not found" in response.text
+
+
+async def test_complete_on_the_bare_route_binds_the_upload_id_from_the_body(client):
+    lfs = _ticket_module()
+    ticket = lfs.issue_lfs_ticket("complete", "owner/demo-model", OID, "u7")
+    parts = [{"partNumber": 1, "etag": "e"}]
+
+    same = await client.post(
+        f"{PUBLIC[1]}/complete",
+        params={"ticket": ticket},
+        json={"oid": OID, "upload_id": "u7", "parts": parts},
+    )
+    other = await client.post(
+        f"{PUBLIC[1]}/complete",
+        params={"ticket": ticket},
+        json={"oid": OID, "upload_id": "u8", "parts": parts},
+    )
+
+    assert same.status_code == 500  # authorized, storage refuses the made-up upload
+    assert other.status_code == 401
+
+
+async def test_followup_bodies_must_be_json_objects_with_object_parts(client):
+    lfs = _ticket_module()
+    verify_ticket = lfs.issue_lfs_ticket("verify", "owner/demo-model", OID)
+    complete_ticket = lfs.issue_lfs_ticket("complete", "owner/demo-model", OID, "u1")
+
+    verify = await client.post(
+        f"{PUBLIC[1]}/verify", params={"ticket": verify_ticket}, json=[1, 2]
+    )
+    complete = await client.post(
+        f"{PUBLIC[1]}/complete/u1", params={"ticket": complete_ticket}, json=[1, 2]
+    )
+    bad_part = await client.post(
+        f"{PUBLIC[1]}/complete/u1",
+        params={"ticket": complete_ticket},
+        json={"oid": OID, "parts": ["x"]},
+    )
+
+    assert verify.status_code == 400
+    assert complete.status_code == 400
+    assert bad_part.status_code == 400
 
 
 async def test_oids_must_be_sha256_hex(owner_client):

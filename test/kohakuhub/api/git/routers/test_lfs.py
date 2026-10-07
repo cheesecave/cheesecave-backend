@@ -453,6 +453,13 @@ def test_ticket_rejects_tampering_and_malformed_values():
         assert not lfs_router.check_lfs_ticket(bad, "verify", "owner/repo", "a" * 64)
 
 
+def test_ticket_rejects_non_ascii_digits_and_absurd_lengths():
+    # str.isdigit() accepts "²" and Arabic-Indic digits that int() then refuses,
+    # and a few thousand digits trip Python's int conversion limit.
+    for bad in ("².x", "٣.x", "9" * 5000 + ".x", "9" * 13 + ".abc"):
+        assert not lfs_router.check_lfs_ticket(bad, "verify", "owner/repo", "a" * 64)
+
+
 def test_ticket_depends_on_the_server_secret(monkeypatch):
     ticket = lfs_router.issue_lfs_ticket("verify", "owner/repo", "a" * 64)
 
@@ -626,3 +633,31 @@ def test_every_lfs_route_has_an_authorization_dependency():
             missing.append(route.path)
 
     assert missing == []
+
+
+@pytest.mark.asyncio
+async def test_followup_routes_reject_non_object_bodies_and_parts(monkeypatch):
+    monkeypatch.setattr(lfs_router, "_authorize_followup", lambda *args: None)
+    writer = SimpleNamespace(username="owner")
+
+    for payload in ([], "text", 5, None):
+        with pytest.raises(HTTPException) as bad_complete:
+            await lfs_router.lfs_complete_multipart(
+                "owner", "repo", _FakeRequest(payload), ticket="t", user=writer
+            )
+        with pytest.raises(HTTPException) as bad_verify:
+            await lfs_router.lfs_verify(
+                "owner", "repo", _FakeRequest(payload), ticket="t", user=writer
+            )
+        assert bad_complete.value.status_code == 400
+        assert bad_verify.value.status_code == 400
+
+    with pytest.raises(HTTPException) as bad_part:
+        await lfs_router.lfs_complete_multipart(
+            "owner",
+            "repo",
+            _FakeRequest({"oid": "a" * 64, "upload_id": "u", "parts": ["not-a-dict"]}),
+            ticket="t",
+            user=writer,
+        )
+    assert bad_part.value.status_code == 400

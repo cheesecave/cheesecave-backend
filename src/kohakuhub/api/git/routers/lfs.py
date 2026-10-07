@@ -162,7 +162,11 @@ def check_lfs_ticket(
     if not isinstance(ticket, str):
         return False
     expires_text, dot, signature = ticket.partition(".")
-    if not dot or not expires_text.isdigit():
+    # ASCII only: str.isdigit() also accepts digits such as "²" that int() refuses,
+    # and a very long digit string would trip Python's int conversion limit.
+    if not (dot and expires_text.isascii() and expires_text.isdigit()):
+        return False
+    if len(expires_text) > 12:
         return False
     expires = int(expires_text)
     if expires < (time.time() if now is None else now):
@@ -659,6 +663,9 @@ async def lfs_complete_multipart(
     except Exception as e:
         raise HTTPException(400, detail={"error": f"Invalid completion request: {e}"})
 
+    if not isinstance(body, dict):
+        raise HTTPException(400, detail={"error": "Request body must be a JSON object"})
+
     oid = body.get("oid")
     size = body.get("size")
 
@@ -690,8 +697,10 @@ async def lfs_complete_multipart(
     normalized_parts = []
     for part in parts:
         # Support both formats
-        part_number = part.get("PartNumber") or part.get("partNumber")
-        etag = part.get("ETag") or part.get("etag")
+        part_number = etag = None
+        if isinstance(part, dict):
+            part_number = part.get("PartNumber") or part.get("partNumber")
+            etag = part.get("ETag") or part.get("etag")
 
         if not part_number or not etag:
             raise HTTPException(
@@ -801,6 +810,9 @@ async def lfs_verify(
         body = await request.json()
     except Exception as e:
         raise HTTPException(400, detail={"error": f"Invalid verification request: {e}"})
+
+    if not isinstance(body, dict):
+        raise HTTPException(400, detail={"error": "Request body must be a JSON object"})
 
     oid = body.get("oid")
     size = body.get("size")
