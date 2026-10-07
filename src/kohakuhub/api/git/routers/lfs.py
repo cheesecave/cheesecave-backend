@@ -6,9 +6,14 @@ large file uploads (>10MB). It provides presigned S3 URLs for direct uploads.
 
 import asyncio
 import base64
+import hashlib
+import hmac
+import json
+import re
+import time
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
@@ -19,6 +24,7 @@ from kohakuhub.lfs_gc import tombstone_state, touch
 from kohakuhub.logger import get_logger
 from kohakuhub.auth.dependencies import get_optional_user
 from kohakuhub.auth.permissions import (
+    RepoReadDeniedError,
     check_repo_read_permission,
     check_repo_write_permission,
 )
@@ -92,6 +98,163 @@ def get_lfs_key(oid: str) -> str:
         S3 key with balanced directory structure
     """
     return f"lfs/{oid[:2]}/{oid[2:4]}/{oid}"
+
+
+# ---------------------------------------------------------------------------
+# Authorization helpers
+#
+# LFS objects live under one global key space (``get_lfs_key``), so nothing in
+# the URL of the follow-up routes scopes an upload to a repository. The batch
+# route is where authorization and quota are decided; it hands out URLs for
+# the two follow-up routes (``complete`` and ``verify``) that carry a signed
+# ticket bound to the repository, the object (and the multipart upload). The
+# follow-up routes accept that ticket, because real clients send no credentials
+# on those calls (``huggingface_hub`` on ``complete``, the web UI on both), or
+# a signed-in caller who can write to the repository named in the URL.
+# ---------------------------------------------------------------------------
+
+LFS_TICKET_TTL_SECONDS = 86400 * 7  # as long as the multipart part URLs live
+_OID_PATTERN = re.compile(r"[0-9a-f]{64}")
+_REPO_TYPES = ("model", "dataset", "space")
+_LFS_CHALLENGE = {
+    "LFS-Authenticate": 'Basic realm="Authentication required", charset="UTF-8"'
+}
+
+
+def is_valid_oid(oid) -> bool:
+    """True for a lowercase SHA-256 hex digest, the only object id LFS uses."""
+    return isinstance(oid, str) and _OID_PATTERN.fullmatch(oid) is not None
+
+
+def _ticket_signature(purpose, repo_id, oid, upload_id, expires) -> str:
+    key = hmac.new(
+        cfg.auth.session_secret.encode(), b"kohakuhub-lfs-ticket-v1", hashlib.sha256
+    ).digest()
+    # JSON keeps the fields apart: no value can be shifted into its neighbour.
+    message = json.dumps(
+        [purpose, repo_id, oid, upload_id, expires], separators=(",", ":")
+    )
+    return hmac.new(key, message.encode(), hashlib.sha256).hexdigest()
+
+
+def issue_lfs_ticket(
+    purpose: str,
+    repo_id: str,
+    oid: str,
+    upload_id: str | None = None,
+    ttl: int = LFS_TICKET_TTL_SECONDS,
+    now: float | None = None,
+) -> str:
+    """Sign a short-lived permission for one follow-up call on one object."""
+    expires = int((time.time() if now is None else now) + ttl)
+    return f"{expires}.{_ticket_signature(purpose, repo_id, oid, upload_id, expires)}"
+
+
+def check_lfs_ticket(
+    ticket,
+    purpose: str,
+    repo_id: str,
+    oid: str,
+    upload_id: str | None = None,
+    now: float | None = None,
+) -> bool:
+    """True when ``ticket`` was issued for exactly this call and has not expired."""
+    if not isinstance(ticket, str):
+        return False
+    expires_text, dot, signature = ticket.partition(".")
+    if not dot or not expires_text.isdigit():
+        return False
+    expires = int(expires_text)
+    if expires < (time.time() if now is None else now):
+        return False
+    expected = _ticket_signature(purpose, repo_id, oid, upload_id, expires)
+    # bytes: compare_digest refuses non-ASCII str, and this value comes from a URL
+    return hmac.compare_digest(signature.encode(), expected.encode())
+
+
+def _with_ticket(url: str, ticket: str) -> str:
+    return f"{url}?ticket={ticket}"
+
+
+def _unauthorized() -> HTTPException:
+    return HTTPException(
+        401, detail={"error": "Authentication required"}, headers=dict(_LFS_CHALLENGE)
+    )
+
+
+def _repo_not_found() -> HTTPException:
+    return HTTPException(
+        404,
+        detail={"error": "Repository not found"},
+        headers={"X-Error-Code": "RepoNotFound"},
+    )
+
+
+def _not_visible(user: User | None) -> HTTPException:
+    """A repository that is missing, or that the caller may not see.
+
+    Both get the same answer, so the response never tells them apart: an
+    anonymous caller is asked to authenticate, a signed-in one gets a 404.
+    """
+    return _unauthorized() if user is None else _repo_not_found()
+
+
+def _can_read(repo: Repository, user: User | None) -> bool:
+    try:
+        check_repo_read_permission(repo, user)
+    except RepoReadDeniedError:
+        return False
+    return True
+
+
+def _authorize_batch(repo: Repository | None, operation: str, user: User | None):
+    """Decide a batch request before anything is generated for it."""
+    if repo is None or not _can_read(repo, user):
+        raise _not_visible(user)
+    if operation == "upload":
+        if user is None:
+            raise _unauthorized()
+        check_repo_write_permission(repo, user)
+
+
+def _authorize_followup(
+    namespace: str,
+    name: str,
+    user: User | None,
+    ticket: str | None,
+    purpose: str,
+    oid: str,
+    upload_id: str | None = None,
+):
+    """Authorize ``complete`` / ``verify``: a valid ticket, or a repository writer.
+
+    The URL names a repository but not its type, so the caller needs write
+    permission on at least one of the repositories with that name.
+    """
+    if ticket and check_lfs_ticket(
+        ticket, purpose, f"{namespace}/{name}", oid, upload_id
+    ):
+        return
+    if user is None:
+        raise _unauthorized()
+
+    readable = False
+    for repo_type in _REPO_TYPES:
+        repo = get_repository(repo_type, namespace, name)
+        if repo is None or not _can_read(repo, user):
+            continue
+        readable = True
+        try:
+            check_repo_write_permission(repo, user)
+        except HTTPException:
+            continue
+        return
+    if readable:
+        raise HTTPException(
+            403,
+            detail={"error": "You don't have permission to modify this repository"},
+        )
+    raise _repo_not_found()
 
 
 async def process_upload_object(
@@ -196,12 +359,20 @@ async def process_upload_object(
                 authenticated=True,
                 actions={
                     "upload": {
-                        "href": f"{cfg.app.base_url}/api/{repo_id}.git/info/lfs/complete/{multipart_info['upload_id']}",
+                        "href": _with_ticket(
+                            f"{cfg.app.base_url}/api/{repo_id}.git/info/lfs/complete/{multipart_info['upload_id']}",
+                            issue_lfs_ticket(
+                                "complete", repo_id, oid, multipart_info["upload_id"]
+                            ),
+                        ),
                         "expires_at": multipart_info["expires_at"],
                         "header": header,
                     },
                     "verify": {
-                        "href": f"{cfg.app.base_url}/api/{repo_id}.git/info/lfs/verify",
+                        "href": _with_ticket(
+                            f"{cfg.app.base_url}/api/{repo_id}.git/info/lfs/verify",
+                            issue_lfs_ticket("verify", repo_id, oid),
+                        ),
                         "expires_at": multipart_info["expires_at"],
                     },
                 },
@@ -250,7 +421,10 @@ async def process_upload_object(
                     "header": upload_info.get("headers", {}),
                 },
                 "verify": {
-                    "href": f"{cfg.app.base_url}/api/{repo_id}.git/info/lfs/verify",
+                    "href": _with_ticket(
+                        f"{cfg.app.base_url}/api/{repo_id}.git/info/lfs/verify",
+                        issue_lfs_ticket("verify", repo_id, oid, ttl=86400),
+                    ),
                     "expires_at": upload_info["expires_at"],
                 },
             },
@@ -366,42 +540,33 @@ async def lfs_batch(
     # Get repository using get_repository() which returns Repository FK object
     repo = get_repository(repo_type, namespace, name)
 
-    if repo:
-        operation = batch_req.operation
+    # Decide before anything is generated: a repository that does not exist or
+    # that the caller may not see is answered like an unauthorized request, and
+    # an upload needs write permission.
+    operation = batch_req.operation
+    _authorize_batch(repo, operation, user)
 
-        match operation:
-            case "upload":
-                # Upload requires authentication and write permission
-                if not user:
-                    raise HTTPException(
-                        401, detail={"error": "Authentication required for upload"}
-                    )
-                check_repo_write_permission(repo, user)
+    if operation == "upload":
+        # Check storage quota for uploads
+        total_upload_bytes = sum(obj.size for obj in batch_req.objects)
 
-                # Check storage quota for uploads
-                total_upload_bytes = sum(obj.size for obj in batch_req.objects)
+        # Check if namespace is organization (User with is_org=True)
+        org = get_organization(namespace)
+        is_org = org is not None
 
-                # Check if namespace is organization (User with is_org=True)
-                org = get_organization(namespace)
-                is_org = org is not None
-
-                # Check quota (based on repo privacy)
-                is_private = repo.private
-                allowed, error_msg = check_quota(
-                    namespace, total_upload_bytes, is_private, is_org
-                )
-                if not allowed:
-                    raise HTTPException(
-                        status_code=413,  # Payload Too Large
-                        detail={
-                            "error": "Storage quota exceeded",
-                            "message": error_msg,
-                        },
-                    )
-
-            case "download":
-                # Download requires read permission (may be public)
-                check_repo_read_permission(repo, user)
+        # Check quota (based on repo privacy)
+        is_private = repo.private
+        allowed, error_msg = check_quota(
+            namespace, total_upload_bytes, is_private, is_org
+        )
+        if not allowed:
+            raise HTTPException(
+                status_code=413,  # Payload Too Large
+                detail={
+                    "error": "Storage quota exceeded",
+                    "message": error_msg,
+                },
+            )
 
     if cfg.app.debug_log_payloads:
         logger.debug("==== LFS Batch Request ====")
@@ -410,6 +575,12 @@ async def lfs_batch(
     # Process all objects in parallel
     async def process_object(obj: LFSObject) -> LFSObjectResponse:
         """Process single LFS object based on operation type."""
+        if not is_valid_oid(obj.oid):
+            return LFSObjectResponse(
+                oid=obj.oid,
+                size=obj.size,
+                error=LFSError(code=422, message="Invalid object id"),
+            )
         match batch_req.operation:
             case "upload":
                 return await process_upload_object(
@@ -446,7 +617,12 @@ async def lfs_batch(
 @router.post("/api/{namespace}/{name}.git/info/lfs/complete/{upload_id}")
 @router.post("/api/{namespace}/{name}.git/info/lfs/complete")
 async def lfs_complete_multipart(
-    namespace: str, name: str, request: Request, upload_id: str = None
+    namespace: str,
+    name: str,
+    request: Request,
+    upload_id: str = None,
+    ticket: str | None = Query(None),
+    user: User | None = Depends(get_optional_user),
 ):
     """Complete multipart LFS upload.
 
@@ -475,6 +651,9 @@ async def lfs_complete_multipart(
             "parts": [{"PartNumber": 1, "ETag": "etag1"}, ...]
         }
     """
+    if user is None and not ticket:
+        raise _unauthorized()
+
     try:
         body = await request.json()
     except Exception as e:
@@ -501,6 +680,11 @@ async def lfs_complete_multipart(
                 },
             },
         )
+
+    if not is_valid_oid(oid):
+        raise HTTPException(400, detail={"error": "Invalid oid"})
+
+    _authorize_followup(namespace, name, user, ticket, "complete", oid, upload_id)
 
     # Normalize parts format (HuggingFace uses partNumber/etag, S3 uses PartNumber/ETag)
     normalized_parts = []
@@ -576,7 +760,13 @@ async def lfs_complete_multipart(
 
 
 @router.post("/api/{namespace}/{name}.git/info/lfs/verify")
-async def lfs_verify(namespace: str, name: str, request: Request):
+async def lfs_verify(
+    namespace: str,
+    name: str,
+    request: Request,
+    ticket: str | None = Query(None),
+    user: User | None = Depends(get_optional_user),
+):
     """Verify LFS upload completion.
 
     Called by client after successful upload to confirm the file.
@@ -604,7 +794,9 @@ async def lfs_verify(namespace: str, name: str, request: Request):
             "parts": [{"PartNumber": 1, "ETag": "etag1"}, ...]
         }
     """
-    repo_id = f"{namespace}/{name}"
+    if user is None and not ticket:
+        raise _unauthorized()
+
     try:
         body = await request.json()
     except Exception as e:
@@ -617,6 +809,20 @@ async def lfs_verify(namespace: str, name: str, request: Request):
 
     if not oid:
         raise HTTPException(400, detail={"error": "Missing OID"})
+    if not is_valid_oid(oid):
+        raise HTTPException(400, detail={"error": "Invalid oid"})
+
+    # A verify ticket only covers checking an object; completing a multipart
+    # upload from here needs a signed-in writer (clients use ``complete``).
+    completes_upload = bool(upload_id and parts)
+    _authorize_followup(
+        namespace,
+        name,
+        user,
+        None if completes_upload else ticket,
+        "verify",
+        oid,
+    )
 
     lfs_key = get_lfs_key(oid)
 

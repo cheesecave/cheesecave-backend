@@ -34,8 +34,17 @@ Git LFS (Large File Storage) protocol for handling large files efficiently with 
 **Alternative:** `POST /{namespace}/{name}.git/info/lfs/objects/batch`
 
 **Authentication:**
-- Optional for `download` operation
-- Required for `upload` operation
+- Optional for `download` of a public repository
+- Required for `download` of a private repository, and for every `upload` (write permission on the repository)
+
+**Repository resolution** happens first, before any action or URL is produced:
+
+| Caller | Repository missing or not visible to the caller | Visible, no write permission (`upload`) |
+|---|---|---|
+| Anonymous | `401` + `LFS-Authenticate` | `401` + `LFS-Authenticate` |
+| Signed in | `404` (`X-Error-Code: RepoNotFound`) | `403` |
+
+A missing repository and a private repository the caller cannot see get the same answer. Object ids must be lowercase SHA-256 hex; any other id gets a per-object `422` error.
 
 **Request Body:**
 ```json
@@ -82,7 +91,7 @@ Git LFS (Large File Storage) protocol for handling large files efficiently with 
           "expires_at": "2025-01-20T12:00:00Z"
         },
         "verify": {
-          "href": "/api/namespace/repo.git/info/lfs/verify",
+          "href": "/api/namespace/repo.git/info/lfs/verify?ticket=1790000000.9f2c...",
           "expires_at": "2025-01-20T12:00:00Z"
         }
       }
@@ -123,7 +132,7 @@ Git LFS (Large File Storage) protocol for handling large files efficiently with 
           }
         },
         "verify": {
-          "href": "/api/namespace/repo.git/info/lfs/verify",
+          "href": "/api/namespace/repo.git/info/lfs/verify?ticket=1790000000.9f2c...",
           "expires_at": "2025-01-20T12:00:00Z"
         }
       }
@@ -227,7 +236,10 @@ Git LFS (Large File Storage) protocol for handling large files efficiently with 
 
 **Alternative:** `POST /api/{namespace}/{name}.git/info/lfs/complete`
 
-**Authentication:** Public (no auth check)
+**Authentication:** one of the following, otherwise `401` with an `LFS-Authenticate` challenge:
+
+- the signed `ticket` query parameter that the batch response put into this URL (use the `href` exactly as returned; clients that send no credentials on this call, such as `huggingface_hub` and the web UI, rely on it). A ticket is bound to the repository, the object id (and, for `complete`, the upload id) and expires with the part URLs;
+- a signed-in caller (session cookie or Bearer token) with write permission on the repository named in the URL. A caller who can read but not write gets `403`; one who cannot see the repository gets `404`.
 
 **Purpose:** Signal S3 to assemble uploaded parts into final object
 
@@ -282,9 +294,14 @@ Git LFS (Large File Storage) protocol for handling large files efficiently with 
 
 **Pattern:** `POST /api/{namespace}/{name}.git/info/lfs/verify`
 
-**Authentication:** Public (no auth check)
+**Authentication:** one of the following, otherwise `401` with an `LFS-Authenticate` challenge:
+
+- the signed `ticket` query parameter that the batch response put into this URL (use the `href` exactly as returned; clients that send no credentials on this call, such as `huggingface_hub` and the web UI, rely on it). A ticket is bound to the repository, the object id (and, for `complete`, the upload id) and expires with the part URLs;
+- a signed-in caller (session cookie or Bearer token) with write permission on the repository named in the URL. A caller who can read but not write gets `403`; one who cannot see the repository gets `404`.
 
 **Purpose:** Verify file was uploaded correctly and exists in storage
+
+`verify` also accepts the multipart form below, which completes the upload first. A ticket does not cover that form; it needs the signed-in writer.
 
 **Request Body (Single-Part):**
 ```json

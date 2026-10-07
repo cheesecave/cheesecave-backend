@@ -232,17 +232,15 @@ async def git_receive_pack(
 
     check_repo_write_permission(repo, user)
 
-    # Read request body
-    request_body = await request.body()
-
-    # Handle receive-pack
-    handler = GitReceivePackHandler(repo_id)
-    response_data = await handler.handle_receive_pack(request_body)
-
-    return Response(
-        content=response_data,
-        media_type="application/x-git-receive-pack-result",
-        headers={"Cache-Control": "no-cache"},
+    # Pushing over HTTP is not implemented: GitReceivePackHandler only parses the
+    # ref updates and answers "ok" without storing the pack, so a push looked
+    # like it worked while its data was dropped. Refuse it up front, and do not
+    # read the body: the pack is neither stored nor needed, and parsing it as
+    # pkt-lines kept the worker busy for as long as the push was large.
+    raise HTTPException(
+        501,
+        detail="Pushing over HTTP is not supported yet; use the Hub API "
+        "(huggingface_hub) or the web UI to change this repository",
     )
 
 
