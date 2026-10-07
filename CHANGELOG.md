@@ -64,6 +64,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Restores the user-stated guarantee that a local repo wins absolutely on
   its namespace, regardless of upstream state. ([#77](https://github.com/deepghs/KohakuHub/pull/77))
 
+### Security
+
+- **Git LFS routes: authorization is decided before anything is generated, and
+  the follow-up calls carry a signed ticket.**
+  - The batch route resolves the repository first. A repository that does not
+    exist, or that the caller may not see, is answered like an unauthorized
+    request: `401` with an `LFS-Authenticate` challenge for an anonymous
+    caller, `404` for a signed-in one. An upload needs write permission, and
+    the quota check runs before any upload URL is produced.
+  - The `verify` and `complete` URLs the batch route hands out now carry a
+    signed `ticket` (HMAC of purpose, repository, object id and, for
+    `complete`, the multipart upload id; valid for as long as the part URLs).
+    Both routes accept that ticket, because `huggingface_hub` sends no
+    credentials on `complete` and the web UI sends none on either call, or a
+    signed-in caller with write permission on the repository named in the URL.
+    Anything else gets `401`. Completing a multipart upload through `verify`
+    needs the signed-in writer.
+  - Tickets are signed with `KOHAKU_HUB_SESSION_SECRET`. `compose.yml` already
+    refuses to start without it; make sure it is not the default
+    `change-me-in-production` (the config check warns about it), or tickets
+    can be forged. Generate one with `scripts/generate_secret.py`.
+  - Object ids must be lowercase SHA-256 hex on all three routes.
+  - `POST .../git-receive-pack` answers `501` right after the permission checks,
+    without reading the request body. It used to acknowledge a push while
+    dropping the data, and parsing the pack as pkt-lines kept the worker busy.
+
 ### Tracked
 
 Planned follow-up work surfaced during the [#77](https://github.com/deepghs/KohakuHub/pull/77) risk review:

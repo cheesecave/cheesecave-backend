@@ -154,7 +154,7 @@ async def test_git_info_refs_rejects_missing_repo_unknown_service_and_unauthenti
 
 
 @pytest.mark.asyncio
-async def test_git_upload_pack_receive_pack_and_head_use_expected_handlers(monkeypatch):
+async def test_git_upload_pack_and_head_use_expected_handlers(monkeypatch):
     repo = SimpleNamespace(repo_type="space", full_id="owner/repo", private=False)
     user = SimpleNamespace(username="owner")
     seen = {}
@@ -183,17 +183,8 @@ async def test_git_upload_pack_receive_pack_and_head_use_expected_handlers(monke
             seen["upload_body"] = request_body
             return b"upload-pack-result"
 
-    class FakeReceiveHandler:
-        def __init__(self, repo_id):
-            seen["receive_handler"] = repo_id
-
-        async def handle_receive_pack(self, request_body):
-            seen["receive_body"] = request_body
-            return b"receive-pack-result"
-
     monkeypatch.setattr(git_http, "GitLakeFSBridge", FakeBridge)
     monkeypatch.setattr(git_http, "GitUploadPackHandler", FakeUploadHandler)
-    monkeypatch.setattr(git_http, "GitReceivePackHandler", FakeReceiveHandler)
 
     upload_response = await git_http.git_upload_pack(
         "owner",
@@ -201,19 +192,11 @@ async def test_git_upload_pack_receive_pack_and_head_use_expected_handlers(monke
         request=_FakeRequest(b"want main"),
         authorization="Basic x",
     )
-    receive_response = await git_http.git_receive_pack(
-        "owner",
-        "repo",
-        request=_FakeRequest(b"push refs"),
-        authorization="Basic x",
-    )
     head_response = await git_http.git_head("owner", "repo", authorization="Basic x")
 
     assert upload_response.body == b"upload-pack-result"
-    assert receive_response.body == b"receive-pack-result"
     assert head_response.body == b"ref: refs/heads/main\n"
     assert seen["upload_body"] == b"want main"
-    assert seen["receive_body"] == b"push refs"
     assert seen["bridge_args"] == ("space", "owner", "repo")
     assert seen["bridge_lakefs_repo"], (
         "the route must pass the row's resolved LakeFS id to the bridge"
@@ -230,3 +213,61 @@ async def test_git_receive_pack_requires_authentication(monkeypatch):
         await git_http.git_receive_pack("owner", "repo", request=_FakeRequest(b"data"))
 
     assert exc_info.value.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_git_receive_pack_is_refused_without_reading_the_body(monkeypatch):
+    repo = SimpleNamespace(repo_type="model", full_id="owner/repo", private=False)
+    user = SimpleNamespace(username="owner")
+    checked = []
+    monkeypatch.setattr(git_http, "get_repository", lambda *_args: repo)
+    monkeypatch.setattr(git_http, "get_user_from_git_auth", lambda authorization: user)
+    monkeypatch.setattr(
+        git_http,
+        "check_repo_write_permission",
+        lambda repo_arg, user_arg: checked.append((repo_arg, user_arg)),
+    )
+
+    class BodyMustNotBeRead:
+        async def body(self):
+            raise AssertionError("the pack must not be read")
+
+    class HandlerMustNotBeUsed:
+        def __init__(self, repo_id):
+            raise AssertionError("a push must not reach the receive-pack handler")
+
+    monkeypatch.setattr(git_http, "GitReceivePackHandler", HandlerMustNotBeUsed)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await git_http.git_receive_pack(
+            "owner", "repo", request=BodyMustNotBeRead(), authorization="Basic x"
+        )
+
+    assert exc_info.value.status_code == 501
+    assert checked == [(repo, user)], "permission is still checked first"
+
+
+@pytest.mark.asyncio
+async def test_git_receive_pack_still_404s_for_a_missing_repo_and_403s_for_a_reader(
+    monkeypatch,
+):
+    monkeypatch.setattr(git_http, "get_repository", lambda *_args: None)
+    with pytest.raises(HTTPException) as missing:
+        await git_http.git_receive_pack("owner", "nope", request=_FakeRequest(b""))
+    assert missing.value.status_code == 404
+
+    repo = SimpleNamespace(repo_type="model", full_id="owner/repo", private=False)
+    monkeypatch.setattr(git_http, "get_repository", lambda *_args: repo)
+    monkeypatch.setattr(
+        git_http, "get_user_from_git_auth", lambda authorization: SimpleNamespace(username="x")
+    )
+
+    def deny(repo_arg, user_arg):
+        raise HTTPException(403, detail="no")
+
+    monkeypatch.setattr(git_http, "check_repo_write_permission", deny)
+    with pytest.raises(HTTPException) as denied:
+        await git_http.git_receive_pack(
+            "owner", "repo", request=_FakeRequest(b""), authorization="Basic x"
+        )
+    assert denied.value.status_code == 403
