@@ -4,12 +4,17 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
-from types import SimpleNamespace
 
 import pytest
-from peewee import OperationalError
-
 import kohakuhub.api.repo.utils.hf as hf_utils
+from kohakuhub.db import File
+from test.kohakuhub.support.db import table_missing
+from test.kohakuhub.support.factories import make_file, make_repo, make_user
+
+
+def _demo_repo():
+    """A real repository row, owner/demo, for the siblings calls."""
+    return make_repo(make_user("owner"), "demo")
 
 
 def test_hf_error_helpers_return_header_only_responses():
@@ -266,8 +271,9 @@ async def test_list_repo_objects_accepts_a_list_and_a_missing_cursor(lister):
     assert await hf_utils.list_repo_objects("lake", "c1") == [("a", 0, "")]
 
 
+@pytest.mark.usefixtures("db_scope")
 async def test_names_only_siblings_are_built_once_per_commit(lister):
-    repo = SimpleNamespace(id=1)
+    repo = _demo_repo()
     client = lister(_page([("README.md", 4, "s3://hub/data/r"), ('we"ird.txt', 1, "s3://hub/data/w")]),
                     _page([("README.md", 4, "s3://hub/data/r")]))
 
@@ -281,21 +287,24 @@ async def test_names_only_siblings_are_built_once_per_commit(lister):
     assert len(client.calls) == 2  # c1 once, c2 once
 
 
+@pytest.mark.usefixtures("db_scope")
 async def test_concurrent_requests_for_one_commit_list_it_once(lister):
     import asyncio
 
     client = lister(_page([("a", 1, "")]))
+    repo = _demo_repo()
 
     results = await asyncio.gather(
-        *(hf_utils.hf_siblings_json(SimpleNamespace(id=1), "lake", "c1", with_metadata=False) for _ in range(4))
+        *(hf_utils.hf_siblings_json(repo, "lake", "c1", with_metadata=False) for _ in range(4))
     )
 
     assert len(set(results)) == 1 and len(client.calls) == 1
 
 
+@pytest.mark.usefixtures("db_scope")
 async def test_the_manifest_cache_keeps_to_its_budget(lister, monkeypatch):
     monkeypatch.setattr(hf_utils, "MANIFEST_CACHE_BYTES", 60)
-    repo = SimpleNamespace(id=1)
+    repo = _demo_repo()
     lister(*[_page([(f"file-{i}.txt", 1, "")]) for i in range(3)])
 
     for commit in ("c1", "c2", "c3"):
@@ -310,23 +319,24 @@ async def test_the_manifest_cache_keeps_to_its_budget(lister, monkeypatch):
     assert ("lake", "c4", False) not in hf_utils._manifests  # larger than the whole budget
 
 
-async def test_blob_siblings_follow_the_linked_object(lister, monkeypatch):
+@pytest.mark.usefixtures("db_scope")
+async def test_blob_siblings_follow_the_linked_object(lister):
     """LFS is what LakeFS links (the global lfs/ object), not a size or
     suffix rule; blobIds of regular files are the git blob ids File rows keep."""
+    repo = _demo_repo()
+    make_file(repo, "README.md", sha256="aa" * 20, size=4)
+    make_file(repo, "small.parquet", sha256="bb" * 20, size=10)
+    make_file(repo, "model.bin", sha256=LFS_SHA, size=125162496, lfs=True)  # an LFS row gives no blobId
+    make_file(repo, "copied.txt", sha256="d41d8cd98f00b204e9800998ecf8427e", size=5)  # a LakeFS checksum, not a git blob id
     lister(_page([
         ("README.md", 4, "s3://hub/data/r"),
         ("small.parquet", 10, "s3://hub/data/p"),  # a suffix rule would call it LFS
         ("model.bin", 125162496, LFS_ADDRESS),
         ("unrecorded.txt", 3, "s3://hub/data/u"),
-        ("copied.txt", 5, "s3://hub/data/c"),  # its row keeps a LakeFS checksum, not a git blob id
+        ("copied.txt", 5, "s3://hub/data/c"),
     ]))
-    monkeypatch.setattr(
-        hf_utils,
-        "_regular_blob_ids",
-        lambda repo: {"README.md": "aa" * 20, "small.parquet": "bb" * 20, "copied.txt": "d41d8cd98f00b204e9800998ecf8427e"},
-    )
 
-    siblings = json.loads(await hf_utils.hf_siblings_json(SimpleNamespace(id=1), "lake", "c1", with_metadata=True))
+    siblings = json.loads(await hf_utils.hf_siblings_json(repo, "lake", "c1", with_metadata=True))
 
     assert siblings == [
         {"rfilename": "README.md", "blobId": "aa" * 20, "size": 4},
@@ -341,13 +351,16 @@ async def test_blob_siblings_follow_the_linked_object(lister, monkeypatch):
     assert not hf_utils._manifests
 
 
+@pytest.mark.usefixtures("db_scope")
 async def test_concurrent_blob_requests_share_one_build(lister, monkeypatch):
     import asyncio
 
     client = lister(_page([("model.bin", 9, LFS_ADDRESS)]), _page([("model.bin", 9, LFS_ADDRESS)]))
     loads = []
-    monkeypatch.setattr(hf_utils, "_regular_blob_ids", lambda repo: loads.append(1) or {})
-    repo = SimpleNamespace(id=1)
+    real_blob_ids = hf_utils._regular_blob_ids
+    # Counts the File reads while they run for real
+    monkeypatch.setattr(hf_utils, "_regular_blob_ids", lambda repo: loads.append(1) or real_blob_ids(repo))
+    repo = _demo_repo()
 
     blobs = await asyncio.gather(
         *(hf_utils.hf_siblings_json(repo, "lake", "c1", with_metadata=True) for _ in range(3))
@@ -360,35 +373,32 @@ async def test_concurrent_blob_requests_share_one_build(lister, monkeypatch):
     assert list(hf_utils._manifests) == [("lake", "c1", False)]
 
 
-async def test_blob_siblings_without_file_rows_still_answer(lister, monkeypatch):
+@pytest.mark.usefixtures("db_scope")
+async def test_blob_siblings_without_file_rows_still_answer(lister, db_scope, monkeypatch):
+    repo = make_repo(make_user("a"), "b")
     lister(_page([("README.md", 4, "s3://hub/data/r"), ("model.bin", 9, LFS_ADDRESS)]))
 
-    def broken(repo):
-        raise OperationalError("database down")
-
     warnings = []
-    monkeypatch.setattr(hf_utils, "_regular_blob_ids", broken)
     monkeypatch.setattr(hf_utils.logger, "warning", warnings.append)
 
-    siblings = json.loads(await hf_utils.hf_siblings_json(SimpleNamespace(id=1, full_id="a/b"), "lake", "c1", with_metadata=True))
+    # The File table cannot be read for real while the siblings are built
+    with table_missing(db_scope, File):
+        siblings = json.loads(await hf_utils.hf_siblings_json(repo, "lake", "c1", with_metadata=True))
 
     assert siblings[0] == {"rfilename": "README.md", "size": 4}
     assert siblings[1]["lfs"]["sha256"] == LFS_SHA  # read from the address, not the database
     assert "a/b" in warnings[0]
 
 
-def test_regular_blob_ids_reads_live_regular_rows(monkeypatch):
-    rows = [SimpleNamespace(path_in_repo="a", sha256="aa"), SimpleNamespace(path_in_repo="b", sha256="bb")]
+@pytest.mark.usefixtures("db_scope")
+def test_regular_blob_ids_reads_live_regular_rows():
+    repo = _demo_repo()
+    make_file(repo, "a", sha256="aa")
+    make_file(repo, "b", sha256="bb")
+    make_file(repo, "deleted.txt", sha256="cc", is_deleted=True)
+    make_file(repo, "model.bin", sha256="dd", lfs=True)
 
-    class _Query:
-        def where(self, *conditions):
-            self.conditions = conditions
-            return rows
-
-    query = _Query()
-    monkeypatch.setattr(hf_utils.File, "select", lambda *fields: query)
-
-    assert hf_utils._regular_blob_ids(SimpleNamespace(id=1)) == {"a": "aa", "b": "bb"}
+    assert hf_utils._regular_blob_ids(repo) == {"a": "aa", "b": "bb"}
 
 
 @pytest.mark.parametrize("repo_type, prop", [("model", "safetensors"), ("dataset", "citation"), ("space", "sdk")])
