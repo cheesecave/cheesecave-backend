@@ -30,7 +30,7 @@ def _get_fernet_key() -> bytes:
 
     if not database_key:
         raise ValueError(
-            "DATABASE_KEY not configured. Set KOHAKU_HUB_DATABASE_KEY environment variable. "
+            "DATABASE_KEY not configured. Set CHEESE_CAVE_DATABASE_KEY (or KOHAKU_HUB_DATABASE_KEY) environment variable. "
             "Generate with: openssl rand -hex 32"
         )
 

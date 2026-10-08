@@ -114,7 +114,7 @@ Admin 同理。网关会重新解析替换后容器的地址。更新后端时�
 原项目资料见 [原 README](provenance/README.upstream.md) 和
 [原 CHANGELOG](provenance/CHANGELOG.upstream.md)。
 
-[LICENSE](LICENSE) 和 [LICENSING.md](LICENSING.md) 保留原文。Dataset Viewer 是唯一带独立许可证的组件，
+[LICENSE](LICENSE) 是 AGPL-3.0 原文，[LICENSING.md](LICENSING.md) 说明本分叉的许可；上游许可指南保存在 [provenance/LICENSING.upstream.md](provenance/LICENSING.upstream.md)。Dataset Viewer 是唯一带独立许可证的组件，
 已于 2026-10-08 移除，本仓库的代码均适用 AGPL-3.0，详见 [NOTICE.md](NOTICE.md)。
 原许可说明中的 monorepo 路径属于历史资料，拆分后的当前路径见上述链接。
 

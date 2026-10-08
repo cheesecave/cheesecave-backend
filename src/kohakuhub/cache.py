@@ -173,7 +173,7 @@ async def init_cache() -> None:
 
     if not cfg.cache.enabled:
         logger.info(
-            "Cache disabled (KOHAKU_HUB_CACHE_ENABLED=false); "
+            "Cache disabled (CHEESE_CAVE_CACHE_ENABLED=false); "
             "all cache calls will silently fall back to source"
         )
         return

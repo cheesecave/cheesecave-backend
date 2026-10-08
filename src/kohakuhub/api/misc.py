@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 import yaml
 
-from kohakuhub.config import cfg
+from kohakuhub.config import cfg, read_env
 from kohakuhub.db import User, UserOrganization
 from kohakuhub.logger import get_logger
 from kohakuhub.site_branding import get_public_branding
@@ -45,9 +45,9 @@ def build_identity(start: Path | None = None) -> dict:
     """Which code this is: set by the image build (``--build-arg
     KOHAKU_HUB_GIT_SHA=...``), else read from the checkout it runs from."""
     return {
-        "git_sha": os.environ.get("KOHAKU_HUB_GIT_SHA")
+        "git_sha": read_env("GIT_SHA")
         or _checkout_sha(start or Path(__file__).resolve().parent),
-        "build_time": os.environ.get("KOHAKU_HUB_BUILD_TIME") or None,
+        "build_time": read_env("BUILD_TIME") or None,
     }
 
 

@@ -33,7 +33,7 @@ original working repository has not been archived.
 
 ## Licenses, attribution and compatibility
 
-Original root LICENSE and LICENSING.md texts are unchanged. Core code retains
+Original root LICENSE text is unchanged. The upstream LICENSING.md guide moved to provenance/LICENSING.upstream.md; the root LICENSING.md now states the AGPL-3.0 licence and this origin. Core code retains
 AGPL-3.0. The backend Dataset Viewer, which retained its separate original
 license at `src/kohakuhub/datasetviewer/LICENSE`, was removed on 2026-10-08; its
 license text and history remain in the git history. Rebranding and splitting do

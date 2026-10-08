@@ -10,6 +10,21 @@ try:
 except ModuleNotFoundError:  # pragma: no cover - Python 3.10 fallback
     import tomli as tomllib
 
+# Environment names: CHEESE_CAVE_<NAME> wins, KOHAKU_HUB_<NAME> is the fallback.
+ENV_PREFIXES = ("CHEESE_CAVE_", "KOHAKU_HUB_")
+
+
+def read_env(name: str) -> str | None:
+    """Return the value of CHEESE_CAVE_<name>, else KOHAKU_HUB_<name>, else None.
+
+    An empty value still counts as set, the same as the existing ``in os.environ`` checks.
+    """
+    for prefix in ENV_PREFIXES:
+        if prefix + name in os.environ:
+            return os.environ[prefix + name]
+    return None
+
+
 # Default configuration values
 _DEFAULT_S3_ENDPOINT = "http://localhost:9000"
 
@@ -266,7 +281,7 @@ class Config(BaseModel):
             warnings.append(
                 f"LFS keep_versions={self.app.lfs_keep_versions} is too low! "
                 f"Minimum recommended: 5. Revert/reset operations will likely fail. "
-                f"Set KOHAKU_HUB_LFS_KEEP_VERSIONS=5 or higher."
+                f"Set CHEESE_CAVE_LFS_KEEP_VERSIONS=5 (or KOHAKU_HUB_LFS_KEEP_VERSIONS=5) or higher."
             )
 
         # LFS threshold validation
@@ -328,134 +343,134 @@ def load_config(path: str = None) -> Config:
 
     # S3
     s3_env = {}
-    if "KOHAKU_HUB_S3_PUBLIC_ENDPOINT" in os.environ:
-        s3_env["public_endpoint"] = os.environ["KOHAKU_HUB_S3_PUBLIC_ENDPOINT"]
-    if "KOHAKU_HUB_S3_ENDPOINT" in os.environ:
-        s3_env["endpoint"] = os.environ["KOHAKU_HUB_S3_ENDPOINT"]
-    if "KOHAKU_HUB_S3_ACCESS_KEY" in os.environ:
-        s3_env["access_key"] = os.environ["KOHAKU_HUB_S3_ACCESS_KEY"]
-    if "KOHAKU_HUB_S3_SECRET_KEY" in os.environ:
-        s3_env["secret_key"] = os.environ["KOHAKU_HUB_S3_SECRET_KEY"]
-    if "KOHAKU_HUB_S3_BUCKET" in os.environ:
-        s3_env["bucket"] = os.environ["KOHAKU_HUB_S3_BUCKET"]
-    if "KOHAKU_HUB_S3_REGION" in os.environ:
-        s3_env["region"] = os.environ["KOHAKU_HUB_S3_REGION"]
-    if "KOHAKU_HUB_S3_SIGNATURE_VERSION" in os.environ:
-        s3_env["signature_version"] = os.environ["KOHAKU_HUB_S3_SIGNATURE_VERSION"]
+    if read_env("S3_PUBLIC_ENDPOINT") is not None:
+        s3_env["public_endpoint"] = read_env("S3_PUBLIC_ENDPOINT")
+    if read_env("S3_ENDPOINT") is not None:
+        s3_env["endpoint"] = read_env("S3_ENDPOINT")
+    if read_env("S3_ACCESS_KEY") is not None:
+        s3_env["access_key"] = read_env("S3_ACCESS_KEY")
+    if read_env("S3_SECRET_KEY") is not None:
+        s3_env["secret_key"] = read_env("S3_SECRET_KEY")
+    if read_env("S3_BUCKET") is not None:
+        s3_env["bucket"] = read_env("S3_BUCKET")
+    if read_env("S3_REGION") is not None:
+        s3_env["region"] = read_env("S3_REGION")
+    if read_env("S3_SIGNATURE_VERSION") is not None:
+        s3_env["signature_version"] = read_env("S3_SIGNATURE_VERSION")
     if s3_env:
         config_from_env["s3"] = s3_env
 
     # LakeFS
     lakefs_env = {}
-    if "KOHAKU_HUB_LAKEFS_ENDPOINT" in os.environ:
-        lakefs_env["endpoint"] = os.environ["KOHAKU_HUB_LAKEFS_ENDPOINT"]
-    if "KOHAKU_HUB_LAKEFS_ACCESS_KEY" in os.environ:
-        lakefs_env["access_key"] = os.environ["KOHAKU_HUB_LAKEFS_ACCESS_KEY"]
-    if "KOHAKU_HUB_LAKEFS_SECRET_KEY" in os.environ:
-        lakefs_env["secret_key"] = os.environ["KOHAKU_HUB_LAKEFS_SECRET_KEY"]
-    if "KOHAKU_HUB_LAKEFS_REPO_NAMESPACE" in os.environ:
-        lakefs_env["repo_namespace"] = os.environ["KOHAKU_HUB_LAKEFS_REPO_NAMESPACE"]
-    if "KOHAKU_HUB_LAKEFS_OPERATION_CONCURRENCY" in os.environ:
+    if read_env("LAKEFS_ENDPOINT") is not None:
+        lakefs_env["endpoint"] = read_env("LAKEFS_ENDPOINT")
+    if read_env("LAKEFS_ACCESS_KEY") is not None:
+        lakefs_env["access_key"] = read_env("LAKEFS_ACCESS_KEY")
+    if read_env("LAKEFS_SECRET_KEY") is not None:
+        lakefs_env["secret_key"] = read_env("LAKEFS_SECRET_KEY")
+    if read_env("LAKEFS_REPO_NAMESPACE") is not None:
+        lakefs_env["repo_namespace"] = read_env("LAKEFS_REPO_NAMESPACE")
+    if read_env("LAKEFS_OPERATION_CONCURRENCY") is not None:
         lakefs_env["operation_concurrency"] = int(
-            os.environ["KOHAKU_HUB_LAKEFS_OPERATION_CONCURRENCY"]
+            read_env("LAKEFS_OPERATION_CONCURRENCY")
         )
     if lakefs_env:
         config_from_env["lakefs"] = lakefs_env
 
     # SMTP
     smtp_env = {}
-    if "KOHAKU_HUB_SMTP_ENABLED" in os.environ:
-        smtp_env["enabled"] = os.environ["KOHAKU_HUB_SMTP_ENABLED"].lower() == "true"
-    if "KOHAKU_HUB_SMTP_HOST" in os.environ:
-        smtp_env["host"] = os.environ["KOHAKU_HUB_SMTP_HOST"]
-    if "KOHAKU_HUB_SMTP_PORT" in os.environ:
-        smtp_env["port"] = int(os.environ["KOHAKU_HUB_SMTP_PORT"])
-    if "KOHAKU_HUB_SMTP_USERNAME" in os.environ:
-        smtp_env["username"] = os.environ["KOHAKU_HUB_SMTP_USERNAME"]
-    if "KOHAKU_HUB_SMTP_PASSWORD" in os.environ:
-        smtp_env["password"] = os.environ["KOHAKU_HUB_SMTP_PASSWORD"]
-    if "KOHAKU_HUB_SMTP_FROM" in os.environ:
-        smtp_env["from_email"] = os.environ["KOHAKU_HUB_SMTP_FROM"]
-    if "KOHAKU_HUB_SMTP_TLS" in os.environ:
-        smtp_env["use_tls"] = os.environ["KOHAKU_HUB_SMTP_TLS"].lower() == "true"
+    if read_env("SMTP_ENABLED") is not None:
+        smtp_env["enabled"] = read_env("SMTP_ENABLED").lower() == "true"
+    if read_env("SMTP_HOST") is not None:
+        smtp_env["host"] = read_env("SMTP_HOST")
+    if read_env("SMTP_PORT") is not None:
+        smtp_env["port"] = int(read_env("SMTP_PORT"))
+    if read_env("SMTP_USERNAME") is not None:
+        smtp_env["username"] = read_env("SMTP_USERNAME")
+    if read_env("SMTP_PASSWORD") is not None:
+        smtp_env["password"] = read_env("SMTP_PASSWORD")
+    if read_env("SMTP_FROM") is not None:
+        smtp_env["from_email"] = read_env("SMTP_FROM")
+    if read_env("SMTP_TLS") is not None:
+        smtp_env["use_tls"] = read_env("SMTP_TLS").lower() == "true"
     if smtp_env:
         config_from_env["smtp"] = smtp_env
 
     # Auth
     auth_env = {}
-    if "KOHAKU_HUB_REQUIRE_EMAIL_VERIFICATION" in os.environ:
+    if read_env("REQUIRE_EMAIL_VERIFICATION") is not None:
         auth_env["require_email_verification"] = (
-            os.environ["KOHAKU_HUB_REQUIRE_EMAIL_VERIFICATION"].lower() == "true"
+            read_env("REQUIRE_EMAIL_VERIFICATION").lower() == "true"
         )
-    if "KOHAKU_HUB_INVITATION_ONLY" in os.environ:
-        auth_env["invitation_only"] = os.environ["KOHAKU_HUB_INVITATION_ONLY"].lower() == "true"
-    if "KOHAKU_HUB_SESSION_SECRET" in os.environ:
-        auth_env["session_secret"] = os.environ["KOHAKU_HUB_SESSION_SECRET"]
-    if "KOHAKU_HUB_SESSION_EXPIRE_HOURS" in os.environ:
-        auth_env["session_expire_hours"] = int(os.environ["KOHAKU_HUB_SESSION_EXPIRE_HOURS"])
-    if "KOHAKU_HUB_TOKEN_EXPIRE_DAYS" in os.environ:
-        auth_env["token_expire_days"] = int(os.environ["KOHAKU_HUB_TOKEN_EXPIRE_DAYS"])
+    if read_env("INVITATION_ONLY") is not None:
+        auth_env["invitation_only"] = read_env("INVITATION_ONLY").lower() == "true"
+    if read_env("SESSION_SECRET") is not None:
+        auth_env["session_secret"] = read_env("SESSION_SECRET")
+    if read_env("SESSION_EXPIRE_HOURS") is not None:
+        auth_env["session_expire_hours"] = int(read_env("SESSION_EXPIRE_HOURS"))
+    if read_env("TOKEN_EXPIRE_DAYS") is not None:
+        auth_env["token_expire_days"] = int(read_env("TOKEN_EXPIRE_DAYS"))
     if auth_env:
         config_from_env["auth"] = auth_env
 
     # Admin
     admin_env = {}
-    if "KOHAKU_HUB_ADMIN_ENABLED" in os.environ:
-        admin_env["enabled"] = os.environ["KOHAKU_HUB_ADMIN_ENABLED"].lower() == "true"
-    if "KOHAKU_HUB_ADMIN_SECRET_TOKEN" in os.environ:
-        admin_env["secret_token"] = os.environ["KOHAKU_HUB_ADMIN_SECRET_TOKEN"]
+    if read_env("ADMIN_ENABLED") is not None:
+        admin_env["enabled"] = read_env("ADMIN_ENABLED").lower() == "true"
+    if read_env("ADMIN_SECRET_TOKEN") is not None:
+        admin_env["secret_token"] = read_env("ADMIN_SECRET_TOKEN")
     if admin_env:
         config_from_env["admin"] = admin_env
 
     # Quota
     quota_env = {}
-    if "KOHAKU_HUB_DEFAULT_USER_PRIVATE_QUOTA_BYTES" in os.environ:
+    if read_env("DEFAULT_USER_PRIVATE_QUOTA_BYTES") is not None:
         quota_env["default_user_private_quota_bytes"] = _parse_quota(
-            os.environ.get("KOHAKU_HUB_DEFAULT_USER_PRIVATE_QUOTA_BYTES")
+            read_env("DEFAULT_USER_PRIVATE_QUOTA_BYTES")
         )
-    if "KOHAKU_HUB_DEFAULT_USER_PUBLIC_QUOTA_BYTES" in os.environ:
+    if read_env("DEFAULT_USER_PUBLIC_QUOTA_BYTES") is not None:
         quota_env["default_user_public_quota_bytes"] = _parse_quota(
-            os.environ.get("KOHAKU_HUB_DEFAULT_USER_PUBLIC_QUOTA_BYTES")
+            read_env("DEFAULT_USER_PUBLIC_QUOTA_BYTES")
         )
-    if "KOHAKU_HUB_DEFAULT_ORG_PRIVATE_QUOTA_BYTES" in os.environ:
+    if read_env("DEFAULT_ORG_PRIVATE_QUOTA_BYTES") is not None:
         quota_env["default_org_private_quota_bytes"] = _parse_quota(
-            os.environ.get("KOHAKU_HUB_DEFAULT_ORG_PRIVATE_QUOTA_BYTES")
+            read_env("DEFAULT_ORG_PRIVATE_QUOTA_BYTES")
         )
-    if "KOHAKU_HUB_DEFAULT_ORG_PUBLIC_QUOTA_BYTES" in os.environ:
+    if read_env("DEFAULT_ORG_PUBLIC_QUOTA_BYTES") is not None:
         quota_env["default_org_public_quota_bytes"] = _parse_quota(
-            os.environ.get("KOHAKU_HUB_DEFAULT_ORG_PUBLIC_QUOTA_BYTES")
+            read_env("DEFAULT_ORG_PUBLIC_QUOTA_BYTES")
         )
     if quota_env:
         config_from_env["quota"] = quota_env
 
     # Cache (L2 / Valkey)
     cache_env = {}
-    if "KOHAKU_HUB_CACHE_ENABLED" in os.environ:
-        cache_env["enabled"] = os.environ["KOHAKU_HUB_CACHE_ENABLED"].lower() == "true"
-    if "KOHAKU_HUB_CACHE_URL" in os.environ:
-        cache_env["url"] = os.environ["KOHAKU_HUB_CACHE_URL"]
+    if read_env("CACHE_ENABLED") is not None:
+        cache_env["enabled"] = read_env("CACHE_ENABLED").lower() == "true"
+    if read_env("CACHE_URL") is not None:
+        cache_env["url"] = read_env("CACHE_URL")
         # Implicit-enable: if the operator set a CACHE_URL but did not
         # set CACHE_ENABLED, treat the URL as opt-in. This matters for
         # dev environments whose .env.dev predates the cache feature —
-        # they get a fresh KOHAKU_HUB_CACHE_URL line (e.g. via
+        # they get a fresh CHEESE_CAVE_CACHE_URL line (e.g. via
         # ``cp .env.dev.example .env.dev``) without remembering to also
-        # set ENABLED. Explicit ``KOHAKU_HUB_CACHE_ENABLED=false`` still
+        # set ENABLED. Explicit ``CHEESE_CAVE_CACHE_ENABLED=false`` still
         # wins over this default.
-        if "KOHAKU_HUB_CACHE_ENABLED" not in os.environ:
+        if read_env("CACHE_ENABLED") is None:
             cache_env["enabled"] = True
-    if "KOHAKU_HUB_CACHE_NAMESPACE" in os.environ:
-        cache_env["namespace"] = os.environ["KOHAKU_HUB_CACHE_NAMESPACE"]
-    if "KOHAKU_HUB_CACHE_DEFAULT_TTL" in os.environ:
-        cache_env["default_ttl_seconds"] = int(os.environ["KOHAKU_HUB_CACHE_DEFAULT_TTL"])
-    if "KOHAKU_HUB_CACHE_JITTER_FRACTION" in os.environ:
-        cache_env["jitter_fraction"] = float(os.environ["KOHAKU_HUB_CACHE_JITTER_FRACTION"])
-    if "KOHAKU_HUB_CACHE_MAX_CONNECTIONS" in os.environ:
-        cache_env["max_connections"] = int(os.environ["KOHAKU_HUB_CACHE_MAX_CONNECTIONS"])
-    if "KOHAKU_HUB_CACHE_SOCKET_TIMEOUT" in os.environ:
-        cache_env["socket_timeout_seconds"] = float(os.environ["KOHAKU_HUB_CACHE_SOCKET_TIMEOUT"])
-    if "KOHAKU_HUB_CACHE_SOCKET_CONNECT_TIMEOUT" in os.environ:
+    if read_env("CACHE_NAMESPACE") is not None:
+        cache_env["namespace"] = read_env("CACHE_NAMESPACE")
+    if read_env("CACHE_DEFAULT_TTL") is not None:
+        cache_env["default_ttl_seconds"] = int(read_env("CACHE_DEFAULT_TTL"))
+    if read_env("CACHE_JITTER_FRACTION") is not None:
+        cache_env["jitter_fraction"] = float(read_env("CACHE_JITTER_FRACTION"))
+    if read_env("CACHE_MAX_CONNECTIONS") is not None:
+        cache_env["max_connections"] = int(read_env("CACHE_MAX_CONNECTIONS"))
+    if read_env("CACHE_SOCKET_TIMEOUT") is not None:
+        cache_env["socket_timeout_seconds"] = float(read_env("CACHE_SOCKET_TIMEOUT"))
+    if read_env("CACHE_SOCKET_CONNECT_TIMEOUT") is not None:
         cache_env["socket_connect_timeout_seconds"] = float(
-            os.environ["KOHAKU_HUB_CACHE_SOCKET_CONNECT_TIMEOUT"]
+            read_env("CACHE_SOCKET_CONNECT_TIMEOUT")
         )
     if cache_env:
         config_from_env["cache"] = cache_env
@@ -463,23 +478,23 @@ def load_config(path: str = None) -> Config:
     # Worker
     worker_env = {}
     for env_name, key, parse in (
-        ("KOHAKU_HUB_WORKER_CONCURRENCY", "concurrency", int),
-        ("KOHAKU_HUB_WORKER_LEASE_SECONDS", "lease_seconds", int),
-        ("KOHAKU_HUB_WORKER_POLL_INTERVAL_SECONDS", "poll_interval_seconds", float),
-        ("KOHAKU_HUB_WORKER_SHUTDOWN_GRACE_SECONDS", "shutdown_grace_seconds", float),
-        ("KOHAKU_HUB_WORKER_FLUSH_INTERVAL_SECONDS", "flush_interval_seconds", float),
-        ("KOHAKU_HUB_WORKER_LOG_MAX_BYTES_PER_ATTEMPT", "log_max_bytes_per_attempt", int),
-        ("KOHAKU_HUB_WORKER_SUCCEEDED_RETENTION_DAYS", "succeeded_retention_days", int),
-        ("KOHAKU_HUB_WORKER_FAILED_RETENTION_DAYS", "failed_retention_days", int),
+        ("WORKER_CONCURRENCY", "concurrency", int),
+        ("WORKER_LEASE_SECONDS", "lease_seconds", int),
+        ("WORKER_POLL_INTERVAL_SECONDS", "poll_interval_seconds", float),
+        ("WORKER_SHUTDOWN_GRACE_SECONDS", "shutdown_grace_seconds", float),
+        ("WORKER_FLUSH_INTERVAL_SECONDS", "flush_interval_seconds", float),
+        ("WORKER_LOG_MAX_BYTES_PER_ATTEMPT", "log_max_bytes_per_attempt", int),
+        ("WORKER_SUCCEEDED_RETENTION_DAYS", "succeeded_retention_days", int),
+        ("WORKER_FAILED_RETENTION_DAYS", "failed_retention_days", int),
     ):
-        if env_name in os.environ:
-            worker_env[key] = parse(os.environ[env_name])
-    if "KOHAKU_HUB_WORKER_NAME" in os.environ:
-        worker_env["name"] = os.environ["KOHAKU_HUB_WORKER_NAME"].strip()
-    if "KOHAKU_HUB_WORKER_QUEUES" in os.environ:
+        if read_env(env_name) is not None:
+            worker_env[key] = parse(read_env(env_name))
+    if read_env("WORKER_NAME") is not None:
+        worker_env["name"] = read_env("WORKER_NAME").strip()
+    if read_env("WORKER_QUEUES") is not None:
         worker_env["queues"] = [
             queue.strip()
-            for queue in os.environ["KOHAKU_HUB_WORKER_QUEUES"].split(",")
+            for queue in read_env("WORKER_QUEUES").split(",")
             if queue.strip()
         ]
     if worker_env:
@@ -487,83 +502,83 @@ def load_config(path: str = None) -> Config:
 
     # Fallback
     fallback_env = {}
-    if "KOHAKU_HUB_FALLBACK_ENABLED" in os.environ:
-        fallback_env["enabled"] = os.environ["KOHAKU_HUB_FALLBACK_ENABLED"].lower() == "true"
-    if "KOHAKU_HUB_FALLBACK_CACHE_TTL" in os.environ:
-        fallback_env["cache_ttl_seconds"] = int(os.environ["KOHAKU_HUB_FALLBACK_CACHE_TTL"])
-    if "KOHAKU_HUB_FALLBACK_TIMEOUT" in os.environ:
-        fallback_env["timeout_seconds"] = int(os.environ["KOHAKU_HUB_FALLBACK_TIMEOUT"])
-    if "KOHAKU_HUB_FALLBACK_MAX_CONCURRENT" in os.environ:
+    if read_env("FALLBACK_ENABLED") is not None:
+        fallback_env["enabled"] = read_env("FALLBACK_ENABLED").lower() == "true"
+    if read_env("FALLBACK_CACHE_TTL") is not None:
+        fallback_env["cache_ttl_seconds"] = int(read_env("FALLBACK_CACHE_TTL"))
+    if read_env("FALLBACK_TIMEOUT") is not None:
+        fallback_env["timeout_seconds"] = int(read_env("FALLBACK_TIMEOUT"))
+    if read_env("FALLBACK_MAX_CONCURRENT") is not None:
         fallback_env["max_concurrent_requests"] = int(
-            os.environ["KOHAKU_HUB_FALLBACK_MAX_CONCURRENT"]
+            read_env("FALLBACK_MAX_CONCURRENT")
         )
-    if "KOHAKU_HUB_FALLBACK_REQUIRE_AUTH" in os.environ:
+    if read_env("FALLBACK_REQUIRE_AUTH") is not None:
         fallback_env["require_auth"] = (
-            os.environ["KOHAKU_HUB_FALLBACK_REQUIRE_AUTH"].lower() == "true"
+            read_env("FALLBACK_REQUIRE_AUTH").lower() == "true"
         )
-    if "KOHAKU_HUB_FALLBACK_SOURCES" in os.environ:
+    if read_env("FALLBACK_SOURCES") is not None:
         fallback_env["sources"] = _parse_fallback_sources(
-            os.environ.get("KOHAKU_HUB_FALLBACK_SOURCES")
+            read_env("FALLBACK_SOURCES")
         )
     if fallback_env:
         config_from_env["fallback"] = fallback_env
 
     # App
     app_env = {}
-    if "KOHAKU_HUB_BASE_URL" in os.environ:
-        app_env["base_url"] = os.environ["KOHAKU_HUB_BASE_URL"]
-    if "KOHAKU_HUB_INTERNAL_BASE_URL" in os.environ:
-        app_env["internal_base_url"] = os.environ["KOHAKU_HUB_INTERNAL_BASE_URL"]
-    if "KOHAKU_HUB_API_BASE" in os.environ:
-        app_env["api_base"] = os.environ["KOHAKU_HUB_API_BASE"]
-    if "KOHAKU_HUB_REPOSITORY_REVERT_ENABLED" in os.environ:
+    if read_env("BASE_URL") is not None:
+        app_env["base_url"] = read_env("BASE_URL")
+    if read_env("INTERNAL_BASE_URL") is not None:
+        app_env["internal_base_url"] = read_env("INTERNAL_BASE_URL")
+    if read_env("API_BASE") is not None:
+        app_env["api_base"] = read_env("API_BASE")
+    if read_env("REPOSITORY_REVERT_ENABLED") is not None:
         app_env["repository_revert_enabled"] = (
-            os.environ["KOHAKU_HUB_REPOSITORY_REVERT_ENABLED"].lower() == "true"
+            read_env("REPOSITORY_REVERT_ENABLED").lower() == "true"
         )
-    if "KOHAKU_HUB_REPOSITORY_RESET_ENABLED" in os.environ:
+    if read_env("REPOSITORY_RESET_ENABLED") is not None:
         app_env["repository_reset_enabled"] = (
-            os.environ["KOHAKU_HUB_REPOSITORY_RESET_ENABLED"].lower() == "true"
+            read_env("REPOSITORY_RESET_ENABLED").lower() == "true"
         )
-    if "KOHAKU_HUB_REPOSITORY_SQUASH_ENABLED" in os.environ:
+    if read_env("REPOSITORY_SQUASH_ENABLED") is not None:
         app_env["repository_squash_enabled"] = (
-            os.environ["KOHAKU_HUB_REPOSITORY_SQUASH_ENABLED"].lower() == "true"
+            read_env("REPOSITORY_SQUASH_ENABLED").lower() == "true"
         )
-    if "KOHAKU_HUB_DB_BACKEND" in os.environ:
-        app_env["db_backend"] = os.environ["KOHAKU_HUB_DB_BACKEND"]
-    if "KOHAKU_HUB_DATABASE_URL" in os.environ:
-        app_env["database_url"] = os.environ["KOHAKU_HUB_DATABASE_URL"]
-    if "KOHAKU_HUB_DATABASE_KEY" in os.environ:
-        app_env["database_key"] = os.environ["KOHAKU_HUB_DATABASE_KEY"]
-    if "KOHAKU_HUB_LFS_THRESHOLD_BYTES" in os.environ:
-        app_env["lfs_threshold_bytes"] = int(os.environ["KOHAKU_HUB_LFS_THRESHOLD_BYTES"])
-    if "KOHAKU_HUB_LFS_MULTIPART_THRESHOLD_BYTES" in os.environ:
+    if read_env("DB_BACKEND") is not None:
+        app_env["db_backend"] = read_env("DB_BACKEND")
+    if read_env("DATABASE_URL") is not None:
+        app_env["database_url"] = read_env("DATABASE_URL")
+    if read_env("DATABASE_KEY") is not None:
+        app_env["database_key"] = read_env("DATABASE_KEY")
+    if read_env("LFS_THRESHOLD_BYTES") is not None:
+        app_env["lfs_threshold_bytes"] = int(read_env("LFS_THRESHOLD_BYTES"))
+    if read_env("LFS_MULTIPART_THRESHOLD_BYTES") is not None:
         app_env["lfs_multipart_threshold_bytes"] = int(
-            os.environ["KOHAKU_HUB_LFS_MULTIPART_THRESHOLD_BYTES"]
+            read_env("LFS_MULTIPART_THRESHOLD_BYTES")
         )
-    if "KOHAKU_HUB_LFS_MULTIPART_CHUNK_SIZE_BYTES" in os.environ:
+    if read_env("LFS_MULTIPART_CHUNK_SIZE_BYTES") is not None:
         app_env["lfs_multipart_chunk_size_bytes"] = int(
-            os.environ["KOHAKU_HUB_LFS_MULTIPART_CHUNK_SIZE_BYTES"]
+            read_env("LFS_MULTIPART_CHUNK_SIZE_BYTES")
         )
-    if "KOHAKU_HUB_LFS_KEEP_VERSIONS" in os.environ:
-        app_env["lfs_keep_versions"] = int(os.environ["KOHAKU_HUB_LFS_KEEP_VERSIONS"])
-    if "KOHAKU_HUB_LFS_AUTO_GC" in os.environ:
-        app_env["lfs_auto_gc"] = os.environ["KOHAKU_HUB_LFS_AUTO_GC"].lower() == "true"
-    if "KOHAKU_HUB_USAGE_RECOUNT_INTERVAL_HOURS" in os.environ:
+    if read_env("LFS_KEEP_VERSIONS") is not None:
+        app_env["lfs_keep_versions"] = int(read_env("LFS_KEEP_VERSIONS"))
+    if read_env("LFS_AUTO_GC") is not None:
+        app_env["lfs_auto_gc"] = read_env("LFS_AUTO_GC").lower() == "true"
+    if read_env("USAGE_RECOUNT_INTERVAL_HOURS") is not None:
         app_env["usage_recount_interval_hours"] = float(
-            os.environ["KOHAKU_HUB_USAGE_RECOUNT_INTERVAL_HOURS"]
+            read_env("USAGE_RECOUNT_INTERVAL_HOURS")
         )
-    if "KOHAKU_HUB_SITE_NAME" in os.environ:
-        app_env["site_name"] = os.environ["KOHAKU_HUB_SITE_NAME"]
-    if "KOHAKU_HUB_DEBUG_LOG_PAYLOADS" in os.environ:
+    if read_env("SITE_NAME") is not None:
+        app_env["site_name"] = read_env("SITE_NAME")
+    if read_env("DEBUG_LOG_PAYLOADS") is not None:
         app_env["debug_log_payloads"] = (
-            os.environ["KOHAKU_HUB_DEBUG_LOG_PAYLOADS"].lower() == "true"
+            read_env("DEBUG_LOG_PAYLOADS").lower() == "true"
         )
-    if "KOHAKU_HUB_LOG_LEVEL" in os.environ:
-        app_env["log_level"] = os.environ["KOHAKU_HUB_LOG_LEVEL"]
-    if "KOHAKU_HUB_LOG_FORMAT" in os.environ:
-        app_env["log_format"] = os.environ["KOHAKU_HUB_LOG_FORMAT"]
-    if "KOHAKU_HUB_LOG_DIR" in os.environ:
-        app_env["log_dir"] = os.environ["KOHAKU_HUB_LOG_DIR"]
+    if read_env("LOG_LEVEL") is not None:
+        app_env["log_level"] = read_env("LOG_LEVEL")
+    if read_env("LOG_FORMAT") is not None:
+        app_env["log_format"] = read_env("LOG_FORMAT")
+    if read_env("LOG_DIR") is not None:
+        app_env["log_dir"] = read_env("LOG_DIR")
     if app_env:
         config_from_env["app"] = app_env
 

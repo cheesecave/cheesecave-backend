@@ -7,6 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+
 ### Added
 
 - **Daily forward-looking huggingface_hub CI.** `hf-forward.yml` runs the tests marked
@@ -53,6 +54,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`X-Error-Code` wins over numeric status). ([#77](https://github.com/deepghs/KohakuHub/pull/77))
 
 ### Changed
+
+- **Environment names.** Settings are read from `CHEESE_CAVE_<NAME>` first; the existing
+  `KOHAKU_HUB_<NAME>` names stay accepted as the fallback with the same suffix. Empty values still
+  count as set. Compose variables keep their current names.
+- **Licensing and contributions.** `LICENSING.md` now states the AGPL-3.0 licence and the origin of
+  the fork; the upstream guide moved to `provenance/LICENSING.upstream.md`. `CONTRIBUTING.md` requires
+  a Developer Certificate of Origin sign-off on every commit, enforced by the `DCO` workflow, and no
+  longer grants commercial re-licensing rights.
+- Tag `upstream-monorepo-last` marks the last upstream monorepo commit (`58f8101`) in this repository.
 
 - **Fallback: `disabled` upstream marker now classifies as `TRY_NEXT_SOURCE`
   instead of `BIND_AND_PROPAGATE`.** When HuggingFace returns
