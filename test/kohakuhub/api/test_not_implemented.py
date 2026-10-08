@@ -158,6 +158,7 @@ def _assert_server_message_mentions(
     )
 
 
+@pytest.mark.hf_client
 async def test_hf_api_get_repo_discussions_raises_readable_not_implemented(
     live_server_url, hf_api_token
 ):
@@ -172,6 +173,7 @@ async def test_hf_api_get_repo_discussions_raises_readable_not_implemented(
     _assert_server_message_mentions(excinfo.value, "discussions")
 
 
+@pytest.mark.hf_client
 async def test_hf_api_create_discussion_raises_readable_not_implemented(
     live_server_url, hf_api_token
 ):
@@ -186,6 +188,7 @@ async def test_hf_api_create_discussion_raises_readable_not_implemented(
     _assert_server_message_mentions(excinfo.value, "discussions")
 
 
+@pytest.mark.hf_client
 async def test_hf_api_restart_space_raises_readable_not_implemented(
     live_server_url, hf_api_token
 ):
@@ -201,6 +204,7 @@ async def test_hf_api_restart_space_raises_readable_not_implemented(
     _assert_server_message_mentions(excinfo.value, "restart")
 
 
+@pytest.mark.hf_client
 async def test_hf_api_pause_space_raises_readable_not_implemented(
     live_server_url, hf_api_token
 ):
@@ -212,6 +216,7 @@ async def test_hf_api_pause_space_raises_readable_not_implemented(
     _assert_server_message_mentions(excinfo.value, "space")
 
 
+@pytest.mark.hf_client
 async def test_hf_api_add_space_secret_raises_readable_not_implemented(
     live_server_url, hf_api_token
 ):

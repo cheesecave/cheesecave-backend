@@ -49,6 +49,7 @@ async def outsider_hf_api_token(outsider_client):
     return await _create_hf_token(outsider_client, "hf-api-outsider")
 
 
+@pytest.mark.hf_client
 async def test_hf_api_repo_info_permissions_and_existence(
     live_server_url,
     hf_api_token,
@@ -138,6 +139,7 @@ async def test_hf_api_repo_info_permissions_and_existence(
     )
 
 
+@pytest.mark.hf_client
 async def test_hf_api_listings_tree_and_downloads(
     live_server_url,
     hf_api_token,
@@ -206,6 +208,7 @@ async def test_hf_api_listings_tree_and_downloads(
         b"safe tensor payload"
     )
 
+@pytest.mark.hf_client
 async def test_hf_api_create_repo_upload_file_and_upload_folder(
     live_server_url,
     hf_api_token,
@@ -250,6 +253,7 @@ async def test_hf_api_create_repo_upload_file_and_upload_folder(
     assert "bundle/docs/guide.md" in tree_paths
 
 
+@pytest.mark.hf_client
 async def test_hf_api_create_commit_delete_file_and_list_commits(
     live_server_url,
     hf_api_token,
@@ -316,6 +320,7 @@ async def test_hf_api_create_commit_delete_file_and_list_commits(
     )
 
 
+@pytest.mark.hf_client
 async def test_hf_api_branch_and_tag_lifecycle(live_server_url, hf_api_token):
     api = HfApi(endpoint=live_server_url, token=hf_api_token)
 
@@ -345,6 +350,7 @@ async def test_hf_api_branch_and_tag_lifecycle(live_server_url, hf_api_token):
     )
 
 
+@pytest.mark.hf_client
 async def test_hf_api_likes_visibility_move_delete_and_list_liked_repos(
     live_server_url,
     hf_api_token,
@@ -446,6 +452,7 @@ def test_hf_client_still_retries_on_our_conflict_sentence():
     )
 
 
+@pytest.mark.hf_client
 async def test_hf_move_repo_frees_the_old_name_for_immediate_reuse(
     live_server_url,
     hf_api_token,
@@ -545,6 +552,7 @@ async def test_hf_move_repo_frees_the_old_name_for_immediate_reuse(
     assert "NEW.md" not in {s.rfilename for s in (renamed_after.siblings or [])}
 
 
+@pytest.mark.hf_client
 async def test_hf_move_repo_keeps_history_branches_and_tags(
     live_server_url,
     hf_api_token,
@@ -632,6 +640,7 @@ async def test_hf_move_repo_keeps_history_branches_and_tags(
 
 
 
+@pytest.mark.hf_client
 async def test_hf_move_repo_refuses_a_name_that_normalizes_to_another_repo(
     live_server_url,
     hf_api_token,
@@ -682,6 +691,7 @@ def _sibs(info) -> dict:
     }
 
 
+@pytest.mark.hf_client
 async def test_hf_api_repo_info_matches_the_hub_contract(live_server_url, hf_api_token):
     """What huggingface_hub reads back, as on the Hub: names only by default,
     blob fields with ``files_metadata``, only the asked properties with
@@ -714,6 +724,7 @@ async def test_hf_api_repo_info_matches_the_hub_contract(live_server_url, hf_api
     assert expanded.siblings is None
 
 
+@pytest.mark.hf_client
 async def test_hf_snapshot_download_lists_files_from_the_name_only_default(
     live_server_url, hf_api_token, tmp_path
 ):
@@ -731,6 +742,7 @@ async def test_hf_snapshot_download_lists_files_from_the_name_only_default(
     assert {"README.md", "weights/model.safetensors"} <= files
 
 
+@pytest.mark.hf_client
 async def test_hf_paths_info_expands_a_directory_with_its_last_commit(live_server_url, hf_api_token):
     api = HfApi(endpoint=live_server_url, token=hf_api_token)
 
@@ -741,6 +753,7 @@ async def test_hf_paths_info_expands_a_directory_with_its_last_commit(live_serve
     assert entry.path == "weights" and entry.last_commit is not None
 
 
+@pytest.mark.hf_client
 async def test_hf_dataset_info_default_and_files_metadata(live_server_url, member_hf_api_token):
     api = HfApi(endpoint=live_server_url, token=member_hf_api_token)
 
@@ -756,6 +769,7 @@ async def test_hf_dataset_info_default_and_files_metadata(live_server_url, membe
     assert train["size"] > 0 and train["blob_id"]
 
 
+@pytest.mark.hf_client
 async def test_hf_repo_info_pinned_to_a_commit(live_server_url, hf_api_token, tmp_path):
     """A revision goes through /revision/{rev}: the same contract."""
     import inspect
@@ -789,6 +803,7 @@ async def test_hf_repo_info_pinned_to_a_commit(live_server_url, hf_api_token, tm
     assert expanded.sha and expanded.siblings is None
 
 
+@pytest.mark.hf_client
 async def test_hf_unknown_expand_property_raises_a_bad_request(live_server_url, hf_api_token):
     import inspect
 
@@ -804,6 +819,7 @@ async def test_hf_unknown_expand_property_raises_a_bad_request(live_server_url, 
     assert raised.value.response.status_code == 400
 
 
+@pytest.mark.hf_client
 async def test_hf_list_repo_tree_expands_directories(live_server_url, hf_api_token):
     import inspect
 

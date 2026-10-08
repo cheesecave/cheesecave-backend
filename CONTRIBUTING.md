@@ -665,11 +665,6 @@ onMounted(async () => {
 - Search functionality
 - Git push support
 
-**KohakuBoard** (Standalone Repository - https://github.com/KohakuBlueleaf/KohakuBoard):
-- Remote server mode with authentication (WIP)
-- Sync protocol for uploading local boards (WIP)
-- Frontend UI improvements (WIP)
-
 ### 📋 Planned Features
 
 **Advanced Features:**
@@ -708,12 +703,6 @@ We're especially looking for help in:
 - Advanced repository features
 - Search functionality
 
-### 📊 KohakuBoard (Standalone Repository)
-- See https://github.com/KohakuBlueleaf/KohakuBoard for contributing to KohakuBoard
-- Remote server authentication system
-- Sync protocol implementation
-- Frontend chart improvements
-- Documentation and examples
 
 ### 📚 Documentation
 - Tutorial videos
@@ -736,7 +725,7 @@ We're especially looking for help in:
 
 By contributing, you agree to the following:
 
-1. **License Grant**: Your contributions will be licensed under AGPL-3.0 for the main project, or under a non-commercial license for specific modules as designated by the project maintainer.
+1. **License Grant**: Your contributions will be licensed under AGPL-3.0.
 
 2. **Commercial Licensing Rights**: You grant KohakuBlueLeaf (the project owner) perpetual, irrevocable rights to:
    - Relicense your contributions under commercial terms

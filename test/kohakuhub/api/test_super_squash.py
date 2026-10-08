@@ -280,6 +280,7 @@ async def test_a_repository_squash_keeps_its_tree_in_one_commit(
     assert response.status_code in (200, 302, 307), response.text
 
 
+@pytest.mark.hf_client
 async def test_huggingface_hub_squashes_one_branch(
     s, owner_client, live_server_url, hf_api_token
 ):

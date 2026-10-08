@@ -223,6 +223,7 @@ def _setup_resolve_cache_source(monkeypatch):
     )
 
 
+@pytest.mark.hf_client
 @pytest.mark.asyncio
 async def test_pattern_A_resolve_cache_HEAD(monkeypatch):
     """307 → /api/resolve-cache: HEAD returns 307 + absolute Location, the
@@ -324,6 +325,7 @@ async def test_pattern_A_resolve_cache_GET(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.hf_client
 @pytest.mark.asyncio
 async def test_pattern_B_xet_cas_bridge_HEAD(monkeypatch):
     """302 → cas-bridge with X-Linked-Size. khub must: preserve the absolute
@@ -415,6 +417,7 @@ async def test_pattern_B_xet_cas_bridge_GET(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.hf_client
 @pytest.mark.asyncio
 async def test_pattern_C_direct_200_HEAD(monkeypatch):
     """Some HF repos serve small text (e.g. README.md) directly with 200
@@ -491,6 +494,7 @@ async def test_pattern_C_direct_200_GET(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.hf_client
 @pytest.mark.asyncio
 async def test_pattern_A_resolve_cache_HEAD_fallback_on_error(monkeypatch):
     _setup_resolve_cache_source(monkeypatch)

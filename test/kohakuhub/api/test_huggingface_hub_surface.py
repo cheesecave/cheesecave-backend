@@ -63,6 +63,7 @@ def _field(obj: Any, name: str) -> Any:
     return None
 
 
+@pytest.mark.hf_client
 async def test_upload_file_to_non_main_branch(live_server_url, hf_api_token):
     """``revision=<branch>`` on ``upload_file`` commits to that branch;
     main stays untouched. Used by release-branch publishing flows."""
@@ -86,6 +87,7 @@ async def test_upload_file_to_non_main_branch(live_server_url, hf_api_token):
     )
 
 
+@pytest.mark.hf_client
 async def test_create_branch_from_specific_revision(live_server_url, hf_api_token):
     """``create_branch(revision=<sha>)`` must branch off the requested commit,
     not the default branch HEAD. ``datasets`` uses this to pin release
@@ -116,6 +118,7 @@ async def test_create_branch_from_specific_revision(live_server_url, hf_api_toke
     assert any(b.name == "pinned" for b in refs.branches)
 
 
+@pytest.mark.hf_client
 async def test_snapshot_download_follows_branch_revision(
     live_server_url, hf_api_token, tmp_path
 ):
@@ -165,6 +168,7 @@ async def test_snapshot_download_follows_branch_revision(
     assert (alt_dir / "doc.txt").read_bytes() == b"alt branch content\n"
 
 
+@pytest.mark.hf_client
 async def test_list_repo_tree_supports_pagination_over_many_entries(
     live_server_url, hf_api_token
 ):
@@ -202,6 +206,7 @@ async def test_list_repo_tree_supports_pagination_over_many_entries(
     assert "items/file_59.txt" in paths
 
 
+@pytest.mark.hf_client
 async def test_hf_hub_download_force_download_reflects_latest_content(
     live_server_url, hf_api_token, tmp_path
 ):
@@ -249,6 +254,7 @@ async def test_hf_hub_download_force_download_reflects_latest_content(
     assert Path(second).read_bytes() == b"second content\n"
 
 
+@pytest.mark.hf_client
 async def test_file_exists_respects_explicit_revision(live_server_url, hf_api_token):
     """A file only present on a feature branch must not register as present
     on main, and vice versa."""
@@ -268,6 +274,7 @@ async def test_file_exists_respects_explicit_revision(live_server_url, hf_api_to
     assert not await _run(api.file_exists, repo_id, "feat_only.txt", revision="main")
 
 
+@pytest.mark.hf_client
 async def test_repo_info_raises_named_error_after_delete(
     live_server_url, hf_api_token
 ):
@@ -283,6 +290,7 @@ async def test_repo_info_raises_named_error_after_delete(
         await _run(api.repo_info, repo_id)
 
 
+@pytest.mark.hf_client
 async def test_create_commit_with_deleted_folder_op(live_server_url, hf_api_token):
     """The commit NDJSON protocol accepts a ``deletedFolder`` op that
     recursively removes a directory. After such a commit, the
@@ -335,6 +343,7 @@ async def test_create_commit_with_deleted_folder_op(live_server_url, hf_api_toke
     )
 
 
+@pytest.mark.hf_client
 async def test_hf_filesystem_info_and_walk(live_server_url, hf_api_token):
     """``HfFileSystem.info()`` and ``HfFileSystem.walk()`` — used by
     ``datasets`` and downstream fsspec-based loaders — must expose sane

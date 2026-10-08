@@ -20,6 +20,4 @@ dependencies. Web/admin maintain their own package scripts and CI.
 Native Compose supports release images and sibling source builds. See
 [deployment instructions](../docs/deployment/docker.md). The former
 `kohakuhub.conf` interactive generator format is retired; retain existing
-production settings in `.env` and ordinary Compose override files. Existing
-KohakuBoard integration helpers are inherited optional examples, not part of
-the three CheeseCave services or their release deployment.
+production settings in `.env` and ordinary Compose override files. 

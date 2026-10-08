@@ -2,7 +2,9 @@
 
 *Last Updated: January 2025*
 
-**Status:** ✅ Fully Implemented and Functional
+**Status:** Frozen. The `kohub-cli` tool is not shipped by this repository, so this page
+describes the upstream command set for reference only and gains no new commands. Use the
+`huggingface_hub` client or the `hf` CLI against your CheeseCave endpoint.
 
 ## Quick Reference
 

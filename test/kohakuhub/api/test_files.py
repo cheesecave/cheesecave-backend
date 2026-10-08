@@ -7,6 +7,7 @@ import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import httpx
+import pytest
 from huggingface_hub import hf_hub_download
 
 
@@ -226,6 +227,7 @@ async def test_resolve_get_302_exposes_cors_headers_for_browser_preview(
     )
 
 
+@pytest.mark.hf_client
 async def test_hf_hub_download_survives_cdn_head_to_get(
     live_server_url, hf_api_token, tmp_path
 ):
