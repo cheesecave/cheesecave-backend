@@ -785,7 +785,8 @@ def test_external_token_rotation_via_hf_hub_evicts_user_cache(
     from kohakuhub.api.fallback.cache import get_cache
     cache = get_cache()
     assert cache.get(owner_id, "", "model", "owner", "scenario-repo") is not None
-    initial_user_gen = cache.user_gens[owner_id]
+    # Reads never create entries (see RepoSourceCache), so an unbumped user has no key yet.
+    initial_user_gen = cache.user_gens.get(owner_id, 0)
 
     # Rotate token → cache evicted.
     asyncio.run(_post_token_and_close(ac_owner))
