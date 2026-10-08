@@ -10,7 +10,7 @@ CheeseCave modifications dated 2026-10-04 include repository splitting and namin
 ## License scope
 
 All code in this repository is under the GNU Affero General Public License version 3; see [LICENSE](LICENSE).
-The Dataset Viewer, which earlier builds carried at `src/kohakuhub/datasetviewer/` under its separate Kohaku Software License 1.0, was removed on 2026-10-08 together with its routes and dependencies; it is no longer part of this repository or of the deployed application. Copies of earlier builds that still contain it remain under the terms they were distributed with, and its license text remains in the git history. [LICENSING.md](LICENSING.md) keeps the original upstream text for provenance.
+The Dataset Viewer, which earlier builds carried at `src/kohakuhub/datasetviewer/` under its separate Kohaku Software License 1.0, was removed on 2026-10-08 together with its routes and dependencies; it is no longer part of this repository or of the deployed application. Copies of earlier builds that still contain it remain under the terms they were distributed with, and its license text remains in the git history. The upstream licensing guide is kept for provenance in [provenance/LICENSING.upstream.md](provenance/LICENSING.upstream.md).
 
 ## Source and build information
 

@@ -3,7 +3,7 @@
 CheeseCave is a self-hosted model and dataset repository service. This repository holds the
 FastAPI API, Git/LFS endpoints, background workers, storage code, migrations and the shared
 Compose configuration. It is an independent fork of KohakuHub; keep the upstream attribution
-in `NOTICE.md`, `LICENSE` and `LICENSING.md` intact when editing inherited code.
+in `NOTICE.md`, `LICENSE` and `provenance/` intact when editing inherited code.
 
 ## Maintenance discipline
 
@@ -25,8 +25,9 @@ in `NOTICE.md`, `LICENSE` and `LICENSING.md` intact when editing inherited code.
   Coverage measures the runtime code in `src/kohakuhub/` (including its `utils/` modules when
   the application imports them). It excludes tests, `scripts/` and tooling, migrations, legacy
   modules and documentation. See [CONTRIBUTING.md](CONTRIBUTING.md#test-and-coverage-scope).
-- **Compatibility.** Keep the Python package name `kohakuhub`, every `KOHAKU_HUB_*` setting,
-  protocol identities, storage identifiers and client paths. Renames of user-facing product
+- **Compatibility.** Keep the Python package name `kohakuhub`, protocol identities, storage
+  identifiers and client paths. Settings are read from `CHEESE_CAVE_<NAME>` first and fall back to
+  `KOHAKU_HUB_<NAME>` (see `read_env` in `kohakuhub.config`); never remove the fallback. Renames of user-facing product
   text use CheeseCave; KohakuHub appears only as attribution.
 - **Deployment.** Production deployment is a manual workflow on `main`. Do not change deployment
   targets, hosts or secrets from code.

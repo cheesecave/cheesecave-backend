@@ -723,20 +723,18 @@ We're especially looking for help in:
 
 ## License and Copyright
 
-By contributing, you agree to the following:
+Contributions are licensed under the GNU Affero General Public License, version 3 (AGPL-3.0), the
+license of the project. You keep the copyright to your contributions.
 
-1. **License Grant**: Your contributions will be licensed under AGPL-3.0.
-
-2. **Commercial Licensing Rights**: You grant KohakuBlueLeaf (the project owner) perpetual, irrevocable rights to:
-   - Relicense your contributions under commercial terms
-   - Include your contributions in commercial exemption licenses sold to third parties
-   - Use your contributions in any way necessary for the commercial operation of this project
-
-3. **Copyright**: You retain copyright to your contributions, but grant the above license rights to the project.
+Every commit needs a Developer Certificate of Origin sign-off. Add it with `git commit -s`, which
+appends a `Signed-off-by: Your Name <you@example.com>` line. By signing off you certify the
+[Developer Certificate of Origin 1.1](https://developercertificate.org/): you wrote the change, or
+have the right to submit it under AGPL-3.0, and you agree it is distributed under that license.
+The `DCO` workflow checks every commit of a pull request.
 
 ---
 
-Thank you for contributing to KohakuHub!
+Thank you for contributing to {name}!
 
 ## Test and coverage scope
 

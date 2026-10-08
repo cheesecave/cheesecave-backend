@@ -131,7 +131,7 @@ See [source provenance](provenance/UPSTREAM.md), the
 [original README](provenance/README.upstream.md) and
 [original changelog](provenance/CHANGELOG.upstream.md).
 
-[LICENSE](LICENSE) and [LICENSING.md](LICENSING.md) retain their original text.
+[LICENSE](LICENSE) is the AGPL-3.0 text. [LICENSING.md](LICENSING.md) states the licence of this fork; the upstream licensing guide is kept in [provenance/LICENSING.upstream.md](provenance/LICENSING.upstream.md).
 The Dataset Viewer, the only component that carried a separate license, was
 removed on 2026-10-08, so everything in this repository is under AGPL-3.0; see
 [NOTICE.md](NOTICE.md). Historical monorepo paths in the original licensing
