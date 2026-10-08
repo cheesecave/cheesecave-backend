@@ -1,4 +1,4 @@
-"""Unit tests for commit operation helpers and router flow."""
+"""Unit tests for commit operation helpers and router flow, on real repository and file rows."""
 
 from __future__ import annotations
 
@@ -6,13 +6,16 @@ from contextlib import asynccontextmanager
 import base64
 import importlib
 import json
-from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
 
 import kohakuhub.api.commit.routers.operations as commit_ops
+from kohakuhub.db import File
+from test.kohakuhub.support.factories import make_file, make_repo, make_user
+
+pytestmark = pytest.mark.usefixtures("db_scope")
 
 
 @asynccontextmanager
@@ -22,89 +25,15 @@ async def _no_lock(repo):
 
 @pytest.fixture(autouse=True)
 def _repository_not_held(monkeypatch):
-    """No history operation holds the fake repositories (the lock itself is
+    """No history operation holds the repositories (the lock itself is
     tested against the real database in test_super_squash.py)."""
     monkeypatch.setattr(commit_ops.operation_lock, "ensure_free", lambda repo: None)
     monkeypatch.setattr(commit_ops.operation_lock, "writing", _no_lock)
 
 
-class _Expr:
-    def __init__(self, value):
-        self.value = value
-
-    def __and__(self, other):
-        return _Expr(("and", self.value, getattr(other, "value", other)))
-
-    def __repr__(self):
-        return repr(self.value)
-
-
-class _Field:
-    def __init__(self, name: str):
-        self.name = name
-
-    def __eq__(self, other):
-        return _Expr((self.name, "==", other))
-
-    def startswith(self, other):
-        return _Expr((self.name, "startswith", other))
-
-    def __hash__(self):
-        return hash(self.name)
-
-
-class _Query:
-    def __init__(self, execute_result=1):
-        self.execute_result = execute_result
-        self.where_calls = []
-        self.on_conflict_calls = []
-
-    def where(self, *args):
-        self.where_calls.append(args)
-        return self
-
-    def on_conflict(self, **kwargs):
-        self.on_conflict_calls.append(kwargs)
-        return self
-
-    def execute(self):
-        return self.execute_result
-
-
-class _FakeFileModel:
-    repository = _Field("repository")
-    path_in_repo = _Field("path_in_repo")
-    sha256 = _Field("sha256")
-    size = _Field("size")
-    lfs = _Field("lfs")
-    is_deleted = _Field("is_deleted")
-    updated_at = _Field("updated_at")
-    owner = _Field("owner")
-    id = _Field("id")
-
-    insert_calls = []
-    update_query = _Query()
-    get_or_none_result = None
-
-    @classmethod
-    def reset(cls):
-        cls.insert_calls = []
-        cls.update_query = _Query()
-        cls.get_or_none_result = None
-
-    @classmethod
-    def insert(cls, **kwargs):
-        cls.insert_calls.append(kwargs)
-        return _Query()
-
-    @classmethod
-    def update(cls, **kwargs):
-        cls.update_kwargs = kwargs
-        return cls.update_query
-
-    @classmethod
-    def get_or_none(cls, *args):
-        return cls.get_or_none_result
+@pytest.fixture
+def repo():
+    return make_repo(make_user("owner"), "repo")
 
 
 class _FakeRequest:
@@ -120,6 +49,8 @@ class _FakeRequest:
 
 
 class _FakeLakeFSClient:
+    """LakeFS is an environment service: it stays mocked, its database side is real rows."""
+
     def __init__(self):
         self.calls = []
         self.branch_data = {"commit_id": "head-commit"}
@@ -189,9 +120,9 @@ def _async_return(value):
     return _inner()
 
 
-@pytest.fixture(autouse=True)
-def _reset_fake_file():
-    _FakeFileModel.reset()
+def _active(repo, path):
+    """The file row of ``path`` in ``repo``, deleted or not."""
+    return File.get((File.repository == repo) & (File.path_in_repo == path))
 
 
 def test_calculate_git_blob_sha1_matches_git_blob_format():
@@ -203,14 +134,11 @@ def test_calculate_git_blob_sha1_matches_git_blob_format():
 
 
 @pytest.mark.asyncio
-async def test_process_regular_file_covers_validation_skip_restore_and_success(monkeypatch):
-    repo = SimpleNamespace(owner=SimpleNamespace(username="owner"))
+async def test_process_regular_file_covers_validation_skip_restore_and_success(monkeypatch, repo):
     client = _FakeLakeFSClient()
     monkeypatch.setattr(commit_ops, "get_lakefs_client", lambda: client)
     monkeypatch.setattr(commit_ops, "get_effective_lfs_threshold", lambda repo_arg: 10)
     monkeypatch.setattr(commit_ops, "should_use_lfs", lambda repo_arg, path, size: size >= 10)
-    monkeypatch.setattr(commit_ops, "get_file", lambda repo_arg, path: None)
-    monkeypatch.setattr(commit_ops, "File", _FakeFileModel)
 
     with pytest.raises(HTTPException) as invalid_encoding:
         await commit_ops.process_regular_file("README.md", "aGVsbG8=", "utf8", repo, "lakefs", "main")
@@ -228,8 +156,6 @@ async def test_process_regular_file_covers_validation_skip_restore_and_success(m
     monkeypatch.setattr(commit_ops, "get_lakefs_client", lambda: client)
     monkeypatch.setattr(commit_ops, "get_effective_lfs_threshold", lambda repo_arg: 10)
     monkeypatch.setattr(commit_ops, "should_use_lfs", lambda repo_arg, path, size: size >= 10)
-    monkeypatch.setattr(commit_ops, "get_file", lambda repo_arg, path: None)
-    monkeypatch.setattr(commit_ops, "File", _FakeFileModel)
 
     large_content = base64.b64encode(b"0123456789").decode("ascii")
     with pytest.raises(HTTPException) as lfs_required:
@@ -237,16 +163,9 @@ async def test_process_regular_file_covers_validation_skip_restore_and_success(m
     assert lfs_required.value.status_code == 400
     assert lfs_required.value.detail["suggested_operation"] == "lfsFile"
 
+    # The active row has the same blob sha and size: unchanged, nothing uploaded
+    make_file(repo, "README.md", commit_ops.calculate_git_blob_sha1(b"hello"), size=5)
     monkeypatch.setattr(commit_ops, "should_use_lfs", lambda repo_arg, path, size: False)
-    monkeypatch.setattr(
-        commit_ops,
-        "get_file",
-        lambda repo_arg, path: SimpleNamespace(
-            sha256=commit_ops.calculate_git_blob_sha1(b"hello"),
-            size=5,
-            is_deleted=False,
-        ),
-    )
     skipped = await commit_ops.process_regular_file(
         "README.md",
         base64.b64encode(b"hello").decode("ascii"),
@@ -256,18 +175,12 @@ async def test_process_regular_file_covers_validation_skip_restore_and_success(m
         "main",
     )
     assert skipped is False
+    assert client.calls == []
 
-    monkeypatch.setattr(
-        commit_ops,
-        "get_file",
-        lambda repo_arg, path: SimpleNamespace(
-            sha256="old",
-            size=1,
-            is_deleted=True,
-        ),
-    )
+    # A deleted row is not an active file: the write uploads and un-deletes it
+    make_file(repo, "old.md", "old", size=1, is_deleted=True)
     changed = await commit_ops.process_regular_file(
-        "README.md",
+        "old.md",
         base64.b64encode(b"hello").decode("ascii"),
         "base64",
         repo,
@@ -276,13 +189,18 @@ async def test_process_regular_file_covers_validation_skip_restore_and_success(m
     )
     assert changed is True
     assert client.calls[-1][0] == "upload_object"
-    assert _FakeFileModel.insert_calls
+    restored = _active(repo, "old.md")
+    assert (restored.sha256, restored.size, restored.is_deleted) == (
+        commit_ops.calculate_git_blob_sha1(b"hello"),
+        5,
+        False,
+    )
 
     client.raise_on["upload_object"] = RuntimeError("upload failed")
     with pytest.raises(HTTPException) as upload_error:
         await commit_ops.process_regular_file(
             "README.md",
-            base64.b64encode(b"hello").decode("ascii"),
+            base64.b64encode(b"world").decode("ascii"),
             "base64",
             repo,
             "lakefs",
@@ -292,10 +210,8 @@ async def test_process_regular_file_covers_validation_skip_restore_and_success(m
 
 
 @pytest.mark.asyncio
-async def test_process_lfs_file_covers_same_content_new_content_and_failures(monkeypatch):
-    repo = SimpleNamespace(owner=SimpleNamespace(username="owner"))
+async def test_process_lfs_file_covers_same_content_new_content_and_failures(monkeypatch, repo):
     client = _FakeLakeFSClient()
-    monkeypatch.setattr(commit_ops, "File", _FakeFileModel)
     monkeypatch.setattr(commit_ops, "get_lakefs_client", lambda: client)
     monkeypatch.setattr(commit_ops.cfg.s3, "bucket", "hub-storage")
     monkeypatch.setattr(commit_ops, "object_exists", lambda bucket, key: _async_return(True))
@@ -308,32 +224,15 @@ async def test_process_lfs_file_covers_same_content_new_content_and_failures(mon
         await commit_ops.process_lfs_file("weights.bin", None, 10, "sha256", repo, "lakefs", "main")
     assert missing_oid.value.status_code == 400
 
-    _FakeFileModel.get_or_none_result = SimpleNamespace(
-        id=3,
-        repository=repo,
-        path_in_repo="weights.bin",
-        sha256="sameoid",
-        size=10,
-        lfs=True,
-        is_deleted=True,
-    )
+    weights = make_file(repo, "weights.bin", "sameoid", size=10, lfs=True, is_deleted=True)
     restored = await commit_ops.process_lfs_file(
         "weights.bin", "sameoid", 10, "sha256", repo, "lakefs", "main"
     )
     assert restored[0] is True
     assert restored[1]["sha256"] == "sameoid"
-    assert _FakeFileModel.update_query.where_calls
+    assert File.get_by_id(weights.id).is_deleted is False  # restored in the database
     assert claims == [("sameoid", True)]  # protected from collection while linked
 
-    _FakeFileModel.get_or_none_result = SimpleNamespace(
-        id=4,
-        repository=repo,
-        path_in_repo="weights.bin",
-        sha256="sameoid",
-        size=10,
-        lfs=True,
-        is_deleted=False,
-    )
     unchanged = await commit_ops.process_lfs_file(
         "weights.bin", "sameoid", 10, "sha256", repo, "lakefs", "main"
     )
@@ -342,14 +241,7 @@ async def test_process_lfs_file_covers_same_content_new_content_and_failures(mon
         {"path": "weights.bin", "sha256": "sameoid", "size": 10, "old_sha256": None},
     )
 
-    _FakeFileModel.get_or_none_result = SimpleNamespace(
-        repository=repo,
-        path_in_repo="weights.bin",
-        sha256="oldoid",
-        size=8,
-        lfs=True,
-        is_deleted=False,
-    )
+    File.update(sha256="oldoid", size=8).where(File.id == weights.id).execute()
     monkeypatch.setattr(commit_ops, "object_exists", lambda bucket, key: _async_return(False))
     with pytest.raises(HTTPException) as missing_object:
         await commit_ops.process_lfs_file("weights.bin", "newoid", 11, "sha256", repo, "lakefs", "main")
@@ -362,7 +254,7 @@ async def test_process_lfs_file_covers_same_content_new_content_and_failures(mon
     )
     assert changed is True
     assert tracking["old_sha256"] == "oldoid"
-    assert _FakeFileModel.insert_calls
+    assert File.get_by_id(weights.id).sha256 == "newoid"
     assert claims[-1] == ("newoid", True)
 
     # Content a collection is deleting (or deleted) must be uploaded again
@@ -393,21 +285,23 @@ async def test_process_lfs_file_covers_same_content_new_content_and_failures(mon
 
 
 @pytest.mark.asyncio
-async def test_process_deleted_file_and_folder_cover_success_partial_failures_and_exceptions(monkeypatch):
-    repo = SimpleNamespace(repo_type="model", full_id="owner/repo")
+async def test_process_deleted_file_and_folder_cover_success_partial_failures_and_exceptions(monkeypatch, repo):
     client = _FakeLakeFSClient()
-    monkeypatch.setattr(commit_ops, "File", _FakeFileModel)
     monkeypatch.setattr(commit_ops, "get_lakefs_client", lambda: client)
+    readme = make_file(repo, "README.md", "readme", size=5)
 
     deleted = await commit_ops.process_deleted_file("README.md", repo, "lakefs", "main")
     assert deleted is True
-    assert _FakeFileModel.update_query.where_calls
+    assert File.get_by_id(readme.id).is_deleted is True
 
     client.raise_on["delete_object"] = RuntimeError("delete failed")
     deleted = await commit_ops.process_deleted_file("README.md", repo, "lakefs", "main")
     assert deleted is True
     client.raise_on.pop("delete_object", None)
 
+    inside = [make_file(repo, "folder/a.txt", "a", size=1), make_file(repo, "folder/b.txt", "b", size=1)]
+    # A folder whose name is a prefix of another must not be taken with it
+    sibling = make_file(repo, "folder-old/c.txt", "c", size=1)
     client.list_payload = {
         "results": [
             {"path_type": "object", "path": "folder/a.txt"},
@@ -417,6 +311,8 @@ async def test_process_deleted_file_and_folder_cover_success_partial_failures_an
     }
     folder_deleted = await commit_ops.process_deleted_folder("folder", repo, "lakefs", "main")
     assert folder_deleted is True
+    assert [File.get_by_id(row.id).is_deleted for row in inside] == [True, True]
+    assert File.get_by_id(sibling.id).is_deleted is False
 
     client.raise_on["list_objects"] = RuntimeError("list failed")
     folder_deleted = await commit_ops.process_deleted_folder("folder", repo, "lakefs", "main")
@@ -424,13 +320,11 @@ async def test_process_deleted_file_and_folder_cover_success_partial_failures_an
 
 
 @pytest.mark.asyncio
-async def test_process_copy_file_covers_validation_success_and_error(monkeypatch):
-    repo = SimpleNamespace(owner=SimpleNamespace(username="owner"))
+async def test_process_copy_file_covers_validation_success_and_error(monkeypatch, repo):
     client = _FakeLakeFSClient()
     monkeypatch.setattr(commit_ops, "get_lakefs_client", lambda: client)
-    monkeypatch.setattr(commit_ops, "get_file", lambda repo_arg, path: SimpleNamespace(size=12, sha256="abc", lfs=True))
     monkeypatch.setattr(commit_ops, "should_use_lfs", lambda repo_arg, path, size: True)
-    monkeypatch.setattr(commit_ops, "File", _FakeFileModel)
+    make_file(repo, "src.txt", "abc", size=12, lfs=True)
 
     with pytest.raises(HTTPException) as missing_src:
         await commit_ops.process_copy_file("dest.txt", None, "main", repo, "lakefs", "main")
@@ -438,13 +332,13 @@ async def test_process_copy_file_covers_validation_success_and_error(monkeypatch
 
     copied = await commit_ops.process_copy_file("dest.txt", "src.txt", "main", repo, "lakefs", "main")
     assert copied == (True, None)  # not a global LFS object: nothing to track
-    assert _FakeFileModel.insert_calls[-1]["lfs"] is True
+    dest = _active(repo, "dest.txt")
+    assert dest.lfs is True and dest.sha256 == "abc"
 
-    monkeypatch.setattr(commit_ops, "get_file", lambda repo_arg, path: None)
-    _FakeFileModel.insert_calls.clear()
-    copied = await commit_ops.process_copy_file("dest.txt", "src.txt", "main", repo, "lakefs", "main")
+    # The source has no file row: the LakeFS checksum is recorded instead
+    copied = await commit_ops.process_copy_file("dest.txt", "lakefs-only.txt", "main", repo, "lakefs", "main")
     assert copied == (True, None)
-    assert _FakeFileModel.insert_calls[-1]["sha256"] == "sha256:abc"
+    assert _active(repo, "dest.txt").sha256 == "sha256:abc"
 
     # A global LFS object: the linked version's sha256, not the source's
     # current one, claimed and tracked like a linked upload
@@ -455,15 +349,14 @@ async def test_process_copy_file_covers_validation_success_and_error(monkeypatch
     )
     claims = []
     monkeypatch.setattr(commit_ops, "_claim_lfs_object", lambda oid, key: claims.append(key) or _async_return(None))
-    monkeypatch.setattr(commit_ops, "get_file", lambda repo_arg, path: SimpleNamespace(size=5, sha256=old, lfs=True))
-    _FakeFileModel.get_or_none_result = SimpleNamespace(sha256=old, lfs=True)
-    copied = await commit_ops.process_copy_file("dest.txt", "src.txt", "c0ffee", repo, "lakefs", "main")
-    assert copied == (True, {"path": "dest.txt", "sha256": new, "size": 12, "old_sha256": old})
-    assert _FakeFileModel.insert_calls[-1]["sha256"] == new
+    make_file(repo, "linked.txt", old, size=5, lfs=True)
+    copied = await commit_ops.process_copy_file("linked.txt", "src.txt", "c0ffee", repo, "lakefs", "main")
+    assert copied == (True, {"path": "linked.txt", "sha256": new, "size": 12, "old_sha256": old})
+    assert _active(repo, "linked.txt").sha256 == new
     assert claims == [f"lfs/bb/bb/{new}"]
 
-    _FakeFileModel.get_or_none_result = None  # a new destination
-    copied = await commit_ops.process_copy_file("dest.txt", "src.txt", "c0ffee", repo, "lakefs", "main")
+    # A new destination has no previous version
+    copied = await commit_ops.process_copy_file("fresh.txt", "src.txt", "c0ffee", repo, "lakefs", "main")
     assert copied[1]["old_sha256"] is None
 
     def unavailable(oid, key):
@@ -471,7 +364,7 @@ async def test_process_copy_file_covers_validation_success_and_error(monkeypatch
 
     monkeypatch.setattr(commit_ops, "_claim_lfs_object", unavailable)
     with pytest.raises(HTTPException) as collected:
-        await commit_ops.process_copy_file("dest.txt", "src.txt", "c0ffee", repo, "lakefs", "main")
+        await commit_ops.process_copy_file("linked.txt", "src.txt", "c0ffee", repo, "lakefs", "main")
     assert collected.value.status_code == 409
     client.stat_object = stat
 
@@ -482,20 +375,17 @@ async def test_process_copy_file_covers_validation_success_and_error(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_commit_route_covers_parse_dispatch_noop_and_success_paths(monkeypatch):
+async def test_commit_route_covers_parse_dispatch_noop_and_success_paths(monkeypatch, repo):
     user = SimpleNamespace(username="owner")
-    repo = SimpleNamespace(owner=SimpleNamespace(username="owner"), used_bytes=0)
     client = _FakeLakeFSClient()
     warnings = []
     tracked = []
     gc_calls = []
 
-    monkeypatch.setattr(commit_ops.Repository, "get_or_none", lambda *args: repo)
     monkeypatch.setattr(commit_ops, "check_repo_write_permission", lambda repo_arg, user_arg: None)
     monkeypatch.setattr(commit_ops, "resolve_lakefs_repo", lambda repo: "model:owner/repo")
     monkeypatch.setattr(commit_ops, "get_lakefs_client", lambda: client)
     monkeypatch.setattr(commit_ops.cfg.app, "base_url", "https://hub.example.com")
-    monkeypatch.setattr(commit_ops, "_file_rows", lambda repo_arg, touched: {})
     monkeypatch.setattr(commit_ops.cfg.app, "debug_log_payloads", False)
     monkeypatch.setattr(commit_ops.cfg.app, "lfs_auto_gc", True)
     monkeypatch.setattr(commit_ops, "process_regular_file", lambda **kwargs: _async_return(False))
@@ -529,12 +419,11 @@ async def test_commit_route_covers_parse_dispatch_noop_and_success_paths(monkeyp
     )
     monkeypatch.setattr(commit_ops.logger, "warning", lambda message: warnings.append(message))
 
-    monkeypatch.setattr(commit_ops.Repository, "get_or_none", lambda *args: None)
+    # A repository that does not exist is refused before anything else
     with pytest.raises(HTTPException) as missing_repo:
-            await commit_ops.commit(commit_ops.RepoType.model, "owner", "repo", "main", _FakeRequest(b""), user=user)
+        await commit_ops.commit(commit_ops.RepoType.model, "owner", "missing", "main", _FakeRequest(b""), user=user)
     assert missing_repo.value.status_code == 404
 
-    monkeypatch.setattr(commit_ops.Repository, "get_or_none", lambda *args: repo)
     with pytest.raises(HTTPException) as invalid_json:
         await commit_ops.commit(commit_ops.RepoType.model, "owner", "repo", "main", _FakeRequest(b"{bad"), user=user)
     assert invalid_json.value.status_code == 400
