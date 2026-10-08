@@ -103,7 +103,10 @@ def table_missing(database, model):
     """
     try:
         with database.atomic():
-            database.execute_sql(f'DROP TABLE "{model._meta.table_name}"')
+            # CASCADE drops inbound foreign keys too (Postgres refuses a plain DROP
+            # of a referenced table); the savepoint restores both on exit.
+            cascade = " CASCADE" if isinstance(database, PostgresqlDatabase) else ""
+            database.execute_sql(f'DROP TABLE "{model._meta.table_name}"{cascade}')
             yield
             raise _Rollback()
     except _Rollback:

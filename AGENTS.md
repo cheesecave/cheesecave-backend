@@ -39,10 +39,13 @@ in `NOTICE.md`, `LICENSE` and `provenance/` intact when editing inherited code.
 - **Real SQL by default.** A test that checks what the database decides (queries, filters,
   ordering, counts, uniqueness, foreign keys, transactions, what gets written) runs real SQL.
   Do not replace the ORM or query objects with fakes for those checks.
-- **Use the shared fixtures.** Put tests on `test/kohakuhub/support/db.py`: `fresh_database`
-  for code that commits, migrations and DDL; `rolled_back` inside a module-level scope for
-  query-shaped tests. Seed rows with `test/kohakuhub/support/factories.py`. Do not construct
-  `SqliteDatabase` or `PostgresqlDatabase` in a test file; only `support/db.py` does.
+- **Use the shared fixtures.** They live in `test/conftest.py` and `test/kohakuhub/support/db.py`:
+  `db_fresh` for code that commits over HTTP, migrations and DDL (a new file-backed database per
+  test); `db_committed` for rows that must be really committed but may be emptied per test;
+  `db_scope` (rolled back after each test, same thread only) for query-shaped tests. Use
+  `table_missing(database, Model)` for a real database failure. Seed rows with
+  `test/kohakuhub/support/factories.py`. Do not construct `SqliteDatabase` or `PostgresqlDatabase`
+  in a test file; only `support/db.py` does.
 - **Keep the mocks that belong to the environment.** External services (LakeFS, S3, Hugging
   Face HTTP, SMTP) stay mocked; their database side uses real rows. Pure logic that never reads
   the database may stay a plain unit test without fake ORM objects. A deliberate database
@@ -55,8 +58,7 @@ in `NOTICE.md`, `LICENSE` and `provenance/` intact when editing inherited code.
 - **Coverage must not drop.** A change keeps or raises the branch coverage of the lines it
   touches; new runtime code aims for 100 % branch coverage. The coverage number before and after
   goes in the PR description.
-- **Migrations keep a fresh database.** Tests of schema history use `fresh_database`; never
-  `rolled_back`.
+- **Migrations keep a fresh database.** Tests of schema history use `db_fresh`; never `db_scope`.
 
 ## Layout
 
