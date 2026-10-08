@@ -3,7 +3,7 @@ name: Publish image
 # main -> :latest and :sha-<commit>; v* tags -> :<version> (and :latest). Pull requests only build.
 on:
   push:
-    branches: [main]
+    branches: [main, feat/ghcr-images]
     tags: ["v*"]
   pull_request:
     paths:
