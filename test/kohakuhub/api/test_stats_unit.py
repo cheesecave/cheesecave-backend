@@ -1,138 +1,109 @@
-"""Unit tests for statistics routes."""
+"""Unit tests for statistics routes, on real repository and daily-stats rows."""
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from types import SimpleNamespace
+from datetime import datetime, timedelta, timezone
 
 import pytest
-from fastapi import HTTPException
 
 import kohakuhub.api.stats as stats_api
+from test.kohakuhub.support.factories import make_daily_stats, make_repo, make_user
+
+pytestmark = pytest.mark.usefixtures("db_scope")
 
 
-class _Expr:
-    def __and__(self, other):
-        return self
-
-
-class _Field:
-    def __eq__(self, other):
-        return _Expr()
-
-    def __ge__(self, other):
-        return _Expr()
-
-    def __le__(self, other):
-        return _Expr()
-
-
-class _Query:
-    def __init__(self, items):
-        self.items = list(items)
-
-    def where(self, *args, **kwargs):
-        return self
-
-    def order_by(self, *args, **kwargs):
-        return self
-
-    def __iter__(self):
-        return iter(self.items)
-
-
-class _FrozenDatetime:
-    @classmethod
-    def now(cls, tz=None):
-        return datetime(2026, 4, 20, tzinfo=timezone.utc)
+def _today():
+    return datetime.now(timezone.utc).date()
 
 
 @pytest.mark.asyncio
-async def test_get_recent_stats_returns_hf_not_found_when_repository_is_missing(monkeypatch):
-    monkeypatch.setattr(stats_api, "get_repository", lambda *args: None)
-    monkeypatch.setattr(
-        stats_api,
-        "hf_repo_not_found",
-        lambda repo_id, repo_type: {"error": "missing", "repo_id": repo_id, "repo_type": repo_type},
-    )
+async def test_get_recent_stats_returns_hf_not_found_when_repository_is_missing():
+    response = await stats_api.get_recent_stats("model", "owner", "missing", days=14, user=None)
 
-    response = await stats_api.get_recent_stats("model", "owner", "missing", days=14)
+    assert response.status_code == 404
+    assert response.headers["X-Error-Code"] == "RepoNotFound"
 
-    assert response == {
-        "error": "missing",
-        "repo_id": "owner/missing",
-        "repo_type": "model",
+
+@pytest.mark.asyncio
+async def test_get_recent_stats_lists_the_requested_window_in_date_order():
+    owner = make_user("owner")
+    repo = make_repo(owner, "demo")
+    today = _today()
+    make_daily_stats(repo, today - timedelta(days=10), download_sessions=1)  # outside the window
+    make_daily_stats(repo, today - timedelta(days=2), download_sessions=4)
+    make_daily_stats(repo, today, download_sessions=7)
+
+    response = await stats_api.get_recent_stats("model", "owner", "demo", days=3, user=None)
+
+    assert response["period"] == {
+        "start": str(today - timedelta(days=2)),
+        "end": str(today),
+        "days": 3,
     }
-
-
-@pytest.mark.asyncio
-async def test_get_trending_repositories_filters_missing_mismatched_and_inaccessible_repos(
-    monkeypatch,
-):
-    repo_public = SimpleNamespace(
-        full_id="owner/public",
-        repo_type="model",
-        downloads=10,
-        likes_count=2,
-        private=False,
-    )
-    repo_private = SimpleNamespace(
-        full_id="owner/private",
-        repo_type="model",
-        downloads=8,
-        likes_count=1,
-        private=True,
-    )
-    repo_results = [repo_public, repo_private, None]
-    stats_rows = [
-        SimpleNamespace(repository_id=1, download_sessions=7),
-        SimpleNamespace(repository_id=1, download_sessions=3),
-        SimpleNamespace(repository_id=2, download_sessions=5),
-        SimpleNamespace(repository_id=3, download_sessions=4),
+    assert [item["downloads"] for item in response["stats"]] == [4, 7]
+    assert [item["date"] for item in response["stats"]] == [
+        str(today - timedelta(days=2)),
+        str(today),
     ]
 
-    class _FakeDailyRepoStats:
-        repository = _Field()
-        download_sessions = _Field()
-        date = _Field()
 
-        @staticmethod
-        def select(*args):
-            return _Query(stats_rows)
-
-    class _FakeRepository:
-        id = _Field()
-        repo_type = _Field()
-
-        @staticmethod
-        def get_or_none(expr):
-            return repo_results.pop(0)
-
-    def _check_repo_read_permission(repo, user):
-        if repo.private:
-            raise HTTPException(status_code=403, detail="forbidden")
-        return True
-
-    monkeypatch.setattr(stats_api, "datetime", _FrozenDatetime)
-    monkeypatch.setattr(stats_api, "DailyRepoStats", _FakeDailyRepoStats)
-    monkeypatch.setattr(stats_api, "Repository", _FakeRepository)
-    monkeypatch.setattr(stats_api, "check_repo_read_permission", _check_repo_read_permission)
+@pytest.mark.asyncio
+async def test_get_trending_repositories_hides_private_repos_from_anonymous_readers():
+    owner = make_user("owner")
+    public = make_repo(owner, "public")
+    private = make_repo(owner, "private", private=True)
+    today = _today()
+    make_daily_stats(public, today, download_sessions=7)
+    make_daily_stats(public, today - timedelta(days=1), download_sessions=3)
+    make_daily_stats(private, today, download_sessions=5)
 
     response = await stats_api.get_trending_repositories(
         repo_type="model",
         days=7,
         limit=10,
-        user=SimpleNamespace(username="owner"),
+        user=None,
     )
 
     assert response["trending"] == [
         {
             "id": "owner/public",
             "type": "model",
-            "downloads": 10,
-            "likes": 2,
+            "downloads": public.downloads,
+            "likes": public.likes_count,
             "recent_downloads": 10,
             "private": False,
         }
     ]
     assert response["period"]["days"] == 7
+
+
+@pytest.mark.asyncio
+async def test_get_trending_repositories_shows_private_repos_to_their_owner():
+    owner = make_user("owner")
+    private = make_repo(owner, "private", private=True)
+    make_daily_stats(private, _today(), download_sessions=5)
+
+    response = await stats_api.get_trending_repositories(
+        repo_type="model",
+        days=7,
+        limit=10,
+        user=owner,
+    )
+
+    assert [item["id"] for item in response["trending"]] == ["owner/private"]
+    assert response["trending"][0]["private"] is True
+
+
+@pytest.mark.asyncio
+async def test_get_repository_stats_reports_the_row_counters_and_404s_unknown_repos():
+    owner = make_user("owner")
+    repo = make_repo(owner, "demo")
+    repo.downloads = 42
+    repo.likes_count = 3
+    repo.save()
+
+    response = await stats_api.get_repository_stats("model", "owner", "demo", user=None)
+    assert response == {"downloads": 42, "likes": 3}
+
+    missing = await stats_api.get_repository_stats("model", "owner", "missing", user=None)
+    assert missing.status_code == 404
