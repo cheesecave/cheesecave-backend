@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 from kohakuhub.db import (
     Commit,
@@ -11,6 +11,8 @@ from kohakuhub.db import (
     File,
     FallbackSource,
     Repository,
+    Session,
+    Token,
     User,
     UserOrganization,
 )
@@ -130,3 +132,22 @@ def make_fallback_source(name="Mirror", **overrides):
     }
     values.update(overrides)
     return FallbackSource.create(**values)
+
+
+def make_session(user, session_id, secret="session-secret", expires_at=None, **overrides):
+    """A login session of ``user``, valid for an hour unless ``expires_at`` is given."""
+    values = {
+        "user": user,
+        "session_id": session_id,
+        "secret": secret,
+        "expires_at": expires_at or datetime.now(timezone.utc) + timedelta(hours=1),
+    }
+    values.update(overrides)
+    return Session.create(**values)
+
+
+def make_token(user, token_hash, name="cli", **overrides):
+    """An API token of ``user``; ``token_hash`` is the hash the auth path looks up."""
+    values = {"user": user, "token_hash": token_hash, "name": name}
+    values.update(overrides)
+    return Token.create(**values)
