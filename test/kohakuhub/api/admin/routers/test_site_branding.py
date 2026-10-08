@@ -1,4 +1,4 @@
-"""Branding API regression tests with an isolated persistent SQLite database."""
+"""Branding API regression tests on the shared persistent real-database fixture."""
 
 import base64
 from io import BytesIO
@@ -9,7 +9,7 @@ import xml.etree.ElementTree as ET
 
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
-from peewee import OperationalError, SqliteDatabase
+from peewee import OperationalError
 from PIL import Image
 import pytest
 
@@ -29,11 +29,9 @@ HEADERS = {"X-Admin-Token": TOKEN}
 
 
 @pytest.fixture
-def branding_client(tmp_path, monkeypatch):
-    database = SqliteDatabase(str(tmp_path / "branding.db"))
-    original_database = SiteBranding._meta.database
-    SiteBranding.bind(database)
-    database.create_tables([SiteBranding])
+def branding_client(db_fresh, monkeypatch):
+    # Requests run on TestClient's worker threads, so rows must be committed:
+    # db_fresh is a file-backed database, not a rolled-back transaction.
     monkeypatch.setattr(cfg.admin, "enabled", True)
     monkeypatch.setattr(cfg.admin, "secret_token", TOKEN)
     monkeypatch.setattr(cfg.app, "site_name", "Configured Hub")
@@ -42,9 +40,7 @@ def branding_client(tmp_path, monkeypatch):
     test_app.include_router(misc_router, prefix="/api")
     test_app.include_router(admin_router, prefix="/admin/api")
     with TestClient(test_app, raise_server_exceptions=False) as session:
-        yield session, database
-    database.close()
-    SiteBranding.bind(original_database)
+        yield session, db_fresh
 
 
 def image_bytes(size=(640, 320), image_format="PNG"):
@@ -73,11 +69,10 @@ def test_defaults_and_text_override_persist_across_connections(branding_client):
     )
     assert response.status_code == 200
     expected.update(site_name="Example Hub", footer_description="Custom footer")
+    # Close and reopen the file: the saved configuration is on disk, not in memory.
     database.close()
     database.connect()
-    restarted_database = SqliteDatabase(database.database)
-    with SiteBranding.bind_ctx(restarted_database), restarted_database.connection_context():
-        assert site_branding.get_branding() == expected
+    assert site_branding.get_branding() == expected
     assert session.get(PUBLIC_URL).json() == expected
     assert session.get(ADMIN_URL, headers=HEADERS).json() == expected
     assert SiteBranding.select().count() == 1
@@ -352,6 +347,8 @@ def test_image_limits_and_unknown_asset_kinds(branding_client):
 def test_public_database_failure_defaults_are_marked_but_admin_failure_visible(
     branding_client, monkeypatch
 ):
+    # Deliberate outage: the request runs on a worker thread, where a rolled-back
+    # DROP TABLE would not be visible, so the failing read is injected here.
     session, _ = branding_client
 
     def unavailable(*args, **kwargs):
