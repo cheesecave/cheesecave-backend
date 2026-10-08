@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from kohakuhub.db import DailyRepoStats, FallbackSource, Repository, User, UserOrganization
+from kohakuhub.db import DailyRepoStats, File, FallbackSource, Repository, User, UserOrganization
 
 
 def make_user(username="owner", **overrides):
@@ -48,6 +48,20 @@ def make_repo(owner, name, repo_type="model", private=False, **overrides):
     }
     values.update(overrides)
     return Repository.create(**values)
+
+
+def make_file(repo, path, sha256, size=0, lfs=False, **overrides):
+    """A file row of ``repo`` at ``path``, owned by the repository's owner."""
+    values = {
+        "repository": repo,
+        "owner_id": repo.owner_id,
+        "path_in_repo": path,
+        "sha256": sha256,
+        "size": size,
+        "lfs": lfs,
+    }
+    values.update(overrides)
+    return File.create(**values)
 
 
 def make_daily_stats(repo, date, download_sessions=0, **overrides):
