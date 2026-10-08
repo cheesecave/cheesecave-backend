@@ -23,9 +23,10 @@ from urllib.parse import unquote, urlparse
 
 from peewee import PostgresqlDatabase, SqliteDatabase
 
-from kohakuhub.db import DailyRepoStats, Repository, User
+from kohakuhub.db import BaseModel
 
-MODELS = [User, Repository, DailyRepoStats]
+# Every table model, so one scope can serve any test. create_tables orders them by foreign key.
+MODELS = [model for model in BaseModel.__subclasses__()]
 
 
 class _Rollback(Exception):
@@ -64,6 +65,19 @@ def fresh_database(database, models=MODELS, schema=None):
             database.drop_tables(models, safe=True)
             if schema:
                 database.execute_sql(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+
+
+def clear_tables(database, models=MODELS):
+    """Empty every table in ``models`` and reset identity sequences.
+
+    Postgres uses one TRUNCATE (fast); SQLite deletes table by table in reverse dependency order.
+    """
+    if isinstance(database, PostgresqlDatabase):
+        names = ", ".join(f'"{model._meta.table_name}"' for model in models)
+        database.execute_sql(f"TRUNCATE {names} RESTART IDENTITY CASCADE")
+        return
+    for model in reversed(models):
+        model.delete().execute()
 
 
 @contextmanager

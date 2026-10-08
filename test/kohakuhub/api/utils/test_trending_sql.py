@@ -11,34 +11,24 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
-from peewee import SqliteDatabase
 
 import kohakuhub.api.utils.trending as trending
 from kohakuhub.db import DailyRepoStats, Repository, User
-
-MODELS = [User, Repository, DailyRepoStats]
 REPOSITORY_ROW_READ = re.compile(r'FROM "repository" AS')
 
 
 @pytest.fixture
-def db(tmp_path, monkeypatch):
-    database = SqliteDatabase(str(tmp_path / "trending.db"), pragmas={"foreign_keys": 1})
-    # bind_ctx restores each model's previous database on exit, so other test modules
-    # keep the database they were bound to.
-    with database.bind_ctx(MODELS):
-        database.create_tables(MODELS)
-        statements: list[str] = []
-        real_execute = database.execute_sql
+def db(db_scope, monkeypatch):
+    """The shared scope, with every statement recorded so tests can count repository reads."""
+    statements: list[str] = []
+    real_execute = db_scope.execute_sql
 
-        def counting_execute(sql, params=None, commit=None):
-            statements.append(sql)
-            return real_execute(sql, params)
+    def counting_execute(sql, params=None, commit=None):
+        statements.append(sql)
+        return real_execute(sql, params)
 
-        monkeypatch.setattr(database, "execute_sql", counting_execute)
-        try:
-            yield SimpleNamespace(database=database, statements=statements)
-        finally:
-            database.close()
+    monkeypatch.setattr(db_scope, "execute_sql", counting_execute)
+    return SimpleNamespace(database=db_scope, statements=statements)
 
 
 def _repo(name, private=False):

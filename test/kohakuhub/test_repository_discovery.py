@@ -10,7 +10,6 @@ from unittest.mock import AsyncMock
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 import httpx
-from peewee import SqliteDatabase
 import pytest
 
 from kohakuhub import repository_discovery as discovery
@@ -26,6 +25,7 @@ from kohakuhub.db import (
     UserOrganization,
     utcnow,
 )
+from test.kohakuhub.support import db as db_support
 
 MODELS = [
     User,
@@ -39,11 +39,9 @@ MODELS = [
 
 
 @pytest.fixture
-def catalog(tmp_path, monkeypatch):
-    database = SqliteDatabase(str(tmp_path / "catalog.db"), pragmas={"foreign_keys": 1})
-    original = {model: model._meta.database for model in MODELS}
-    database.bind(MODELS)
-    database.create_tables(MODELS)
+def catalog(db_committed, monkeypatch):
+    """Endpoint tests run through HTTP on other threads, so rows must be committed."""
+    database = db_committed
     owner = User.create(username="owner", normalized_name="owner", email="owner@example.com")
     outsider = User.create(
         username="outsider", normalized_name="outsider", email="outsider@example.com"
@@ -56,21 +54,16 @@ def catalog(tmp_path, monkeypatch):
     app.dependency_overrides[get_optional_user] = lambda: auth["user"]
     real_schedule = discovery.schedule_indexing
     monkeypatch.setattr(discovery, "schedule_indexing", lambda scope: None)
-    try:
-        with TestClient(app) as session:
-            yield SimpleNamespace(
-                database=database,
-                owner=owner,
-                outsider=outsider,
-                org=org,
-                auth=auth,
-                session=session,
-                real_schedule=real_schedule,
-            )
-    finally:
-        database.close()
-        for model, connection in original.items():
-            model.bind(connection)
+    with TestClient(app) as session:
+        yield SimpleNamespace(
+            database=database,
+            owner=owner,
+            outsider=outsider,
+            org=org,
+            auth=auth,
+            session=session,
+            real_schedule=real_schedule,
+        )
 
 
 def repository(catalog, name, repo_type="model", private=False, namespace="owner", **values):
@@ -87,13 +80,22 @@ def repository(catalog, name, repo_type="model", private=False, namespace="owner
 
 
 def index(repo, **facets):
+    # Portable upsert: on_conflict_replace() is SQLite-only and fails on Postgres.
     RepositoryMetadata.insert(
         repository=repo,
         main_sha="head",
         metadata=json.dumps({"tags": facets.get("tag", [])}),
         state="ready",
         checked_at=utcnow(),
-    ).on_conflict_replace().execute()
+    ).on_conflict(
+        conflict_target=[RepositoryMetadata.repository],
+        update={
+            RepositoryMetadata.main_sha: "head",
+            RepositoryMetadata.metadata: json.dumps({"tags": facets.get("tag", [])}),
+            RepositoryMetadata.state: "ready",
+            RepositoryMetadata.checked_at: utcnow(),
+        },
+    ).execute()
     RepositoryFacet.delete().where(RepositoryFacet.repository == repo).execute()
     for key, values in facets.items():
         for value in values:

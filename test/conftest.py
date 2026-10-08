@@ -232,3 +232,44 @@ async def hf_api_token(owner_client):
     )
     response.raise_for_status()
     return response.json()["token"]
+
+
+# Real-database fixtures for unit tests (see test/kohakuhub/support/db.py and AGENTS.md).
+from test.kohakuhub.support import db as _db  # noqa: E402
+
+
+@pytest.fixture(scope="module")
+def db_module_scope(tmp_path_factory):
+    """One database for the module; tables created once and dropped at module end."""
+    database, schema = _db.make_database(tmp_path_factory.mktemp("module-db"), name="module")
+    with _db.fresh_database(database, _db.MODELS, schema=schema) as scoped:
+        yield scoped
+    database.close()
+
+
+@pytest.fixture
+def db_scope(db_module_scope):
+    """Writes made by one test are rolled back before the next test (same thread only)."""
+    with _db.rolled_back(db_module_scope):
+        yield db_module_scope
+
+
+@pytest.fixture
+def db_committed(db_module_scope):
+    """Shared database whose tables are emptied before each test.
+
+    Rows are really committed, so code running on other threads (HTTP through TestClient)
+    sees them. Cheap on Postgres: one TRUNCATE per test instead of a new schema per test.
+    """
+    _db.clear_tables(db_module_scope)
+    yield db_module_scope
+    _db.clear_tables(db_module_scope)
+
+
+@pytest.fixture
+def db_fresh(tmp_path):
+    """A new database for this test; for code that commits or is driven through HTTP."""
+    database, schema = _db.make_database(tmp_path, name="fresh")
+    with _db.fresh_database(database, _db.MODELS, schema=schema) as scoped:
+        yield scoped
+    database.close()
