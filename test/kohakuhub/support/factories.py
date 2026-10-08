@@ -4,7 +4,15 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from kohakuhub.db import DailyRepoStats, File, FallbackSource, Repository, User, UserOrganization
+from kohakuhub.db import (
+    DailyRepoStats,
+    DownloadSession,
+    File,
+    FallbackSource,
+    Repository,
+    User,
+    UserOrganization,
+)
 
 
 def make_user(username="owner", **overrides):
@@ -76,6 +84,20 @@ def make_daily_stats(repo, date, download_sessions=0, **overrides):
     }
     values.update(overrides)
     return DailyRepoStats.create(**values)
+
+
+def make_download_session(repo, session_id, time_bucket=0, user=None, file_count=1, **overrides):
+    """A download session of ``repo``; ``first_file`` and timestamps can be overridden."""
+    values = {
+        "repository": repo,
+        "user": user,
+        "session_id": session_id,
+        "time_bucket": time_bucket,
+        "file_count": file_count,
+        "first_file": "file.bin",
+    }
+    values.update(overrides)
+    return DownloadSession.create(**values)
 
 
 def make_fallback_source(name="Mirror", **overrides):
