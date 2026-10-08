@@ -8,8 +8,10 @@ from kohakuhub.db import (
     Commit,
     DailyRepoStats,
     DownloadSession,
+    EmailVerification,
     File,
     FallbackSource,
+    Invitation,
     Repository,
     Session,
     Token,
@@ -151,3 +153,26 @@ def make_token(user, token_hash, name="cli", **overrides):
     values = {"user": user, "token_hash": token_hash, "name": name}
     values.update(overrides)
     return Token.create(**values)
+
+
+def make_invitation(token, action="register_account", parameters="{}", expires_at=None, **overrides):
+    """An invitation, one-time and valid for a day unless ``expires_at`` is given."""
+    values = {
+        "token": token,
+        "action": action,
+        "parameters": parameters,
+        "expires_at": expires_at or datetime.now(timezone.utc) + timedelta(days=1),
+    }
+    values.update(overrides)
+    return Invitation.create(**values)
+
+
+def make_email_verification(user, token, expires_at=None, **overrides):
+    """An email verification of ``user``, valid for 24 hours unless ``expires_at`` is given."""
+    values = {
+        "user": user,
+        "token": token,
+        "expires_at": expires_at or datetime.now(timezone.utc) + timedelta(hours=24),
+    }
+    values.update(overrides)
+    return EmailVerification.create(**values)
