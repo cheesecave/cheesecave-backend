@@ -2,11 +2,24 @@
 
 from __future__ import annotations
 
+import os
+
 import pytest
 from peewee import SqliteDatabase
 
 from kohakuhub.db import Repository, User
 from test.kohakuhub.support import db as dbsupport
+
+
+@pytest.fixture(params=["sqlite", "postgres"])
+def backend(request, monkeypatch):
+    """Run the test on each engine. Postgres needs a configured server (services category)."""
+    if request.param == "postgres":
+        url = os.environ.get("KOHAKU_HUB_DATABASE_URL", "")
+        if not url.startswith("postgresql"):
+            pytest.skip("no Postgres configured in KOHAKU_HUB_DATABASE_URL")
+    monkeypatch.setenv("KOHAKU_HUB_DB_BACKEND", request.param)
+    return request.param
 
 
 def test_sqlite_database_is_used_when_the_backend_is_not_postgres(tmp_path, monkeypatch):
@@ -32,8 +45,7 @@ def test_postgres_database_gets_a_schema_per_scope(tmp_path, monkeypatch):
     second.close()
 
 
-def test_fresh_scope_binds_models_and_restores_previous_bindings(tmp_path, monkeypatch):
-    monkeypatch.setenv("KOHAKU_HUB_DB_BACKEND", "sqlite")
+def test_fresh_scope_binds_models_and_restores_previous_bindings(tmp_path, backend):
     before = {m: m._meta.database for m in dbsupport.MODELS}
     database, schema = dbsupport.make_database(tmp_path, name="fresh")
     with dbsupport.fresh_database(database, dbsupport.MODELS, schema=schema):
@@ -43,8 +55,7 @@ def test_fresh_scope_binds_models_and_restores_previous_bindings(tmp_path, monke
     assert all(m._meta.database is before[m] for m in dbsupport.MODELS)
 
 
-def test_fresh_scope_drops_its_tables_on_exit(tmp_path, monkeypatch):
-    monkeypatch.setenv("KOHAKU_HUB_DB_BACKEND", "sqlite")
+def test_fresh_scope_drops_its_tables_on_exit(tmp_path, backend):
     database, schema = dbsupport.make_database(tmp_path, name="drop")
     with dbsupport.fresh_database(database, dbsupport.MODELS, schema=schema):
         assert database.table_exists("user")
@@ -52,8 +63,7 @@ def test_fresh_scope_drops_its_tables_on_exit(tmp_path, monkeypatch):
     database.close()
 
 
-def test_rolled_back_scope_discards_writes_but_keeps_the_schema(tmp_path, monkeypatch):
-    monkeypatch.setenv("KOHAKU_HUB_DB_BACKEND", "sqlite")
+def test_rolled_back_scope_discards_writes_but_keeps_the_schema(tmp_path, backend):
     database, schema = dbsupport.make_database(tmp_path, name="rb")
     with dbsupport.fresh_database(database, dbsupport.MODELS, schema=schema):
         with dbsupport.rolled_back(database):
@@ -65,8 +75,7 @@ def test_rolled_back_scope_discards_writes_but_keeps_the_schema(tmp_path, monkey
     database.close()
 
 
-def test_rolled_back_scope_propagates_errors_from_the_test_body(tmp_path, monkeypatch):
-    monkeypatch.setenv("KOHAKU_HUB_DB_BACKEND", "sqlite")
+def test_rolled_back_scope_propagates_errors_from_the_test_body(tmp_path, backend):
     database, schema = dbsupport.make_database(tmp_path, name="err")
     with dbsupport.fresh_database(database, dbsupport.MODELS, schema=schema):
         with pytest.raises(ZeroDivisionError):
@@ -77,10 +86,9 @@ def test_rolled_back_scope_propagates_errors_from_the_test_body(tmp_path, monkey
     database.close()
 
 
-def test_factories_create_rows_with_defaults_and_overrides(tmp_path, monkeypatch):
+def test_factories_create_rows_with_defaults_and_overrides(tmp_path, backend):
     from test.kohakuhub.support import factories
 
-    monkeypatch.setenv("KOHAKU_HUB_DB_BACKEND", "sqlite")
     database, schema = dbsupport.make_database(tmp_path, name="fac")
     with dbsupport.fresh_database(database, dbsupport.MODELS, schema=schema):
         owner = factories.make_user("alice")
@@ -92,12 +100,11 @@ def test_factories_create_rows_with_defaults_and_overrides(tmp_path, monkeypatch
     database.close()
 
 
-def test_daily_stats_factory_defaults_to_no_downloads_and_accepts_overrides(tmp_path, monkeypatch):
+def test_daily_stats_factory_defaults_to_no_downloads_and_accepts_overrides(tmp_path, backend):
     from datetime import date
 
     from test.kohakuhub.support import factories
 
-    monkeypatch.setenv("KOHAKU_HUB_DB_BACKEND", "sqlite")
     database, schema = dbsupport.make_database(tmp_path, name="stats")
     with dbsupport.fresh_database(database, dbsupport.MODELS, schema=schema):
         repo = factories.make_repo(factories.make_user("bob"), "m")
