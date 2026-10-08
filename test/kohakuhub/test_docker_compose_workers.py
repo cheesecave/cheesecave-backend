@@ -1,5 +1,6 @@
 """Worker replicas and independent CheeseCave release images."""
 
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -105,3 +106,15 @@ def test_publish_workflow_pushes_only_outside_pull_requests():
     for step in job["steps"]:
         ref = step.get("uses", "")
         assert "@" not in ref or len(ref.split("@")[1].split()[0]) == 40
+
+
+@pytest.mark.skipif(not hasattr(os, "getuid"), reason="POSIX ownership")
+def test_generated_config_precreates_user_owned_data_dirs(tmp_path):
+    output = tmp_path / ".env"
+    command = [sys.executable, str(ROOT / "scripts/generate_docker_compose.py"),
+               "--generate-config", "--output", str(output)]
+    assert subprocess.run(command, capture_output=True).returncode == 0
+    generated = output.read_text(encoding="utf-8")
+    assert f"\nUID={os.getuid()}\n" in generated and f"\nGID={os.getgid()}\n" in generated
+    for name in ("lakefs-data", "lakefs-cache", "valkey-data"):
+        assert (tmp_path / "hub-meta" / name).stat().st_uid == os.getuid()
