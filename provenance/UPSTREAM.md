@@ -34,9 +34,10 @@ original working repository has not been archived.
 ## Licenses, attribution and compatibility
 
 Original root LICENSE and LICENSING.md texts are unchanged. Core code retains
-AGPL-3.0. Backend Dataset Viewer retains its separate original license at
-`src/kohakuhub/datasetviewer/LICENSE`. Rebranding and splitting do not replace
-those terms or original copyright/author notices. See `README.upstream.md` and
+AGPL-3.0. The backend Dataset Viewer, which retained its separate original
+license at `src/kohakuhub/datasetviewer/LICENSE`, was removed on 2026-10-08; its
+license text and history remain in the git history. Rebranding and splitting do
+not replace those terms or original copyright/author notices. See `README.upstream.md` and
 `CHANGELOG.upstream.md` for original project information.
 
 Python imports, KOHAKU_HUB variables, API/protocol identities, database migrations

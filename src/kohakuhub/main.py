@@ -50,10 +50,6 @@ from kohakuhub.api.xet.routers import cas as xet_cas
 from kohakuhub.api.xet.routers import xet as xet_token
 from kohakuhub.api import not_implemented as not_implemented_router
 
-# Conditional import for Dataset Viewer
-if not cfg.app.disable_dataset_viewer:
-    from kohakuhub.datasetviewer import router as dataset_viewer
-
 logger = get_logger("MAIN")
 
 
@@ -222,13 +218,6 @@ app.include_router(ssh_keys.router, tags=["ssh-keys"])
 app.include_router(validation.router, tags=["validation"])
 app.include_router(xet_token.router, prefix=cfg.app.api_base, tags=["xet"])
 app.include_router(xet_cas.router, tags=["xet-cas"])
-
-# Conditional: Dataset Viewer (Kohaku License)
-if not cfg.app.disable_dataset_viewer:
-    app.include_router(dataset_viewer.router, prefix=cfg.app.api_base)
-    logger.info("Dataset Viewer enabled (Kohaku Software License 1.0)")
-else:
-    logger.info("Dataset Viewer disabled (AGPL-3 only build)")
 
 # Registered last so catch-all 501 routes for won't-support features
 # (discussions, space runtime, collections, webhooks) never shadow the

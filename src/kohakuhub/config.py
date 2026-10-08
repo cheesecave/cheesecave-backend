@@ -140,8 +140,6 @@ class AppConfig(BaseModel):
     internal_base_url: str | None = None
     api_base: str = "/api"
     db_backend: str = "sqlite"
-    # Optional features
-    disable_dataset_viewer: bool = False
     # Repository history operations (#99); each can be switched off. They
     # are only available with db_backend = "postgres", and Reset only with
     # a LakeFS it works with (kohakuhub.lakefs_compat).
@@ -518,10 +516,6 @@ def load_config(path: str = None) -> Config:
         app_env["internal_base_url"] = os.environ["KOHAKU_HUB_INTERNAL_BASE_URL"]
     if "KOHAKU_HUB_API_BASE" in os.environ:
         app_env["api_base"] = os.environ["KOHAKU_HUB_API_BASE"]
-    if "KOHAKU_HUB_DISABLE_DATASET_VIEWER" in os.environ:
-        app_env["disable_dataset_viewer"] = (
-            os.environ["KOHAKU_HUB_DISABLE_DATASET_VIEWER"].lower() == "true"
-        )
     if "KOHAKU_HUB_REPOSITORY_REVERT_ENABLED" in os.environ:
         app_env["repository_revert_enabled"] = (
             os.environ["KOHAKU_HUB_REPOSITORY_REVERT_ENABLED"].lower() == "true"
