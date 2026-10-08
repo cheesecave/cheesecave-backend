@@ -8,9 +8,8 @@ import pytest
 
 from kohakuhub import tasks
 from kohakuhub.config import cfg
-from peewee import SqliteDatabase
 
-from kohakuhub.db import BackgroundTask, BackgroundTaskEvent, BackgroundTaskLog, db
+from kohakuhub.db import BackgroundTask, BackgroundTaskEvent, BackgroundTaskLog
 from kohakuhub.task_testing import RecordingContext, run_with_interruptions
 
 WORKER = "worker-a"
@@ -18,10 +17,9 @@ LEASE = 60
 
 
 @pytest.fixture(autouse=True)
-def clean_tasks(prepared_backend_test_state):
-    BackgroundTask.delete().execute()
-    yield
-    BackgroundTask.delete().execute()
+def clean_tasks(db_committed):
+    """Real rows, committed so the claim threads see them; every table is emptied per test."""
+    yield db_committed
 
 
 @pytest.fixture
@@ -105,11 +103,11 @@ def test_enqueue_rejects_unknown_kind(registry):
         tasks.enqueue("test.unknown")
 
 
-def test_enqueue_rolls_back_with_caller_transaction(registry):
+def test_enqueue_rolls_back_with_caller_transaction(registry, db_committed):
     _register("test.tx")
 
     with pytest.raises(RuntimeError):
-        with db.atomic():
+        with db_committed.atomic():
             tasks.enqueue("test.tx")
             raise RuntimeError("business write failed")
 
@@ -227,7 +225,7 @@ def test_claim_backs_off_when_race_is_lost(registry, monkeypatch):
     assert tasks.claim_next(WORKER, lease_seconds=LEASE) is None
 
 
-def test_concurrent_claims_never_share_a_task(registry):
+def test_concurrent_claims_never_share_a_task(registry, db_committed):
     _register("test.concurrent")
     for _ in range(20):
         tasks.enqueue("test.concurrent")
@@ -242,7 +240,7 @@ def test_concurrent_claims_never_share_a_task(registry):
                 with lock:
                     claimed.append(row.id)
         finally:
-            db.close()
+            db_committed.close()
 
     threads = [threading.Thread(target=claim_all, args=(f"w{i}",)) for i in range(4)]
     for thread in threads:
@@ -450,44 +448,39 @@ async def test_cleanup_task_survives_interruptions(registry, monkeypatch):
     assert points == 6  # three batches, two points per progress report
 
 
-def test_queue_lifecycle_on_sqlite(registry, tmp_path):
+def test_queue_lifecycle_on_sqlite(registry, db_fresh):
     """SQLite has no SKIP LOCKED; the compare-and-set claim still works."""
     _register("test.sqlite")
     _register("test.sqlite-periodic", every=timedelta(minutes=1))
-    sqlite_db = SqliteDatabase(str(tmp_path / "tasks.db"), pragmas={"foreign_keys": 1})
-    models = [BackgroundTask, BackgroundTaskEvent, BackgroundTaskLog]
-    with sqlite_db.bind_ctx(models):
-        sqlite_db.create_tables(models)
-        task_id = tasks.enqueue("test.sqlite", {"n": 1}, dedupe_key="k")
-        assert tasks.enqueue("test.sqlite", dedupe_key="k") is None
-        tasks.ensure_periodic_tasks()
+    task_id = tasks.enqueue("test.sqlite", {"n": 1}, dedupe_key="k")
+    assert tasks.enqueue("test.sqlite", dedupe_key="k") is None
+    tasks.ensure_periodic_tasks()
 
-        first = tasks.claim_next(WORKER, lease_seconds=LEASE)
-        second = tasks.claim_next(WORKER, lease_seconds=LEASE)
-        assert {first.kind, second.kind} == {"test.sqlite", "test.sqlite-periodic"}
-        assert tasks.claim_next(WORKER, lease_seconds=LEASE) is None
-        tasks.assert_owned(first)  # no row lock on SQLite; the fence check still applies
-        assert tasks.complete_task(first) is True
-        with pytest.raises(tasks.LeaseLost):
-            tasks.assert_owned(first)
-        assert tasks.fail_task(second, "boom") == tasks.QUEUED
-        assert BackgroundTask.get_by_id(task_id).dedupe_key is None
-        # The periodic kind left exactly one next occurrence behind.
-        assert (
-            BackgroundTask.select()
-            .where(BackgroundTask.dedupe_key == tasks.periodic_key("test.sqlite-periodic"))
-            .count()
-            == 1
-        )
-        assert [
-            e.type
-            for e in BackgroundTaskEvent.select()
-            .where(BackgroundTaskEvent.task == task_id)
-            .order_by(BackgroundTaskEvent.id)
-        ][:2] == ["created", "claimed"]
-        sqlite_db.execute_sql("DELETE FROM background_task")
-        assert BackgroundTaskEvent.select().count() == 0  # cascades on SQLite too
-    sqlite_db.close()
+    first = tasks.claim_next(WORKER, lease_seconds=LEASE)
+    second = tasks.claim_next(WORKER, lease_seconds=LEASE)
+    assert {first.kind, second.kind} == {"test.sqlite", "test.sqlite-periodic"}
+    assert tasks.claim_next(WORKER, lease_seconds=LEASE) is None
+    tasks.assert_owned(first)  # no row lock on SQLite; the fence check still applies
+    assert tasks.complete_task(first) is True
+    with pytest.raises(tasks.LeaseLost):
+        tasks.assert_owned(first)
+    assert tasks.fail_task(second, "boom") == tasks.QUEUED
+    assert BackgroundTask.get_by_id(task_id).dedupe_key is None
+    # The periodic kind left exactly one next occurrence behind.
+    assert (
+        BackgroundTask.select()
+        .where(BackgroundTask.dedupe_key == tasks.periodic_key("test.sqlite-periodic"))
+        .count()
+        == 1
+    )
+    assert [
+        e.type
+        for e in BackgroundTaskEvent.select()
+        .where(BackgroundTaskEvent.task == task_id)
+        .order_by(BackgroundTaskEvent.id)
+    ][:2] == ["created", "claimed"]
+    db_fresh.execute_sql("DELETE FROM background_task")
+    assert BackgroundTaskEvent.select().count() == 0  # cascades on SQLite too
 
 
 def test_enqueue_normalizes_aware_run_after_to_naive_utc(registry):
