@@ -6,6 +6,7 @@ are ordinary Compose override files; no frontend bundles are mounted here.
 """
 
 import argparse
+import os
 from pathlib import Path
 import secrets
 
@@ -30,6 +31,12 @@ def main():
             )
         for field in ("POSTGRES_PASSWORD", "MINIO_ROOT_PASSWORD", "LAKEFS_AUTH_ENCRYPT_SECRET_KEY"):
             text = text.replace(f"{field}=CHANGE_ME", f"{field}={secrets.token_hex(24)}")
+        if hasattr(os, "getuid"):
+            # LakeFS and Valkey run as UID:GID; Docker would create their mounts as root.
+            text = text.replace("\nUID=1000\n", f"\nUID={os.getuid()}\n")
+            text = text.replace("\nGID=1000\n", f"\nGID={os.getgid()}\n")
+            for name in ("lakefs-data", "lakefs-cache", "valkey-data"):
+                (output.parent / "hub-meta" / name).mkdir(parents=True, exist_ok=True)
     else:
         text = (ROOT / "compose.yml").read_text(encoding="utf-8")
     output.write_text(text, encoding="utf-8")

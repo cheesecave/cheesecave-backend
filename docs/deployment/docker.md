@@ -9,7 +9,7 @@ the release deployment.
 
 ```sh
 python scripts/generate_docker_compose.py --generate-config
-# Edit the ignored .env: public URLs, three image references, secrets and UID/GID.
+# Edit the ignored .env: public URLs, secrets and UID/GID.
 docker compose config
 ```
 
@@ -19,10 +19,11 @@ former interactive monorepo generator and root pnpm deployment workflow are
 retired. `scripts/deploy.py` prints the native Compose commands only.
 
 `CHEESECAVE_BACKEND_IMAGE`, `CHEESECAVE_WEB_IMAGE`, and `CHEESECAVE_ADMIN_IMAGE`
-accept full image references, including `registry/name@sha256:digest`. Their
-`:local` defaults are for the source-build overlay; no published CheeseCave
-image is assumed. For an image-only installation, set references to images
-you have built and published, then run:
+accept full image references, including `registry/name@sha256:digest`. Unset,
+they default to `ghcr.io/cheesecave/cheesecave-{backend,web,admin}:${CHEESECAVE_VERSION:-latest}`,
+published by each repository's "Publish image" workflow (`latest` and `sha-*` from
+`main`, semver tags from `v*` tags). The source-build overlay (`compose.build.yml`)
+tags `cheesecave-*:local` instead. To run the published images:
 
 ```sh
 docker compose pull

@@ -43,6 +43,21 @@ make test-backend RANGE_DIR=api/repo/routers
 参阅 [本地开发说明](docs/development/local-dev.md)。继承的 GitHub Actions 和 Codecov
 配置已在拆分前移除，本地测试和构建命令仍可使用。
 
+## 快速开始：直接运行已发布的镜像
+
+无需构建，也不需要其他两个仓库；Compose 会拉取
+`ghcr.io/cheesecave/cheesecave-{backend,web,admin}`。
+
+```sh
+git clone https://github.com/cheesecave/cheesecave-backend.git
+cd cheesecave-backend
+python scripts/generate_docker_compose.py --generate-config   # 生成带随机凭据的 .env
+docker compose up -d
+```
+
+访问 `http://127.0.0.1:28080`（管理后台在 `/admin/`）。在 `.env` 设置
+`CHEESECAVE_VERSION` 可固定版本，默认为 `latest`。
+
 ## 从源码部署整个项目
 
 将三个仓库放在同一父目录中：
@@ -58,7 +73,7 @@ CheeseCave/
 
 ```sh
 python scripts/generate_docker_compose.py --generate-config
-# 编辑生成的 .env：外部地址、凭据、UID/GID 及镜像引用。
+# 编辑生成的 .env：外部地址、凭据及 UID/GID。
 docker compose -f compose.yml -f compose.build.yml config
 docker compose -f compose.yml -f compose.build.yml up -d --build
 ```
@@ -67,9 +82,8 @@ docker compose -f compose.yml -f compose.build.yml up -d --build
 [部署说明](docs/deployment/docker.md)。默认网关端口为 `28080`，主站位于 `/`，
 管理后台位于 `/admin/`。API 与 worker 必须使用同一后端镜像。
 
-也可以仅使用已构建的镜像，在 `.env` 分别设置 `CHEESECAVE_BACKEND_IMAGE`、
-`CHEESECAVE_WEB_IMAGE` 和 `CHEESECAVE_ADMIN_IMAGE` 后运行 `docker compose up -d`。
-默认 `:local` 镜像引用用于源码构建，并不表示已有公开镜像发布。
+如需使用其他镜像，可在 `.env` 分别设置 `CHEESECAVE_BACKEND_IMAGE`、
+`CHEESECAVE_WEB_IMAGE` 和 `CHEESECAVE_ADMIN_IMAGE`；未设置时，源码构建叠加文件会标记为 `cheesecave-*:local`。
 
 ## 独立更新与兼容性
 

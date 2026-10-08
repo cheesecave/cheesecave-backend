@@ -1,5 +1,6 @@
 """Worker replicas and independent CheeseCave release images."""
 
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -62,6 +63,58 @@ def test_generator_creates_local_secrets_without_overwriting(tmp_path):
     assert subprocess.run(command, capture_output=True).returncode == 0
     generated = output.read_text(encoding="utf-8")
     assert "=CHANGE_ME" not in generated
-    assert "CHEESECAVE_BACKEND_IMAGE=cheesecave-backend:local" in generated
+    assert "\nCHEESECAVE_BACKEND_IMAGE=" not in generated
     assert subprocess.run(command, capture_output=True).returncode != 0
     assert output.read_text(encoding="utf-8") == generated
+
+
+GHCR = "ghcr.io/cheesecave/cheesecave-{}:${{CHEESECAVE_VERSION:-latest}}"
+
+
+@pytest.mark.parametrize("source", ["compose.yml", "docker-compose.example.yml"])
+def test_default_images_are_pulled_from_ghcr(source):
+    services = yaml.safe_load((ROOT / source).read_text(encoding="utf-8"))["services"]
+    for service, name in [("hub-api", "backend"), ("khub-worker", "backend"),
+                          ("hub-web", "web"), ("hub-admin", "admin")]:
+        image = services[service]["image"]
+        var = f"CHEESECAVE_{name.upper()}_IMAGE"
+        assert image == "${" + var + ":-" + GHCR.format(name) + "}"
+        assert "build" not in services[service]
+
+
+def test_source_build_overlay_tags_local_images():
+    services = yaml.safe_load((ROOT / "compose.build.yml").read_text(encoding="utf-8"))["services"]
+    assert services["hub-api"]["image"] == services["khub-worker"]["image"]
+    for service, name in [("hub-api", "backend"), ("hub-web", "web"), ("hub-admin", "admin")]:
+        assert services[service]["image"].endswith(f":-cheesecave-{name}:local}}")
+
+
+def test_env_example_pulls_by_default():
+    env = (ROOT / ".env.compose.example").read_text(encoding="utf-8")
+    assert "\nCHEESECAVE_BACKEND_IMAGE=" not in env
+    assert "# CHEESECAVE_VERSION=" in env
+
+
+def test_publish_workflow_pushes_only_outside_pull_requests():
+    text = (ROOT / ".github/workflows/publish-image.yml").read_text(encoding="utf-8")
+    workflow = yaml.safe_load(text)
+    job = workflow["jobs"]["image"]
+    assert job["permissions"]["packages"] == "write"
+    assert workflow["permissions"] == {"contents": "read"}
+    assert job["env"]["IMAGE"] == "ghcr.io/cheesecave/cheesecave-backend"
+    assert "push: ${{ github.event_name != 'pull_request' }}" in text
+    for step in job["steps"]:
+        ref = step.get("uses", "")
+        assert "@" not in ref or len(ref.split("@")[1].split()[0]) == 40
+
+
+@pytest.mark.skipif(not hasattr(os, "getuid"), reason="POSIX ownership")
+def test_generated_config_precreates_user_owned_data_dirs(tmp_path):
+    output = tmp_path / ".env"
+    command = [sys.executable, str(ROOT / "scripts/generate_docker_compose.py"),
+               "--generate-config", "--output", str(output)]
+    assert subprocess.run(command, capture_output=True).returncode == 0
+    generated = output.read_text(encoding="utf-8")
+    assert f"\nUID={os.getuid()}\n" in generated and f"\nGID={os.getgid()}\n" in generated
+    for name in ("lakefs-data", "lakefs-cache", "valkey-data"):
+        assert (tmp_path / "hub-meta" / name).stat().st_uid == os.getuid()
