@@ -1,10 +1,14 @@
-"""Frozen discovery DDL matches Peewee on both databases and retains existing rows."""
+"""Frozen discovery DDL matches Peewee on both databases and retains existing rows.
+
+Each test starts from an emptied ``db_fresh`` database: 029 is checked against the
+tables before it (built here as raw DDL), so no model table may already exist.
+"""
 
 import importlib.util
 from pathlib import Path
-from uuid import uuid4
+from types import SimpleNamespace
 
-from peewee import PostgresqlDatabase, SqliteDatabase
+from peewee import SqliteDatabase
 import pytest
 
 from kohakuhub.db import (
@@ -15,52 +19,49 @@ from kohakuhub.db import (
     SiteBranding,
     SiteHomepage,
     User,
-    db,
 )
+from test.kohakuhub.support.db import MODELS as ALL_MODELS
 
 
-@pytest.fixture(params=["sqlite", pytest.param("postgres", marks=pytest.mark.integration)])
-def migration(request, tmp_path, monkeypatch):
+def _empty(database):
+    """Drop every model table: migration history starts from no tables at all."""
+    database.drop_tables(ALL_MODELS, safe=True)
+
+
+def _bind(monkeypatch, database, *modules):
+    """Point the migration modules at the test's database and its backend."""
+    backend = "sqlite" if isinstance(database, SqliteDatabase) else "postgres"
+    for module in modules:
+        monkeypatch.setattr(module, "db", database)
+        monkeypatch.setattr(
+            module, "cfg", SimpleNamespace(app=SimpleNamespace(db_backend=backend))
+        )
+    return database
+
+
+@pytest.fixture
+def empty_db(db_fresh):
+    """A new database for this test, with no tables (see ``_empty``)."""
+    _empty(db_fresh)
+    return db_fresh
+
+
+@pytest.fixture
+def migration(empty_db, monkeypatch):
     path = Path(__file__).resolve().parents[2] / "scripts/db_migrations/029_repository_discovery.py"
     spec = importlib.util.spec_from_file_location("discovery_migration", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    schema = "discovery_upgrade_" + uuid4().hex
-    connection = (
-        SqliteDatabase(str(tmp_path / "upgrade.db"), pragmas={"foreign_keys": 1})
-        if request.param == "sqlite"
-        else PostgresqlDatabase(db.database, **db.connect_params)
+    connection = _bind(monkeypatch, empty_db, module)
+    connection.create_tables([User, Repository, SiteBranding, SiteHomepage, SiteAppearance])
+    connection.execute_sql('CREATE TABLE "lfs_gc_state" ("id" INTEGER PRIMARY KEY)')
+    connection.execute_sql('CREATE TABLE "repository_write" ("id" INTEGER PRIMARY KEY)')
+    connection.execute_sql('CREATE TABLE "path_commit" ("id" INTEGER PRIMARY KEY)')
+    user = User.create(username="keep", normalized_name="keep", email="keep@example.com")
+    repo = Repository.create(
+        repo_type="model", namespace="keep", name="repo", full_id="keep/repo", owner=user
     )
-    connection.connect()
-    if request.param == "postgres":
-        connection.execute_sql(f'CREATE SCHEMA "{schema}"')
-        connection.execute_sql(f'SET search_path TO "{schema}"')
-    monkeypatch.setattr(module, "db", connection)
-    monkeypatch.setattr(module.cfg.app, "db_backend", request.param)
-    models = [
-        User,
-        Repository,
-        RepositoryMetadata,
-        RepositoryFacet,
-        SiteBranding,
-        SiteHomepage,
-        SiteAppearance,
-    ]
-    try:
-        with connection.bind_ctx(models):
-            connection.create_tables([User, Repository, SiteBranding, SiteHomepage, SiteAppearance])
-            connection.execute_sql('CREATE TABLE "lfs_gc_state" ("id" INTEGER PRIMARY KEY)')
-            connection.execute_sql('CREATE TABLE "repository_write" ("id" INTEGER PRIMARY KEY)')
-            connection.execute_sql('CREATE TABLE "path_commit" ("id" INTEGER PRIMARY KEY)')
-            user = User.create(username="keep", normalized_name="keep", email="keep@example.com")
-            repo = Repository.create(
-                repo_type="model", namespace="keep", name="repo", full_id="keep/repo", owner=user
-            )
-            yield module, connection, repo
-    finally:
-        if request.param == "postgres":
-            connection.execute_sql(f'DROP SCHEMA "{schema}" CASCADE')
-        connection.close()
+    yield module, connection, repo
 
 
 def signature(database):
