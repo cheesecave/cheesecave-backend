@@ -225,7 +225,9 @@ def test_background_task_migrations_report_failure(empty_db, monkeypatch, loader
     def explode():
         raise RuntimeError("disk full")
 
+    # run() picks the backend from cfg, which _bind sets to the database under test
     monkeypatch.setattr(migration, "migrate_sqlite", explode)
+    monkeypatch.setattr(migration, "migrate_postgres", explode)
 
     assert migration.run() is False
 
