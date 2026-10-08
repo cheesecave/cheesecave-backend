@@ -1,5 +1,7 @@
 # KohakuBoard - Experiment Tracking System
 
+> **CheeseCave status (2026-10-08):** this page describes an upstream component that is not part of CheeseCave. It is kept for provenance only; nothing in the CheeseCave repositories is under the Kohaku Software License.
+
 **WandB replacement with better performance and self-hosting**
 
 **License:** Kohaku Software License 1.0 (Non-Commercial with Trial)

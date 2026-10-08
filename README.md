@@ -118,10 +118,10 @@ See [source provenance](provenance/UPSTREAM.md), the
 [original changelog](provenance/CHANGELOG.upstream.md).
 
 [LICENSE](LICENSE) and [LICENSING.md](LICENSING.md) retain their original text.
-The Dataset Viewer backend retains its separate
-[license](src/kohakuhub/datasetviewer/LICENSE). Follow the license applicable to
-each component. Historical monorepo paths in the original licensing guide remain
-as source information; the links above identify the current locations.
+The Dataset Viewer, the only component that carried a separate license, was
+removed on 2026-10-08, so everything in this repository is under AGPL-3.0; see
+[NOTICE.md](NOTICE.md). Historical monorepo paths in the original licensing
+guide remain as source information; the links above identify the current locations.
 
 See [dated notices](NOTICE.md) for attribution and modification notices.
 

@@ -90,6 +90,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     without reading the request body. It used to acknowledge a push while
     dropping the data, and parsing the pack as pkt-lines kept the worker busy.
 
+### Removed
+
+- **Dataset Viewer.** The `kohakuhub.datasetviewer` package, its seven
+  `/dataset-viewer/` routes, the `disable_dataset_viewer` setting (the
+  `KOHAKU_HUB_DISABLE_DATASET_VIEWER` environment variable is now ignored) and
+  the dependencies only it used (`duckdb`, `fsspec`, `aiohttp`) are gone. The
+  component was the only code in the repository under a separate,
+  non-commercial license (Kohaku Software License 1.0), so the repository is
+  AGPL-3.0 throughout, and removing it also reduces the attack surface. The
+  dataset preview tab of the web UI is removed with it (cheesecave-web).
+
 ### Tracked
 
 Planned follow-up work surfaced during the [#77](https://github.com/deepghs/KohakuHub/pull/77) risk review:

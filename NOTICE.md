@@ -9,22 +9,9 @@ CheeseCave modifications dated 2026-10-04 include repository splitting and namin
 
 ## License scope
 
-The Dataset Viewer component at `src/kohakuhub/datasetviewer/` retains its separate Kohaku Software License 1.0.
-See [LICENSING.md](LICENSING.md).
+All code in this repository is under the GNU Affero General Public License version 3; see [LICENSE](LICENSE).
+The Dataset Viewer, which earlier builds carried at `src/kohakuhub/datasetviewer/` under its separate Kohaku Software License 1.0, was removed on 2026-10-08 together with its routes and dependencies; it is no longer part of this repository or of the deployed application. Copies of earlier builds that still contain it remain under the terms they were distributed with, and its license text remains in the git history. [LICENSING.md](LICENSING.md) keeps the original upstream text for provenance.
 
 ## Source and build information
 
 The complete application is assembled from [backend](https://github.com/cheesecave/cheesecave-backend), [website](https://github.com/cheesecave/cheesecave-web) and [Admin](https://github.com/cheesecave/cheesecave-admin). Their README files, lock files, build scripts and Docker/Compose files contain build and installation instructions. The repositories currently remain private; this does not constitute a public source offer to users without repository access. Before serving outside users or distributing builds, provide recipients access to the corresponding deployed source, including the relevant components and build configuration.
-
-## Dataset Viewer required attribution
-
-The following notice is reproduced from the retained component license:
-
-```text
-This Software is licensed under the Kohaku Software License by KohakuBlueLeaf.
-Copyright 2025 KohakuBlueLeaf.
-
-IN NO EVENT SHALL KohakuBlueLeaf BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER
-LIABILITY ARISING FROM THE USE OF THIS SOFTWARE.
-
-```

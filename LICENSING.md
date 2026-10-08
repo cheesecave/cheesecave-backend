@@ -2,6 +2,8 @@
 
 *Last Updated: January 2025*
 
+> **CheeseCave status (2026-10-08):** the Dataset Viewer described below (the backend `src/kohakuhub/datasetviewer/` and the frontend `DatasetViewer` components) has been removed from the CheeseCave repositories. This document is kept as the original upstream text for provenance; its Dataset Viewer sections describe the upstream project and earlier builds only. Everything in the CheeseCave repositories is under AGPL-3.0; see [NOTICE.md](NOTICE.md).
+
 KohakuHub uses a **dual-licensing strategy** to balance open-source principles with sustainable development.
 
 ---

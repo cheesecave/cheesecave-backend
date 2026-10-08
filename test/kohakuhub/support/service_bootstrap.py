@@ -125,7 +125,6 @@ def apply_service_test_env() -> None:
         "KOHAKU_HUB_ADMIN_ENABLED": "true",
         "KOHAKU_HUB_ADMIN_SECRET_TOKEN": ADMIN_TOKEN,
         "KOHAKU_HUB_FALLBACK_ENABLED": "false",
-        "KOHAKU_HUB_DISABLE_DATASET_VIEWER": "true",
         "KOHAKU_HUB_LOG_LEVEL": "ERROR",
         "KOHAKU_HUB_LOG_FORMAT": "terminal",
         "KOHAKU_HUB_LFS_THRESHOLD_BYTES": "1024",

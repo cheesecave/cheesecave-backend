@@ -9,7 +9,6 @@ omit =
     */virtualenv/*
     */src/kohakuhub/old_db.py
     */src/kohakuhub/old_logger.py
-    */src/kohakuhub/datasetviewer/*
 
 [report]
 precision = 2

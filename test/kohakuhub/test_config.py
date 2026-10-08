@@ -155,7 +155,8 @@ def test_load_config_merges_file_and_environment(monkeypatch):
     assert cfg.app.base_url == "http://env-app"
     assert cfg.app.internal_base_url == "http://internal-app"
     assert cfg.app.api_base == "/api/v2"
-    assert cfg.app.disable_dataset_viewer is True
+    # the viewer is gone: a deployment that still sets the old switch must load fine
+    assert not hasattr(cfg.app, "disable_dataset_viewer")
     assert cfg.app.repository_revert_enabled is True
     assert cfg.app.repository_reset_enabled is False
     assert cfg.app.repository_squash_enabled is True

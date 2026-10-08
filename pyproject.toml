@@ -14,16 +14,13 @@ readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
     "aiofiles",
-    "aiohttp",
     "bcrypt",
     "boto3",
     "cachetools",
     "click>=8.0",
     "click-completion",
     "cryptography>=42.0",
-    "duckdb",
     "fastapi",
-    "fsspec",
     "httpx",
     "loguru",
     "numpy",
