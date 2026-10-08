@@ -1,6 +1,7 @@
 [run]
 source = kohakuhub
 omit =
+    */kohakuhub/utils/*
     */test/*
     */tests/*
     */migrations/*
