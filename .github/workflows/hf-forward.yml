@@ -19,6 +19,10 @@ on:
 permissions:
   contents: read
 
+defaults:
+  run:
+    shell: bash  # pipefail, so `pytest | tee` fails the step
+
 concurrency:
   group: hf-forward
   cancel-in-progress: false

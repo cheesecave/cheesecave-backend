@@ -60,3 +60,8 @@ def test_every_action_is_pinned_to_a_commit(workflow):
 def test_no_pull_request_or_push_trigger_exists():
     text = WORKFLOW.read_text(encoding="utf-8")
     assert "pull_request" not in text and "push:" not in text
+
+
+def test_run_steps_fail_when_pytest_fails_through_tee(workflow):
+    # GitHub's default `bash -e` has no pipefail, so `pytest | tee` would hide a failing test run.
+    assert workflow["defaults"]["run"]["shell"] == "bash"
