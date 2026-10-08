@@ -23,24 +23,22 @@ REPOSITORY_ROW_READ = re.compile(r'FROM "repository" AS')
 @pytest.fixture
 def db(tmp_path, monkeypatch):
     database = SqliteDatabase(str(tmp_path / "trending.db"), pragmas={"foreign_keys": 1})
-    original = {model: model._meta.database for model in MODELS}
-    database.bind(MODELS)
-    database.create_tables(MODELS)
-    statements: list[str] = []
-    real_execute = database.execute_sql
+    # bind_ctx restores each model's previous database on exit, so other test modules
+    # keep the database they were bound to.
+    with database.bind_ctx(MODELS):
+        database.create_tables(MODELS)
+        statements: list[str] = []
+        real_execute = database.execute_sql
 
-    def counting_execute(sql, params=None, commit=None):
-        statements.append(sql)
-        return real_execute(sql, params)
+        def counting_execute(sql, params=None, commit=None):
+            statements.append(sql)
+            return real_execute(sql, params)
 
-    monkeypatch.setattr(database, "execute_sql", counting_execute)
-    try:
-        yield SimpleNamespace(database=database, statements=statements)
-    finally:
-        for model, bound in original.items():
-            model._meta.set_database(bound)
-        database.close()
-
+        monkeypatch.setattr(database, "execute_sql", counting_execute)
+        try:
+            yield SimpleNamespace(database=database, statements=statements)
+        finally:
+            database.close()
 
 
 def _repo(name, private=False):
