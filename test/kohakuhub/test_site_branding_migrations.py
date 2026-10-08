@@ -1,4 +1,8 @@
-"""Branding upgrades preserve data and match the model on both supported databases."""
+"""Branding upgrades preserve data and match the model on both supported databases.
+
+Each test starts from an emptied ``db_fresh`` database: 025 checks for the tables before it
+(built here as raw DDL), so no model table may already exist.
+"""
 
 import importlib.util
 import os
@@ -6,13 +10,13 @@ from pathlib import Path
 import subprocess
 import sys
 from types import SimpleNamespace
-from uuid import uuid4
 
-from peewee import PostgresqlDatabase, SqliteDatabase
+from peewee import SqliteDatabase
 import pytest
 
-from kohakuhub.db import SiteBranding, db
+from kohakuhub.db import SiteBranding
 from kohakuhub import db as db_module, site_branding
+from test.kohakuhub.support.db import MODELS as ALL_MODELS
 
 
 MIGRATIONS = Path(__file__).resolve().parents[2] / "scripts" / "db_migrations"
@@ -32,37 +36,34 @@ def load_migration():
     return module
 
 
-@pytest.fixture(params=["sqlite", pytest.param("postgres", marks=pytest.mark.integration)])
-def database(request, tmp_path):
-    if request.param == "sqlite":
-        connection = SqliteDatabase(str(tmp_path / "upgrade.db"))
-        connection.connect()
-        try:
-            yield connection, request.param
-        finally:
-            connection.close()
-        return
+def _empty(database):
+    """Drop every model table: migration history starts from no tables at all."""
+    database.drop_tables(ALL_MODELS, safe=True)
 
-    # Use a separate connection and disposable schema; never drop application tables.
-    connection = PostgresqlDatabase(db.database, **db.connect_params)
-    schema = "branding_upgrade_" + uuid4().hex
-    connection.connect()
-    connection.execute_sql(f'CREATE SCHEMA "{schema}"')
-    connection.execute_sql(f'SET search_path TO "{schema}"')
-    try:
-        yield connection, request.param
-    finally:
-        connection.execute_sql(f'DROP SCHEMA "{schema}" CASCADE')
-        connection.close()
+
+def _bind(monkeypatch, database, *modules):
+    """Point the migration modules at the test's database and its backend."""
+    backend = "sqlite" if isinstance(database, SqliteDatabase) else "postgres"
+    for module in modules:
+        monkeypatch.setattr(module, "db", database)
+        monkeypatch.setattr(
+            module, "cfg", SimpleNamespace(app=SimpleNamespace(db_backend=backend))
+        )
+    return database
 
 
 @pytest.fixture
-def migration(database, monkeypatch):
-    connection, backend = database
+def empty_db(db_fresh):
+    """A new database for this test, with no tables (see ``_empty``)."""
+    _empty(db_fresh)
+    return db_fresh
+
+
+@pytest.fixture
+def migration(empty_db, monkeypatch):
     module = load_migration()
-    monkeypatch.setattr(module, "db", connection)
-    monkeypatch.setattr(module, "cfg", SimpleNamespace(app=SimpleNamespace(db_backend=backend)))
-    return module, connection
+    _bind(monkeypatch, empty_db, module)
+    return module, empty_db
 
 
 def schema_signature(connection):
@@ -162,6 +163,8 @@ def test_incomplete_table_fails_without_discarding_data(migration):
 def test_ddl_failure_is_reported(migration, monkeypatch):
     module, connection = migration
 
+    # Targeted mock on purpose: an outage of the DDL call itself is not reproducible with a
+    # real SQL error that leaves the connection usable, so the failing call is injected here.
     def fail(*args, **kwargs):
         raise RuntimeError("DDL unavailable")
 
@@ -176,6 +179,8 @@ def test_schema_validation_accepts_legacy_peewee_metadata(migration, monkeypatch
         connection.create_tables([SiteBranding])
     get_columns = connection.get_columns
 
+    # Reshape the real metadata into the older peewee column objects (only the five attributes
+    # the validator reads); the rows and types still come from the database.
     def legacy_columns(table, *args, **kwargs):
         return [
             SimpleNamespace(
@@ -193,9 +198,14 @@ def test_schema_validation_accepts_legacy_peewee_metadata(migration, monkeypatch
     assert module.run() is True
 
 
-def test_full_runner_upgrades_previous_schema_and_retries(tmp_path, monkeypatch):
-    path = tmp_path / "previous-release.db"
-    connection = SqliteDatabase(str(path), pragmas={"foreign_keys": 1})
+def test_full_runner_upgrades_previous_schema_and_retries(db_fresh):
+    # The runner subprocess reaches the database through a SQLite URL, so it needs the file
+    # path of db_fresh; a Postgres schema cannot be named that way.
+    if not isinstance(db_fresh, SqliteDatabase):
+        pytest.skip("SQLite file path for the subprocess")
+    _empty(db_fresh)
+    path = Path(db_fresh.database)
+    connection = db_fresh
     models = [
         model
         for model in vars(db_module).values()
