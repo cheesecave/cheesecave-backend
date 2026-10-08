@@ -9,6 +9,7 @@ This is an independent CheeseCave fork, not an official release of either upstre
 - Original repository: https://github.com/deepghs/KohakuHub.git
 - Original branch: `main`
 - Original commit: `58f81016722c2f1957b570deefd9b4c0eef68f9a`
+- Marked in this repository by the annotated tag `upstream-monorepo-last` (created 2026-10-08, pointing at the same commit).
 - Planned destination: https://github.com/cheesecave/cheesecave-backend
 - CI removal preparation commit (in backend history): `0b4051747ffddc7d2dae436f897c7fcdb996fe15`
 - Split date: 2026-10-04 (Asia/Hong_Kong).
