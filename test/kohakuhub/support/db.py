@@ -111,3 +111,11 @@ def table_missing(database, model):
             raise _Rollback()
     except _Rollback:
         pass
+
+
+def peer_connection(database):
+    """A second, independent connection to the same Postgres database and schema.
+
+    For tests that race two sessions, such as a concurrent delete while a read runs.
+    """
+    return PostgresqlDatabase(database.database, **database.connect_params)
