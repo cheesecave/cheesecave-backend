@@ -108,6 +108,8 @@ async def test_a_failed_commit_leaves_nothing_for_the_next_one(
     operations = _live("kohakuhub.api.commit.routers.operations")
     process = operations.process_regular_file
 
+    # Deliberate database failure, kept as a targeted mock: a real table outage
+    # would fail the earlier writes of this same commit before boom.txt is reached.
     async def failing(**kwargs):
         if kwargs["path"] == "boom.txt":
             if failure == "error":
@@ -147,6 +149,8 @@ async def test_cleaning_up_after_a_failure_is_best_effort(m, owner_client, lakef
     async def broken_reset(**kwargs):
         raise RuntimeError("LakeFS is gone too")
 
+    # Deliberate database outage for the cleanup only, kept as a targeted mock:
+    # a real table outage would fail the staging write before the cleanup runs.
     class BrokenDatabase:
         def atomic(self):
             raise RuntimeError("the database is gone too")
@@ -178,15 +182,6 @@ async def test_a_commit_that_does_not_land(m, owner_client, lakefs, monkeypatch,
     operations = _live("kohakuhub.api.commit.routers.operations")
     httpx = _live("httpx")
 
-    class Locked:
-        async def __aenter__(self):
-            raise operations.HTTPException(
-                409, detail={"error": "an operation holds the repository"}
-            )
-
-        async def __aexit__(self, *exc):
-            return False
-
     async def refused(self, **kwargs):
         request = httpx.Request("POST", "http://lakefs/commits")
         raise httpx.HTTPStatusError(
@@ -197,7 +192,13 @@ async def test_a_commit_that_does_not_land(m, owner_client, lakefs, monkeypatch,
         raise httpx.ConnectError("connection dropped")
 
     if answer == "locked":
-        monkeypatch.setattr(operations.operation_lock, "writing", lambda repo_row: Locked())
+        # The lock is a real row, taken by another operation. The pre-check is
+        # passed so the refusal comes from the write itself, after staging, and
+        # the wait is shortened so it comes quickly.
+        row = m.db.Repository.get(m.db.Repository.full_id == repo.id)
+        operations.operation_lock.acquire(row.id, "squash")
+        monkeypatch.setattr(operations.operation_lock, "ensure_free", lambda repo_row: None)
+        monkeypatch.setattr(operations.operation_lock, "WAIT_SECONDS", 0.2)
     else:
         monkeypatch.setattr(type(lakefs), "commit", refused if answer == "refused" else unknown)
     response = await _post(repo, _file("a.txt", "2"), _file("new.txt", "n"))
