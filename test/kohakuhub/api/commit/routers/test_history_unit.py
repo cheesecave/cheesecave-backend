@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 import json
 from types import SimpleNamespace
 
@@ -243,7 +243,7 @@ async def test_get_commit_detail_covers_not_found_fallback_author_and_server_err
     repo,
 ):
     client = _FakeClient()
-    now = datetime(2024, 1, 2, tzinfo=timezone.utc)
+    now = datetime(2024, 1, 2)  # naive, as the TIMESTAMP column returns it on Postgres
 
     monkeypatch.setattr(
         commit_history,
