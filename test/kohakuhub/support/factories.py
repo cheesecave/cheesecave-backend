@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from kohakuhub.db import DailyRepoStats, FallbackSource, Repository, User
+from kohakuhub.db import DailyRepoStats, FallbackSource, Repository, User, UserOrganization
 
 
 def make_user(username="owner", **overrides):
@@ -15,6 +15,24 @@ def make_user(username="owner", **overrides):
     }
     values.update(overrides)
     return User.create(**values)
+
+
+def make_org(name, admin=None, **overrides):
+    """An organization (a User with is_org=True), with unlimited quotas by default.
+
+    ``admin`` becomes an admin member, so it can act in the namespace.
+    """
+    values = {
+        "username": name,
+        "normalized_name": name.lower(),
+        "is_org": True,
+        "email": None,
+    }
+    values.update(overrides)
+    org = User.create(**values)
+    if admin is not None:
+        UserOrganization.create(user=admin, organization=org, role="admin")
+    return org
 
 
 def make_repo(owner, name, repo_type="model", private=False, **overrides):
