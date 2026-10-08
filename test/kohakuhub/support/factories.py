@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from kohakuhub.db import DailyRepoStats, Repository, User
+from kohakuhub.db import DailyRepoStats, FallbackSource, Repository, User
 
 
 def make_user(username="owner", **overrides):
@@ -44,3 +44,17 @@ def make_daily_stats(repo, date, download_sessions=0, **overrides):
     }
     values.update(overrides)
     return DailyRepoStats.create(**values)
+
+
+def make_fallback_source(name="Mirror", **overrides):
+    """A fallback source row; the default is an enabled global HuggingFace source."""
+    values = {
+        "namespace": "",
+        "url": "https://huggingface.co",
+        "priority": 100,
+        "name": name,
+        "source_type": "huggingface",
+        "enabled": True,
+    }
+    values.update(overrides)
+    return FallbackSource.create(**values)

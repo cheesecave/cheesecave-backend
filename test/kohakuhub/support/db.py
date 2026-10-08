@@ -92,3 +92,19 @@ def rolled_back(database):
             raise _Rollback()
     except _Rollback:
         pass
+
+
+@contextmanager
+def table_missing(database, model):
+    """Make ``model``'s table disappear for the block, so queries against it fail for real.
+
+    Use this to test error envelopes of code that hits the database. The DROP sits in a
+    savepoint that is rolled back on exit, so the table is back for the next statement.
+    """
+    try:
+        with database.atomic():
+            database.execute_sql(f'DROP TABLE "{model._meta.table_name}"')
+            yield
+            raise _Rollback()
+    except _Rollback:
+        pass

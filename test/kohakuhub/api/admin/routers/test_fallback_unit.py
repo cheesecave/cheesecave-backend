@@ -1,146 +1,98 @@
-"""Unit tests for admin fallback routes."""
+"""Unit tests for admin fallback routes, on real SQL rows."""
 
 from __future__ import annotations
-
-from datetime import datetime, timezone
-from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
 
 import kohakuhub.api.admin.routers.fallback as admin_fallback
+from kohakuhub.db import FallbackSource
+from test.kohakuhub.support.db import table_missing
+from test.kohakuhub.support.factories import make_fallback_source
 
 
-class _Expr:
-    def __and__(self, other):
-        return self
-
-
-class _Field:
-    def __eq__(self, other):
-        return _Expr()
-
-
-class _FakeFallbackSource:
-    DoesNotExist = type("DoesNotExist", (Exception,), {})
-    priority = _Field()
-    namespace = _Field()
-    enabled = _Field()
-    create_impl = None
-    select_impl = None
-    get_by_id_impl = None
-
-    @classmethod
-    def create(cls, **kwargs):
-        return cls.create_impl(**kwargs)
-
-    @classmethod
-    def select(cls):
-        return cls.select_impl()
-
-    @classmethod
-    def get_by_id(cls, source_id):
-        return cls.get_by_id_impl(source_id)
-
-
-class _FakeQuery:
-    def order_by(self, *args, **kwargs):
-        return self
-
-    def where(self, *args, **kwargs):
-        return self
-
-    def __iter__(self):
-        return iter([])
-
-
-@pytest.fixture(autouse=True)
-def _patch_source_model(monkeypatch):
-    _FakeFallbackSource.create_impl = None
-    _FakeFallbackSource.select_impl = None
-    _FakeFallbackSource.get_by_id_impl = None
-    monkeypatch.setattr(admin_fallback, "FallbackSource", _FakeFallbackSource)
+pytestmark = pytest.mark.usefixtures("db_scope")
 
 
 @pytest.mark.asyncio
-async def test_create_list_and_get_fallback_routes_cover_generic_failures():
-    _FakeFallbackSource.create_impl = lambda **kwargs: (_ for _ in ()).throw(RuntimeError("create failed"))
+async def test_create_then_list_and_get_read_real_rows():
+    created = await admin_fallback.create_fallback_source(
+        admin_fallback.FallbackSourceCreate(
+            namespace="owner",
+            url="https://mirror.local/",
+            name="Mirror",
+            source_type="huggingface",
+        )
+    )
 
-    with pytest.raises(HTTPException) as create_exc:
+    assert created.url == "https://mirror.local"
+    assert FallbackSource.get_by_id(created.id).namespace == "owner"
+
+    listed = await admin_fallback.list_fallback_sources(namespace="owner")
+    assert [item.id for item in listed] == [created.id]
+
+    fetched = await admin_fallback.get_fallback_source(created.id)
+    assert fetched.name == "Mirror"
+
+
+@pytest.mark.asyncio
+async def test_create_rejects_unknown_source_type_without_writing():
+    with pytest.raises(HTTPException) as exc:
         await admin_fallback.create_fallback_source(
-            admin_fallback.FallbackSourceCreate(
-                namespace="owner",
-                url="https://mirror.local",
-                name="Mirror",
-                source_type="huggingface",
-            )
+            admin_fallback.FallbackSourceCreate(name="Bad", url="https://x", source_type="ftp")
         )
-    assert create_exc.value.status_code == 500
 
-    _FakeFallbackSource.select_impl = lambda: (_ for _ in ()).throw(RuntimeError("list failed"))
-    with pytest.raises(HTTPException) as list_exc:
-        await admin_fallback.list_fallback_sources()
-    assert list_exc.value.status_code == 500
-
-    _FakeFallbackSource.get_by_id_impl = lambda source_id: (_ for _ in ()).throw(RuntimeError("get failed"))
-    with pytest.raises(HTTPException) as get_exc:
-        await admin_fallback.get_fallback_source(1)
-    assert get_exc.value.status_code == 500
+    assert exc.value.status_code == 400
+    assert FallbackSource.select().count() == 0
 
 
 @pytest.mark.asyncio
-async def test_update_delete_and_cache_routes_cover_error_paths(monkeypatch):
-    source = SimpleNamespace(
-        id=1,
-        namespace="owner",
-        url="https://mirror.local",
-        token=None,
-        priority=10,
-        name="Mirror",
-        source_type="huggingface",
-        enabled=True,
-        created_at=datetime.now(tz=timezone.utc),
-        updated_at=datetime.now(tz=timezone.utc),
-        save=lambda: None,
-        delete_instance=lambda: None,
-    )
-    _FakeFallbackSource.get_by_id_impl = lambda source_id: source
+async def test_update_and_delete_change_real_rows(monkeypatch):
+    source = make_fallback_source(name="Mirror", priority=10)
+    cleared = []
+    monkeypatch.setattr(admin_fallback, "get_cache", lambda: type("C", (), {"clear": lambda self: cleared.append(1)})())
 
-    with pytest.raises(HTTPException) as invalid_update_exc:
+    updated = await admin_fallback.update_fallback_source(
+        source.id, admin_fallback.FallbackSourceUpdate(priority=5, token="new-token")
+    )
+
+    assert updated.priority == 5
+    assert FallbackSource.get_by_id(source.id).token == "new-token"
+    assert cleared == [1]
+
+    await admin_fallback.delete_fallback_source(source.id)
+    assert FallbackSource.select().where(FallbackSource.id == source.id).count() == 0
+
+
+@pytest.mark.asyncio
+async def test_update_rejects_invalid_source_type_and_keeps_row():
+    source = make_fallback_source(name="Mirror")
+
+    with pytest.raises(HTTPException) as exc:
         await admin_fallback.update_fallback_source(
-            1,
-            admin_fallback.FallbackSourceUpdate(token="new-token", source_type="invalid"),
+            source.id, admin_fallback.FallbackSourceUpdate(token="new-token", source_type="invalid")
         )
-    assert invalid_update_exc.value.status_code == 400
-    assert source.token == "new-token"
 
-    broken_source = SimpleNamespace(**source.__dict__)
-    broken_source.save = lambda: (_ for _ in ()).throw(RuntimeError("save failed"))
-    _FakeFallbackSource.get_by_id_impl = lambda source_id: broken_source
-    monkeypatch.setattr(
-        admin_fallback,
-        "get_cache",
-        lambda: SimpleNamespace(clear=lambda: None),
-    )
-    with pytest.raises(HTTPException) as update_exc:
-        await admin_fallback.update_fallback_source(
-            1,
-            admin_fallback.FallbackSourceUpdate(name="Broken"),
-        )
-    assert update_exc.value.status_code == 500
+    assert exc.value.status_code == 400
+    assert FallbackSource.get_by_id(source.id).token is None
 
-    delete_broken_source = SimpleNamespace(**source.__dict__)
-    delete_broken_source.delete_instance = lambda: (_ for _ in ()).throw(RuntimeError("delete failed"))
-    _FakeFallbackSource.get_by_id_impl = lambda source_id: delete_broken_source
-    with pytest.raises(HTTPException) as delete_exc:
-        await admin_fallback.delete_fallback_source(1)
-    assert delete_exc.value.status_code == 500
 
-    monkeypatch.setattr(
-        admin_fallback,
-        "get_cache",
-        lambda: (_ for _ in ()).throw(RuntimeError("cache unavailable")),
-    )
+@pytest.mark.asyncio
+async def test_missing_source_returns_404():
+    with pytest.raises(HTTPException) as get_exc:
+        await admin_fallback.get_fallback_source(9999)
+    assert get_exc.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_cache_stats_and_clear_report_cache_failures(monkeypatch):
+    # The cache is an in-process dependency, not the database; a deliberate failure here
+    # checks the route's error envelope.
+    def broken_cache():
+        raise RuntimeError("cache unavailable")
+
+    monkeypatch.setattr(admin_fallback, "get_cache", broken_cache)
+
     with pytest.raises(HTTPException) as stats_exc:
         await admin_fallback.get_cache_stats()
     assert stats_exc.value.status_code == 500
@@ -148,3 +100,34 @@ async def test_update_delete_and_cache_routes_cover_error_paths(monkeypatch):
     with pytest.raises(HTTPException) as clear_exc:
         await admin_fallback.clear_cache()
     assert clear_exc.value.status_code == 500
+
+
+@pytest.mark.asyncio
+async def test_database_outage_on_create_list_and_get_returns_500(db_scope):
+    with table_missing(db_scope, FallbackSource):
+        with pytest.raises(HTTPException) as create_exc:
+            await admin_fallback.create_fallback_source(
+                admin_fallback.FallbackSourceCreate(namespace="owner", url="https://m", name="M", source_type="huggingface")
+            )
+        assert create_exc.value.status_code == 500
+
+        with pytest.raises(HTTPException) as list_exc:
+            await admin_fallback.list_fallback_sources()
+        assert list_exc.value.status_code == 500
+
+        with pytest.raises(HTTPException) as get_exc:
+            await admin_fallback.get_fallback_source(1)
+        assert get_exc.value.status_code == 500
+
+
+@pytest.mark.asyncio
+async def test_database_outage_on_update_and_delete_returns_500(db_scope):
+    source = make_fallback_source(name="Mirror")
+    with table_missing(db_scope, FallbackSource):
+        with pytest.raises(HTTPException) as update_exc:
+            await admin_fallback.update_fallback_source(source.id, admin_fallback.FallbackSourceUpdate(name="Broken"))
+        assert update_exc.value.status_code == 500
+
+        with pytest.raises(HTTPException) as delete_exc:
+            await admin_fallback.delete_fallback_source(source.id)
+        assert delete_exc.value.status_code == 500
