@@ -3,15 +3,16 @@
 tombstones, recent objects and GC state).
 
 They run as one chain: a migration skips itself once any later migration is
-applied, so dropping only some of these tables would make the rest skip.
+applied, so dropping only some of these tables would make the rest skip. Every test
+starts from an empty ``db_fresh`` database and runs the migrations against it.
 """
 
 import importlib.util
 from pathlib import Path
 from types import SimpleNamespace
 
-import pytest
 from peewee import SqliteDatabase
+import pytest
 
 from kohakuhub.db import (
     BackgroundTask,
@@ -23,8 +24,8 @@ from kohakuhub.db import (
     LfsHeadRef,
     LfsObjectTombstone,
     LfsRecentObject,
-    db,
 )
+from test.kohakuhub.support.db import MODELS as ALL_MODELS
 
 MIGRATIONS = Path(__file__).resolve().parents[2] / "scripts" / "db_migrations"
 PATH_COLUMNS = {
@@ -56,11 +57,6 @@ MODELS = [
     LfsHeadRef,
     LfsGcState,
 ]
-DROP_ALL = (
-    'DROP TABLE IF EXISTS "lfs_gc_state", "lfs_head_ref", "lfs_recent_object", "lfs_object_tombstone", "lfs_gc_candidate", '
-    '"background_worker", "background_task_log", '
-    '"background_task_event", "background_task"'
-)
 OLD_ROW = (
     'INSERT INTO "background_task" (kind, queue, payload, status, priority, run_after,'
     " attempts, max_attempts, created_at) VALUES ('old.kind', 'default', '{{}}',"
@@ -136,83 +132,95 @@ def _schema(database):
     return schema
 
 
-def _sqlite(monkeypatch, *modules, path):
-    database = SqliteDatabase(str(path), pragmas={"foreign_keys": 1})
+def _empty(database):
+    """Drop every model table: migration history starts from no tables at all."""
+    database.drop_tables(ALL_MODELS, safe=True)
+
+
+def _reference(database):
+    """The nine tables as the models create them, built in the same database (init_db's shape)."""
+    database.drop_tables(MODELS, safe=True)
+    database.create_tables(MODELS)
+    return _schema(database)
+
+
+def _bind(monkeypatch, database, *modules):
+    """Point the migration modules at the test's database and its backend."""
+    backend = "sqlite" if isinstance(database, SqliteDatabase) else "postgres"
     for module in modules:
         monkeypatch.setattr(module, "db", database)
         monkeypatch.setattr(
-            module, "cfg", SimpleNamespace(app=SimpleNamespace(db_backend="sqlite"))
+            module, "cfg", SimpleNamespace(app=SimpleNamespace(db_backend=backend))
         )
     return database
 
 
-def _sqlite_reference(path):
-    reference = SqliteDatabase(str(path))
-    with reference.bind_ctx(MODELS):
-        reference.create_tables(MODELS)
-    return _schema(reference)
+@pytest.fixture
+def empty_db(db_fresh):
+    """A new database for this test, with no tables (see ``_empty``)."""
+    _empty(db_fresh)
+    return db_fresh
 
 
-def test_migrations_017_to_021_match_init_db_on_postgres(prepared_backend_test_state):
-    expected = _schema(db)  # created by init_db()
-    db.execute_sql(DROP_ALL)
-    try:
-        migrations = _chain()
-        for migration in migrations:
-            assert migration.is_applied(db, migration.cfg) is False
-            assert migration.run() is True
-        assert _schema(db) == expected
-        for migration in migrations:
-            assert migration.run() is True  # re-running is a no-op
-    finally:
-        db.create_tables(MODELS, safe=True)
+def test_migrations_017_to_021_match_init_db_on_postgres(empty_db, monkeypatch):
+    expected = _reference(empty_db)  # created from the models, as init_db() does
+    _empty(empty_db)
+    migrations = _chain()
+    _bind(monkeypatch, empty_db, *migrations)
+    for migration in migrations:
+        assert migration.is_applied(empty_db, migration.cfg) is False
+        assert migration.run() is True
+    actual = _schema(empty_db)
+    if isinstance(empty_db, SqliteDatabase):  # SQLite keeps the VARCHAR(255); see _sqlite_widened
+        actual = _sqlite_widened(actual)
+    assert actual == expected
+    for migration in migrations:
+        assert migration.run() is True  # re-running is a no-op
 
 
-def test_migration_018_upgrades_existing_rows_on_postgres(prepared_backend_test_state):
-    db.execute_sql(DROP_ALL)
-    try:
-        assert _load_017().run() is True
-        db.execute_sql(OLD_ROW.format(now="now()"))
-        assert _load_018().run() is True
-        row = BackgroundTask.get(BackgroundTask.kind == "old.kind")
-        assert row.cancel_requested is False
-        assert (row.progress_done, row.checkpoint, row.stall_seconds) == (None, None, None)
-    finally:
-        db.execute_sql(DROP_ALL)
-        db.create_tables(MODELS, safe=True)
+def test_migration_018_upgrades_existing_rows_on_postgres(empty_db, monkeypatch):
+    m017, m018 = _load_017(), _load_018()
+    _bind(monkeypatch, empty_db, m017, m018)
+    assert m017.run() is True
+    empty_db.execute_sql(OLD_ROW.format(now="CURRENT_TIMESTAMP"))
+    assert m018.run() is True
+    row = BackgroundTask.get(BackgroundTask.kind == "old.kind")
+    assert row.cancel_requested is False
+    assert (row.progress_done, row.checkpoint, row.stall_seconds) == (None, None, None)
 
 
-def test_migrations_017_to_021_match_init_db_on_sqlite(tmp_path, monkeypatch):
+def test_migrations_017_to_021_match_init_db_on_sqlite(empty_db, monkeypatch):
     m017, *later = _chain()
-    migrated = _sqlite(monkeypatch, m017, *later, path=tmp_path / "migrated.db")
+    migrated = _bind(monkeypatch, empty_db, m017, *later)
 
     assert m017.run() is True
-    migrated.execute_sql(OLD_ROW.format(now="'2026-01-01'"))
+    migrated.execute_sql(OLD_ROW.format(now="CURRENT_TIMESTAMP"))
     for migration in later:
         assert migration.run() is True
         assert migration.run() is True
 
-    assert _sqlite_widened(_schema(migrated)) == _sqlite_reference(tmp_path / "reference.db")
+    migrated_schema = _sqlite_widened(_schema(migrated))
     assert migrated.execute_sql('SELECT cancel_requested FROM "background_task"').fetchall() == [
         (0,)
     ]
+    assert migrated_schema == _reference(migrated)
 
 
-def test_migration_018_resumes_a_partially_added_column_set(tmp_path, monkeypatch):
+def test_migration_018_resumes_a_partially_added_column_set(empty_db, monkeypatch):
     m017, *later = _chain()
-    migrated = _sqlite(monkeypatch, m017, *later, path=tmp_path / "partial.db")
+    migrated = _bind(monkeypatch, empty_db, m017, *later)
     assert m017.run() is True
     migrated.execute_sql('ALTER TABLE "background_task" ADD COLUMN "stall_seconds" INTEGER')
 
     for migration in later:
         assert migration.run() is True
-    assert _sqlite_widened(_schema(migrated)) == _sqlite_reference(tmp_path / "reference.db")
+    assert _sqlite_widened(_schema(migrated)) == _reference(migrated)
 
 
 @pytest.mark.parametrize("loader", [_load_017, _load_018, _load_019, _load_020, _load_021])
-def test_background_task_migrations_report_failure(tmp_path, monkeypatch, loader):
+def test_background_task_migrations_report_failure(empty_db, monkeypatch, loader):
     migration = loader()
-    _sqlite(monkeypatch, migration, path=tmp_path / "broken.db")
+    _bind(monkeypatch, empty_db, migration)
 
     def explode():
         raise RuntimeError("disk full")
@@ -223,9 +231,9 @@ def test_background_task_migrations_report_failure(tmp_path, monkeypatch, loader
 
 
 @pytest.mark.parametrize("loader", [_load_018, _load_019, _load_020, _load_021])
-def test_migrations_skip_when_a_later_migration_is_applied(tmp_path, monkeypatch, loader):
+def test_migrations_skip_when_a_later_migration_is_applied(empty_db, monkeypatch, loader):
     migration = loader()
-    _sqlite(monkeypatch, migration, path=tmp_path / "later.db")
+    _bind(monkeypatch, empty_db, migration)
     monkeypatch.setattr(migration, "should_skip_due_to_future_migrations", lambda *a: True)
 
     assert migration.run() is True
