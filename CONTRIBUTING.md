@@ -737,3 +737,20 @@ By contributing, you agree to the following:
 ---
 
 Thank you for contributing to KohakuHub!
+
+## Test and coverage scope
+
+**What runs.** The `Backend tests` workflow starts only when code, tests or build and deployment
+configuration change: `src/**` (except Markdown), `test/**`, `scripts/**`, `docker/**`, the Compose
+files, `pyproject.toml`, `pytest.ini`, `.coveragerc`, `Makefile` and the workflow itself. Changes that
+touch only documentation, images or other resources do not start the full test matrix.
+
+**What coverage measures.** Coverage counts the application's runtime code: all of `src/kohakuhub/`,
+including its `utils/` modules when the application imports them. It excludes:
+
+- tests (`test/`), and scripts and tools (`scripts/`, Makefile helpers, deployment and CI tooling);
+- legacy modules (`old_db.py`, `old_logger.py`) and migrations;
+- documentation, provenance, images and other resources.
+
+The same rule applies to the web and admin repositories: their coverage lists name application
+code under `src/`, and not their scripts, utilities, assets or generated declarations.
