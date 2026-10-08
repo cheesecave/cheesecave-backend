@@ -24,6 +24,8 @@ from kohakuhub.db import (
     LfsHeadRef,
     LfsObjectTombstone,
     LfsRecentObject,
+    Repository,
+    User,
 )
 from test.kohakuhub.support.db import MODELS as ALL_MODELS
 
@@ -133,8 +135,13 @@ def _schema(database):
 
 
 def _empty(database):
-    """Drop every model table: migration history starts from no tables at all."""
+    """Drop every model table, then create the repository base (user, repository).
+
+    The LFS tables reference repository, and Postgres checks that at CREATE time. Later
+    migrations' tables (user_follow and the rest) stay absent: 031 detects its state from them.
+    """
     database.drop_tables(ALL_MODELS, safe=True)
+    database.create_tables([User, Repository], safe=True)
 
 
 def _reference(database):
