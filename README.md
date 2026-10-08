@@ -49,6 +49,21 @@ its 80% coverage gate. See [local development](docs/development/local-dev.md).
 Inherited GitHub Actions and Codecov configuration were removed before splitting;
 local test and build commands remain available.
 
+## Quick start: run the published images
+
+No build and no sibling checkouts are needed; Compose pulls
+`ghcr.io/cheesecave/cheesecave-{backend,web,admin}`.
+
+```sh
+git clone https://github.com/cheesecave/cheesecave-backend.git
+cd cheesecave-backend
+python scripts/generate_docker_compose.py --generate-config   # creates .env with random secrets
+docker compose up -d
+```
+
+Open `http://127.0.0.1:28080` (Admin at `/admin/`). Set `CHEESECAVE_VERSION` in
+`.env` to pin a release instead of `latest`.
+
 ## Deploy the full project from source
 
 Place the three repositories in the same parent directory:
@@ -64,7 +79,7 @@ From the backend directory:
 
 ```sh
 python scripts/generate_docker_compose.py --generate-config
-# Edit .env: public URLs, credentials, UID/GID and image references.
+# Edit .env: public URLs, credentials and UID/GID.
 docker compose -f compose.yml -f compose.build.yml config
 docker compose -f compose.yml -f compose.build.yml up -d --build
 ```
@@ -75,10 +90,9 @@ directory permissions and preparations when migrating an existing installation.
 The gateway defaults to port `28080`, with the website at `/` and Admin at
 `/admin/`. API and worker must use the same backend image.
 
-For deployment using existing images, set `CHEESECAVE_BACKEND_IMAGE`,
-`CHEESECAVE_WEB_IMAGE` and `CHEESECAVE_ADMIN_IMAGE` independently in `.env`, then
-run `docker compose up -d`. The default `:local` references are for source builds;
-they do not imply that public release images have been published.
+To use other images, set `CHEESECAVE_BACKEND_IMAGE`, `CHEESECAVE_WEB_IMAGE` and
+`CHEESECAVE_ADMIN_IMAGE` independently in `.env`. The source-build overlay tags
+`cheesecave-*:local` unless you set them.
 
 ## Independent updates and compatibility
 

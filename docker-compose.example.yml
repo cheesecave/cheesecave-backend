@@ -15,15 +15,15 @@ services:
       - hub-admin
 
   hub-web:
-    image: ${CHEESECAVE_WEB_IMAGE:-cheesecave-web:local}
+    image: ${CHEESECAVE_WEB_IMAGE:-ghcr.io/cheesecave/cheesecave-web:${CHEESECAVE_VERSION:-latest}}
     restart: always
 
   hub-admin:
-    image: ${CHEESECAVE_ADMIN_IMAGE:-cheesecave-admin:local}
+    image: ${CHEESECAVE_ADMIN_IMAGE:-ghcr.io/cheesecave/cheesecave-admin:${CHEESECAVE_VERSION:-latest}}
     restart: always
 
   hub-api:
-    image: ${CHEESECAVE_BACKEND_IMAGE:-cheesecave-backend:local}
+    image: ${CHEESECAVE_BACKEND_IMAGE:-ghcr.io/cheesecave/cheesecave-backend:${CHEESECAVE_VERSION:-latest}}
     container_name: hub-api
     restart: always
     ports:
@@ -130,7 +130,7 @@ services:
   # No container_name: Docker needs a unique name per replica
   # (<project>-khub-worker-1, -2, ...); use `docker compose logs khub-worker`.
   khub-worker:
-    image: ${CHEESECAVE_BACKEND_IMAGE:-cheesecave-backend:local}
+    image: ${CHEESECAVE_BACKEND_IMAGE:-ghcr.io/cheesecave/cheesecave-backend:${CHEESECAVE_VERSION:-latest}}
     deploy:
       replicas: ${KOHAKU_HUB_WORKER_REPLICAS:-1}
     restart: always
