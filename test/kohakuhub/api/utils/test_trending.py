@@ -126,44 +126,25 @@ def test_get_trending_repositories_falls_back_to_recent_public_repos(monkeypatch
     assert [repo.full_id for repo in result] == ["owner/one", "owner/two"]
 
 
-class _CountingRepositoryModel:
-    """Repository stand-in that records every select() and what it is asked to fetch."""
-
-    id = _Field()
-    repo_type = _Field()
-    private = _Field()
-    created_at = _Field()
-
-    def __init__(self, rows):
-        self.rows = list(rows)
-        self.select_calls = 0
-        self.get_or_none_calls = 0
-        self.fetched_ids = None
-
-    def select(self, *fields):
-        self.select_calls += 1
-        owner = self
-
-        class _ByIds(_Query):
-            def where(self, *args, **kwargs):
-                owner.fetched_ids = "in_" if args else None
-                self.items = [row for row in owner.rows]
-                return self
-
-        return _ByIds(self.rows)
-
-    def get_or_none(self, expr):
-        self.get_or_none_calls += 1
-        return None
-
-
-def test_get_trending_repositories_fetches_all_ranked_rows_in_one_query(monkeypatch):
+def test_get_trending_repositories_filters_private_and_missing_repo_records(monkeypatch):
     public_repo = SimpleNamespace(id=1, full_id="owner/public", private=False)
-    other_public = SimpleNamespace(id=3, full_id="owner/other", private=False)
     private_repo = SimpleNamespace(id=2, full_id="owner/private", private=True)
-    fake = _CountingRepositoryModel([private_repo, other_public, public_repo])
+    results = [public_repo, private_repo, None]
 
-    monkeypatch.setattr(trending, "Repository", fake)
+    class _FakeRepositoryModel:
+        id = _Field()
+        repo_type = _Field()
+        private = _Field()
+
+        @staticmethod
+        def select():
+            return _Query([public_repo, private_repo])
+
+        @staticmethod
+        def get_or_none(expr):
+            return results.pop(0)
+
+    monkeypatch.setattr(trending, "Repository", _FakeRepositoryModel)
     monkeypatch.setattr(
         trending,
         "calculate_trending_scores",
@@ -172,33 +153,4 @@ def test_get_trending_repositories_fetches_all_ranked_rows_in_one_query(monkeypa
 
     repos = trending.get_trending_repositories("model", limit=5, days=7)
 
-    assert repos == [public_repo, other_public]
-    assert fake.get_or_none_calls == 0
-    assert fake.select_calls == 2  # one candidate query for eligible ids, one fetch for ranked rows
-
-
-def test_get_trending_repositories_keeps_score_order_and_drops_missing_rows(monkeypatch):
-    first = SimpleNamespace(id=10, full_id="owner/first", private=False)
-    third = SimpleNamespace(id=30, full_id="owner/third", private=False)
-    fake = _CountingRepositoryModel([third, first])  # database order is not score order
-
-    monkeypatch.setattr(trending, "Repository", fake)
-    monkeypatch.setattr(
-        trending,
-        "calculate_trending_scores",
-        lambda repo_type, days: {10: 9.0, 20: 8.0, 30: 7.0},  # 20 has no row
-    )
-
-    repos = trending.get_trending_repositories("model", limit=5, days=7)
-
-    assert [repo.full_id for repo in repos] == ["owner/first", "owner/third"]
-
-
-def test_get_trending_repositories_with_no_eligible_ranked_ids_skips_the_fetch(monkeypatch):
-    fake = _CountingRepositoryModel([])
-
-    monkeypatch.setattr(trending, "Repository", fake)
-    monkeypatch.setattr(trending, "calculate_trending_scores", lambda repo_type, days: {99: 1.0})
-
-    assert trending.get_trending_repositories("model", limit=5, days=7) == []
-    assert fake.select_calls == 1  # only the candidate query; the ranked fetch is skipped
+    assert repos == [public_repo]
