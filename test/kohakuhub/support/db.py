@@ -1,0 +1,80 @@
+"""Shared real-database fixtures for unit tests.
+
+Two scopes, both running real SQL on the backend the test profile selects:
+
+* ``fresh_database``: models bound to a new SQLite file, or a new Postgres schema, for
+  the length of the block; tables created on entry and dropped on exit. Use it for code
+  that commits, for migrations, and for DDL checks.
+* ``rolled_back``: runs a block inside a transaction that is always rolled back, so
+  the writes of one test never reach the next. Use it for query-shaped tests inside a
+  scope created once per module.
+
+The backend comes from ``KOHAKU_HUB_DB_BACKEND``: ``postgres`` reads the URL from
+``KOHAKU_HUB_DATABASE_URL`` (the services CI category sets both); anything else uses a
+SQLite file in the test's temporary directory.
+"""
+
+from __future__ import annotations
+
+import os
+import uuid
+from contextlib import contextmanager
+from urllib.parse import unquote, urlparse
+
+from peewee import PostgresqlDatabase, SqliteDatabase
+
+from kohakuhub.db import DailyRepoStats, Repository, User
+
+MODELS = [User, Repository, DailyRepoStats]
+
+
+class _Rollback(Exception):
+    """Raised inside the scope to undo the transaction."""
+
+
+def make_database(tmp_path, name="unit"):
+    """Return ``(database, schema)``. ``schema`` is None for SQLite."""
+    if os.environ.get("KOHAKU_HUB_DB_BACKEND", "").lower() == "postgres":
+        url = urlparse(os.environ["KOHAKU_HUB_DATABASE_URL"])
+        # One schema per scope: a scope that drops its tables must not remove another scope's.
+        schema = f"t_{name}_{uuid.uuid4().hex[:12]}"
+        database = PostgresqlDatabase(
+            url.path.lstrip("/"),
+            user=unquote(url.username or ""),
+            password=unquote(url.password or ""),
+            host=url.hostname,
+            port=url.port or 5432,
+            options=f"-c search_path={schema}",
+        )
+        return database, schema
+    return SqliteDatabase(str(tmp_path / f"{name}.db"), pragmas={"foreign_keys": 1}), None
+
+
+@contextmanager
+def fresh_database(database, models=MODELS, schema=None):
+    """Bind ``models`` to ``database`` for the block with empty tables."""
+    if schema:
+        database.execute_sql(f'CREATE SCHEMA IF NOT EXISTS "{schema}"')
+    with database.bind_ctx(models):
+        database.drop_tables(models, safe=True)
+        database.create_tables(models)
+        try:
+            yield database
+        finally:
+            database.drop_tables(models, safe=True)
+            if schema:
+                database.execute_sql(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+
+
+@contextmanager
+def rolled_back(database):
+    """Run the block inside a transaction that is always rolled back.
+
+    Errors from the block are re-raised after the rollback.
+    """
+    try:
+        with database.atomic():
+            yield database
+            raise _Rollback()
+    except _Rollback:
+        pass
