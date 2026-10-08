@@ -11,15 +11,10 @@ from kohakuhub.db import BackgroundTask, BackgroundTaskEvent, BackgroundTaskLog,
 from kohakuhub.logger import get_logger
 from kohakuhub.task_testing import RecordingContext
 
+pytestmark = pytest.mark.usefixtures("db_scope")
+
 WORKER = "worker-a"
 LEASE = 60
-
-
-@pytest.fixture(autouse=True)
-def clean_tasks(prepared_backend_test_state):
-    BackgroundTask.delete().execute()
-    yield
-    BackgroundTask.delete().execute()
 
 
 @pytest.fixture(autouse=True)
@@ -214,6 +209,8 @@ def test_request_cancel_ignores_finished_and_missing_tasks(monkeypatch):
         _claim()
         return row
 
+    # Targeted mock: the race needs another writer between the read and the update, which
+    # one connection cannot interleave. The read and the claim are real SQL on real rows.
     monkeypatch.setattr(BackgroundTask, "get_or_none", get_then_claim)
     assert tasks.request_cancel(other) is None
 
@@ -229,6 +226,7 @@ def test_request_cancel_loses_a_race_with_the_task_finishing(monkeypatch):
         tasks.complete_task(claimed)
         return row
 
+    # Targeted mock for the same reason: the finish lands between the read and the update.
     monkeypatch.setattr(BackgroundTask, "get_or_none", get_then_finish)
 
     assert tasks.request_cancel(task_id) is None
