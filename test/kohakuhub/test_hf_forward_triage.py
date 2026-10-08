@@ -90,6 +90,8 @@ def test_ask_model_posts_the_messages_request_with_bearer_auth():
     assert seen["url"] == "https://gateway.example/v1/messages"
     assert seen["headers"]["authorization"] == "Bearer token-value"
     assert seen["body"]["model"] == "claude-haiku-5-5"
+    # Haiku may spend tokens on thinking before the JSON; a 1024 cap truncated the reply in CI.
+    assert seen["body"]["max_tokens"] >= 4096
     assert seen["body"]["messages"] == [{"role": "user", "content": "prompt"}]
     assert seen["timeout"] == 120
 
