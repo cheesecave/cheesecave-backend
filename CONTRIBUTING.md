@@ -745,11 +745,10 @@ configuration change: `src/**` (except Markdown), `test/**`, `scripts/**`, `dock
 files, `pyproject.toml`, `pytest.ini`, `.coveragerc`, `Makefile` and the workflow itself. Changes that
 touch only documentation, images or other resources do not start the full test matrix.
 
-**What coverage measures.** Coverage counts the application's runtime code: `src/kohakuhub/` (API,
-auth, storage, worker, tasks, database and migrations' runtime helpers). It excludes:
+**What coverage measures.** Coverage counts the application's runtime code: all of `src/kohakuhub/`,
+including its `utils/` modules when the application imports them. It excludes:
 
 - tests (`test/`), and scripts and tools (`scripts/`, Makefile helpers, deployment and CI tooling);
-- generic utility modules under `src/kohakuhub/utils/` (`.coveragerc` omits them);
 - legacy modules (`old_db.py`, `old_logger.py`) and migrations;
 - documentation, provenance, images and other resources.
 
