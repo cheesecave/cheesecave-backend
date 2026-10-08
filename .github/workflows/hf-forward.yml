@@ -5,6 +5,8 @@ name: Forward-looking huggingface_hub compatibility
 # with the same failure signature. Its triage report is uploaded as an artifact.
 
 on:
+  push:
+    branches: [chore/c-cleanup]  # TEMP: verification trigger, reverted in the next commit
   schedule:
     - cron: "23 3 * * *"
   workflow_dispatch:
