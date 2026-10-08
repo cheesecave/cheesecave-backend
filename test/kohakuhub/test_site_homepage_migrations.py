@@ -1,42 +1,53 @@
-"""Homepage migration preserves overrides and never hides pending older upgrades."""
+"""Homepage migration preserves overrides and never hides pending older upgrades.
+
+Each test starts from an emptied ``db_fresh`` database: 027 checks the tables before it
+(built here as raw DDL), so no model table may already exist.
+"""
 
 import importlib.util
 from pathlib import Path
-from uuid import uuid4
+from types import SimpleNamespace
 
-from peewee import PostgresqlDatabase, SqliteDatabase
+from peewee import SqliteDatabase
 import pytest
 
 from kohakuhub import site_homepage
-from kohakuhub.db import SiteBranding, SiteHomepage, db
+from kohakuhub.db import SiteBranding, SiteHomepage
+from test.kohakuhub.support.db import MODELS as ALL_MODELS
 
 MIGRATIONS = Path(__file__).resolve().parents[2] / "scripts" / "db_migrations"
 
 
-@pytest.fixture(params=["sqlite", pytest.param("postgres", marks=pytest.mark.integration)])
-def homepage_migration(request, tmp_path, monkeypatch):
+def _empty(database):
+    """Drop every model table: migration history starts from no tables at all."""
+    database.drop_tables(ALL_MODELS, safe=True)
+
+
+def _bind(monkeypatch, database, *modules):
+    """Point the migration modules at the test's database and its backend."""
+    backend = "sqlite" if isinstance(database, SqliteDatabase) else "postgres"
+    for module in modules:
+        monkeypatch.setattr(module, "db", database)
+        monkeypatch.setattr(
+            module, "cfg", SimpleNamespace(app=SimpleNamespace(db_backend=backend))
+        )
+
+
+@pytest.fixture
+def empty_db(db_fresh):
+    """A new database for this test, with no tables (see ``_empty``)."""
+    _empty(db_fresh)
+    return db_fresh
+
+
+@pytest.fixture
+def homepage_migration(empty_db, monkeypatch):
     path = MIGRATIONS / "027_site_homepage.py"
     spec = importlib.util.spec_from_file_location("homepage_migration", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    database = (
-        SqliteDatabase(str(tmp_path / "upgrade.db"))
-        if request.param == "sqlite"
-        else PostgresqlDatabase(db.database, **db.connect_params)
-    )
-    database.connect()
-    schema = "homepage_upgrade_" + uuid4().hex
-    if request.param == "postgres":
-        database.execute_sql(f'CREATE SCHEMA "{schema}"')
-        database.execute_sql(f'SET search_path TO "{schema}"')
-    monkeypatch.setattr(module, "db", database)
-    monkeypatch.setattr(module.cfg.app, "db_backend", request.param)
-    try:
-        yield module, database
-    finally:
-        if request.param == "postgres":
-            database.execute_sql(f'DROP SCHEMA "{schema}" CASCADE')
-        database.close()
+    _bind(monkeypatch, empty_db, module)
+    return module, empty_db
 
 
 def previous_schema(database, missing=None):
@@ -130,6 +141,8 @@ def test_existing_incompatible_table_is_preserved_and_fails(homepage_migration):
 def test_ddl_failure_is_reported(homepage_migration, monkeypatch):
     module, database = homepage_migration
 
+    # Targeted mock on purpose: an outage of the DDL call itself is not reproducible with a
+    # real SQL error that leaves the connection usable, so the failing call is injected here.
     def fail(*args, **kwargs):
         raise RuntimeError("DDL unavailable")
 
