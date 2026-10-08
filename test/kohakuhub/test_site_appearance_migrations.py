@@ -1,4 +1,8 @@
-"""Appearance upgrades are lossless and serialize concurrent nested edits on both databases."""
+"""Appearance upgrades are lossless and serialize concurrent nested edits on both databases.
+
+Each test starts from an emptied ``db_fresh`` database: 028 is checked against the
+tables before it (built here as raw DDL), so no model table may already exist.
+"""
 
 from concurrent.futures import ThreadPoolExecutor
 import importlib.util
@@ -8,41 +12,49 @@ from pathlib import Path
 import subprocess
 import sys
 from threading import Barrier
-from uuid import uuid4
+from types import SimpleNamespace
 
-from peewee import PostgresqlDatabase, SqliteDatabase
+from peewee import SqliteDatabase
 import pytest
 
 from kohakuhub import db as db_module, site_appearance
-from kohakuhub.db import SiteAppearance, SiteBranding, SiteHomepage, db
+from kohakuhub.db import SiteAppearance, SiteBranding, SiteHomepage
+from test.kohakuhub.support.db import MODELS as ALL_MODELS
 
 MIGRATIONS = Path(__file__).resolve().parents[2] / "scripts" / "db_migrations"
 
 
-@pytest.fixture(params=["sqlite", pytest.param("postgres", marks=pytest.mark.integration)])
-def appearance_migration(request, tmp_path, monkeypatch):
+def _empty(database):
+    """Drop every model table: migration history starts from no tables at all."""
+    database.drop_tables(ALL_MODELS, safe=True)
+
+
+def _bind(monkeypatch, database, *modules):
+    """Point the migration modules at the test's database and its backend."""
+    backend = "sqlite" if isinstance(database, SqliteDatabase) else "postgres"
+    for module in modules:
+        monkeypatch.setattr(module, "db", database)
+        monkeypatch.setattr(
+            module, "cfg", SimpleNamespace(app=SimpleNamespace(db_backend=backend))
+        )
+    return database
+
+
+@pytest.fixture
+def empty_db(db_fresh):
+    """A new database for this test, with no tables (see ``_empty``)."""
+    _empty(db_fresh)
+    return db_fresh
+
+
+@pytest.fixture
+def appearance_migration(empty_db, monkeypatch):
     path = MIGRATIONS / "028_site_appearance.py"
     spec = importlib.util.spec_from_file_location("appearance_migration", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    schema = "appearance_upgrade_" + uuid4().hex
-    if request.param == "sqlite":
-        database = SqliteDatabase(str(tmp_path / "upgrade.db"), timeout=10)
-    else:
-        parameters = dict(db.connect_params)
-        parameters["options"] = parameters.get("options", "") + f" -csearch_path={schema}"
-        database = PostgresqlDatabase(db.database, **parameters)
-    database.connect()
-    if request.param == "postgres":
-        database.execute_sql(f'CREATE SCHEMA "{schema}"')
-    monkeypatch.setattr(module, "db", database)
-    monkeypatch.setattr(module.cfg.app, "db_backend", request.param)
-    try:
-        yield module, database
-    finally:
-        if request.param == "postgres":
-            database.execute_sql(f'DROP SCHEMA "{schema}" CASCADE')
-        database.close()
+    _bind(monkeypatch, empty_db, module)
+    yield module, empty_db
 
 
 def previous_schema(database, missing=None):
@@ -141,6 +153,8 @@ def test_incompatible_existing_table_fails_without_losing_data(appearance_migrat
 def test_failed_ddl_is_reported(appearance_migration, monkeypatch):
     module, database = appearance_migration
 
+    # Targeted mock on purpose: an outage of the DDL call itself is not reproducible with a
+    # real SQL error that leaves the connection usable, so the failing call is injected here.
     def fail(*args, **kwargs):
         raise RuntimeError("DDL unavailable")
 
@@ -176,9 +190,13 @@ def test_concurrent_first_writes_and_nested_edits_do_not_lose_fields(appearance_
         assert SiteAppearance.select().count() == 1
 
 
-def test_full_runner_upgrades_previous_release_and_preserves_overrides_on_retry(tmp_path):
-    path = tmp_path / "previous-release.db"
-    database = SqliteDatabase(str(path), pragmas={"foreign_keys": 1})
+def test_full_runner_upgrades_previous_release_and_preserves_overrides_on_retry(db_fresh):
+    # The runner subprocess reaches the database through a SQLite URL, so it needs the file
+    # path of db_fresh; a Postgres schema cannot be named that way.
+    if not isinstance(db_fresh, SqliteDatabase):
+        pytest.skip("SQLite file path for the subprocess")
+    _empty(db_fresh)
+    path = Path(db_fresh.database)
     models = [
         model
         for model in vars(db_module).values()
@@ -186,29 +204,28 @@ def test_full_runner_upgrades_previous_release_and_preserves_overrides_on_retry(
         and issubclass(model, db_module.BaseModel)
         and model not in (db_module.BaseModel, SiteAppearance)
     ]
-    with database.bind_ctx(models):
-        database.create_tables(models)
+    with db_fresh.bind_ctx(models):
+        db_fresh.create_tables(models)
         SiteBranding.create(id=1, site_name="Keep name", footer_description="Keep description")
         SiteHomepage.create(id=1, title="Keep title")
-    database.close()
+    db_fresh.close()
     env = os.environ.copy()
     env.update(KOHAKU_HUB_DB_BACKEND="sqlite", KOHAKU_HUB_DATABASE_URL=f"sqlite:///{path}")
     command = [sys.executable, str(MIGRATIONS.parent / "run_migrations.py")]
     result = subprocess.run(command, env=env, capture_output=True, text=True, timeout=60)
     assert result.returncode == 0, result.stdout + result.stderr
     assert "Migration 028: Created site_appearance" in result.stdout
-    with database.bind_ctx([SiteAppearance]):
+    with db_fresh.bind_ctx([SiteAppearance]):
         site_appearance.update_appearance(
             {"footer": {"groups": []}, "theme": {"default_mode": "light"}}
         )
-    database.close()
+    db_fresh.close()
     result = subprocess.run(command, env=env, capture_output=True, text=True, timeout=60)
     assert result.returncode == 0, result.stdout + result.stderr
     assert "Migration 028: Already applied" in result.stdout
-    with database.bind_ctx([SiteAppearance, SiteBranding, SiteHomepage]):
+    with db_fresh.bind_ctx([SiteAppearance, SiteBranding, SiteHomepage]):
         assert site_appearance.get_appearance()["footer"]["groups"] == []
         assert site_appearance.get_appearance()["theme"]["default_mode"] == "light"
         assert SiteBranding.get_by_id(1).footer_description == "Keep description"
         assert SiteHomepage.get_by_id(1).title == "Keep title"
         assert json.loads(SiteAppearance.get_by_id(1).theme) == {"default_mode": "light"}
-    database.close()
