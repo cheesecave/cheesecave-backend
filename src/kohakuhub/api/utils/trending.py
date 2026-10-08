@@ -109,10 +109,18 @@ def get_trending_repositories(
         reverse=True,
     )[:limit]
 
-    # Fetch repositories in score order
+    if not sorted_repo_ids:
+        return []
+
+    # Fetch every ranked repository in one query, then keep the score order.
+    ranked_ids = [repo_id for repo_id, _ in sorted_repo_ids]
+    rows_by_id = {
+        repo.id: repo
+        for repo in Repository.select().where(Repository.id.in_(ranked_ids))
+    }
     repos = []
-    for repo_id, score in sorted_repo_ids:
-        repo = Repository.get_or_none(Repository.id == repo_id)
+    for repo_id in ranked_ids:
+        repo = rows_by_id.get(repo_id)
         if repo and not repo.private:  # Only public repos in trending
             repos.append(repo)
 
