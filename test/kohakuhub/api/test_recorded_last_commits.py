@@ -467,6 +467,10 @@ async def test_the_backfill_skips_a_repository_lakefs_lost_and_retries_on_errors
 async def test_failing_to_record_never_fails_the_change(m, owner_client, monkeypatch):
     repo = await _repo(m, owner_client, "pc-resilient")
 
+    # Deliberate database failure, kept as a targeted mock: a real missing table
+    # fails inside the test's outer Postgres transaction, which then rejects every
+    # later statement of the request (InFailedSqlTransaction), so the change itself
+    # could not finish. Production autocommits, where the failure stays contained.
     async def broken(*args):
         raise RuntimeError("database is gone")
 
