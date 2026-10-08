@@ -1,18 +1,18 @@
-"""Unit tests for permission branches not covered by integration tests."""
+"""Unit tests for permission branches not covered by integration tests, on real user, organization and repository rows."""
 
 from __future__ import annotations
-
-from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
 
 import kohakuhub.auth.permissions as permissions
+from test.kohakuhub.support.factories import make_org, make_repo, make_user
+
+pytestmark = pytest.mark.usefixtures("db_scope")
 
 
-def test_namespace_permission_covers_admin_bypass_and_common_failures(monkeypatch):
-    user = SimpleNamespace(username="owner")
-    org = SimpleNamespace(username="acme")
+def test_namespace_permission_covers_admin_bypass_and_common_failures():
+    user = make_user("owner")
 
     assert permissions.check_namespace_permission("any", None, is_admin=True) is True
 
@@ -20,37 +20,28 @@ def test_namespace_permission_covers_admin_bypass_and_common_failures(monkeypatc
         permissions.check_namespace_permission("acme", None)
     assert no_user_exc.value.status_code == 403
 
-    monkeypatch.setattr(permissions, "get_organization", lambda namespace: None)
     with pytest.raises(HTTPException) as missing_org_exc:
         permissions.check_namespace_permission("missing-org", user)
     assert missing_org_exc.value.status_code == 403
 
-    monkeypatch.setattr(permissions, "get_organization", lambda namespace: org)
-    monkeypatch.setattr(permissions, "get_user_organization", lambda user, org: None)
+    make_org("acme")
     with pytest.raises(HTTPException) as membership_exc:
         permissions.check_namespace_permission("acme", user)
     assert membership_exc.value.status_code == 403
 
 
-def test_repo_read_permission_covers_admin_public_owner_and_unauthenticated_paths(monkeypatch):
-    public_repo = SimpleNamespace(
-        namespace="owner", full_id="owner/public", repo_type="model", private=False
-    )
-    private_repo = SimpleNamespace(
-        id=7,
-        owner_id=11,
-        namespace="owner",
-        full_id="owner/private",
-        repo_type="model",
-        private=True,
-    )
-    owner = SimpleNamespace(id=11, username="owner")
-    query = SimpleNamespace(where=lambda expression: query, exists=lambda: True)
-    monkeypatch.setattr(permissions.Repository, "select", lambda *fields: query)
+def test_repo_read_permission_covers_admin_public_owner_and_unauthenticated_paths():
+    owner = make_user("owner")
+    public_repo = make_repo(owner, "public")
+    private_repo = make_repo(owner, "private", private=True)
 
     assert permissions.check_repo_read_permission(private_repo, None, is_admin=True) is True
     assert permissions.check_repo_read_permission(public_repo, None) is True
     assert permissions.check_repo_read_permission(private_repo, owner) is True
+
+    # The read query decides: a signed-in user with no membership cannot read the private repo.
+    with pytest.raises(permissions.RepoReadDeniedError):
+        permissions.check_repo_read_permission(private_repo, make_user("outsider"))
 
     # Anonymous-on-private now collapses to RepoReadDeniedError (privacy-
     # preserving Option A from #76 — same wire shape as authed-no-access,
@@ -62,17 +53,16 @@ def test_repo_read_permission_covers_admin_public_owner_and_unauthenticated_path
     assert unauth_exc.value.repo_type == "model"
 
 
-def test_repo_write_and_delete_permission_cover_admin_owner_and_org_admin(monkeypatch):
-    org = SimpleNamespace(username="acme")
-    repo = SimpleNamespace(namespace="acme", full_id="acme/repo", private=True)
-    owner_repo = SimpleNamespace(namespace="owner", full_id="owner/repo", private=True)
-    user = SimpleNamespace(username="owner")
-    admin_membership = SimpleNamespace(role="admin")
+def test_repo_write_and_delete_permission_cover_admin_owner_and_org_admin():
+    owner = make_user("owner")
+    acme = make_org("acme", admin=owner)
+    repo = make_repo(acme, "repo", private=True)
+    owner_repo = make_repo(owner, "repo", private=True)
 
     assert permissions.check_repo_write_permission(repo, None, is_admin=True) is True
-    assert permissions.check_repo_write_permission(owner_repo, user) is True
+    assert permissions.check_repo_write_permission(owner_repo, owner) is True
     assert permissions.check_repo_delete_permission(repo, None, is_admin=True) is True
-    assert permissions.check_repo_delete_permission(owner_repo, user) is True
+    assert permissions.check_repo_delete_permission(owner_repo, owner) is True
 
     with pytest.raises(HTTPException) as write_no_user_exc:
         permissions.check_repo_write_permission(repo, None)
@@ -82,6 +72,5 @@ def test_repo_write_and_delete_permission_cover_admin_owner_and_org_admin(monkey
         permissions.check_repo_delete_permission(repo, None)
     assert delete_no_user_exc.value.status_code == 403
 
-    monkeypatch.setattr(permissions, "get_organization", lambda namespace: org)
-    monkeypatch.setattr(permissions, "get_user_organization", lambda user, org: admin_membership)
-    assert permissions.check_repo_delete_permission(repo, user) is True
+    # Admin membership of the organization (a real UserOrganization row) allows delete.
+    assert permissions.check_repo_delete_permission(repo, owner) is True
