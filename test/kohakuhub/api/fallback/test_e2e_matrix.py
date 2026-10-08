@@ -184,6 +184,7 @@ def _maybe_skip_disabled(expected: str) -> None:
             pytest.skip("DisabledRepoError not exported by this hf_hub version")
 
 
+@pytest.mark.hf_client
 @pytest.mark.parametrize("scenario,expected", RESOLVE_MATRIX)
 def test_resolve_matrix_via_hf_hub_download(
     scenario, expected,
@@ -242,6 +243,7 @@ INFO_MATRIX = [
 ]
 
 
+@pytest.mark.hf_client
 @pytest.mark.parametrize("scenario,expected", INFO_MATRIX)
 def test_info_matrix_via_hf_api_model_info(
     scenario, expected,
@@ -284,6 +286,7 @@ TREE_MATRIX = [
 ]
 
 
+@pytest.mark.hf_client
 @pytest.mark.parametrize("scenario,expected", TREE_MATRIX)
 def test_tree_matrix_via_hf_api_list_repo_files(
     scenario, expected,
@@ -329,6 +332,7 @@ PATHS_INFO_MATRIX = [
 ]
 
 
+@pytest.mark.hf_client
 @pytest.mark.parametrize("scenario,expected", PATHS_INFO_MATRIX)
 def test_paths_info_matrix_via_hf_api_get_paths_info(
     scenario, expected,

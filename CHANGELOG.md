@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Daily forward-looking huggingface_hub CI.** `hf-forward.yml` runs the tests marked
+  `hf_client` against the latest release every day. A failure is triaged by
+  `scripts/ci/hf_forward_triage.py`: an exact repeat comments on the open
+  `hf-forward-ci` issue, a new problem opens one issue. A model decides near-duplicates
+  through an Anthropic-compatible gateway configured in repository secrets.
+- **Client compatibility matrix** in `docs/development/compatibility.md`.
+- **`BRANDING.md`** describing names, attribution and fork naming.
+
 - **Fallback cache: strict-freshness contract** ([#79](https://github.com/deepghs/KohakuHub/issues/79)).
   Cache key now includes `user_id` and a `tokens_hash` derived from the
   user's effective external tokens. Two users (or one user with
@@ -91,6 +99,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     dropping the data, and parsing the pack as pkt-lines kept the worker busy.
 
 ### Removed
+
+- **Board tooling and non-commercial documents.** The five KohakuBoard deployment and mock
+  scripts, `examples/kohakuboard_cifar_training.py` and `docs/non-commercial/` are gone; KohakuBoard
+  is maintained in its own repository. The `CONTRIBUTING.md` licence grant now names AGPL-3.0 only.
 
 - **Dataset Viewer.** The `kohakuhub.datasetviewer` package, its seven
   `/dataset-viewer/` routes, the `disable_dataset_viewer` setting (the

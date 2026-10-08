@@ -2,10 +2,10 @@
 
 English | [简体中文](ci.zh-CN.md)
 
-The workflow is prepared for a future manual run. Repository Actions stays disabled
-until the owner deliberately enables it; adding or pushing this configuration does
-not dispatch a run. Its only event is `workflow_dispatch`: there are no push, pull
-request, schedule, deployment, image publishing or third-party coverage upload jobs.
+Repository Actions is enabled. This regression workflow is still manual only: its only
+event is `workflow_dispatch`, with no push, pull request, schedule, deployment, image
+publishing or third-party coverage upload jobs. The daily forward-looking
+huggingface_hub check is a separate workflow; see [forward-looking HF CI](hf-forward-ci.md).
 
 | Category | Coverage | Infrastructure |
 | --- | --- | --- |
@@ -25,10 +25,9 @@ a SQLite-only limitation or a deployment-specific configuration; the JUnit repor
 and log retain those reasons. These categories do not claim to certify every Python,
 HF client, older LakeFS release or bucket-in-endpoint deployment combination.
 
-The workflow is integrated on the default branch, `main`. A future manual run
-still requires the owner to deliberately enable Actions. After doing so, choose **Backend regression
-(manual only)**, a branch/ref and category in the GitHub Actions UI. This document
-and configuration do not enable Actions or perform a dispatch.
+The workflow is integrated on the default branch, `main`. To run it, choose
+**Backend regression (manual only)**, a branch/ref and category in the GitHub Actions UI.
+Adding or editing this document does not dispatch a run.
 
 ## Commands and isolation
 

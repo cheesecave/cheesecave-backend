@@ -211,6 +211,7 @@ def _scenarios_only(log: _RequestLog) -> list[str]:
 # ===========================================================================
 
 
+@pytest.mark.hf_client
 def test_bound_source_5xx_does_not_rebind_to_sibling(
     live_server_url, hf_api_token, consistency_env,
 ):
@@ -286,6 +287,7 @@ def test_bound_source_5xx_does_not_rebind_to_sibling(
     assert cached.get("exists") is True
 
 
+@pytest.mark.hf_client
 def test_bound_source_failure_does_not_walk_to_sibling_even_when_sibling_works(
     live_server_url, hf_api_token, consistency_env,
 ):
@@ -332,6 +334,7 @@ def test_bound_source_failure_does_not_walk_to_sibling_even_when_sibling_works(
 # ===========================================================================
 
 
+@pytest.mark.hf_client
 def test_cache_hit_only_contacts_bound_source(
     live_server_url, hf_api_token, consistency_env,
 ):
@@ -374,6 +377,7 @@ def test_cache_hit_only_contacts_bound_source(
 # ===========================================================================
 
 
+@pytest.mark.hf_client
 def test_concurrent_first_binders_all_bind_same_source(
     live_server_url, hf_api_token, consistency_env, tmp_path,
 ):
@@ -410,6 +414,7 @@ def test_concurrent_first_binders_all_bind_same_source(
     # we'd see HfHubHTTPError raised from one of the threads.
 
 
+@pytest.mark.hf_client
 def test_concurrent_first_binders_with_first_source_failing_all_see_same_outcome(
     live_server_url, hf_api_token, consistency_env,
 ):
@@ -460,6 +465,7 @@ def test_concurrent_first_binders_with_first_source_failing_all_see_same_outcome
 # ===========================================================================
 
 
+@pytest.mark.hf_client
 def test_ttl_expiry_under_fixed_external_state_rebinds_same_source(
     live_server_url, hf_api_token, consistency_env,
 ):
@@ -503,6 +509,7 @@ def test_ttl_expiry_under_fixed_external_state_rebinds_same_source(
 # ===========================================================================
 
 
+@pytest.mark.hf_client
 def test_multi_op_session_all_route_to_same_source(
     live_server_url, hf_api_token, consistency_env, tmp_path,
 ):
@@ -578,6 +585,7 @@ def test_multi_op_session_all_route_to_same_source(
         assert bound_url_after_pi == src_a["url"]
 
 
+@pytest.mark.hf_client
 def test_snapshot_download_pattern_stays_on_one_source(
     live_server_url, hf_api_token, consistency_env, tmp_path,
 ):
@@ -613,6 +621,7 @@ def test_snapshot_download_pattern_stays_on_one_source(
 # ===========================================================================
 
 
+@pytest.mark.hf_client
 def test_two_independent_client_sessions_bind_same_source(
     live_server_url, hf_api_token, consistency_env,
 ):
@@ -650,6 +659,7 @@ def test_two_independent_client_sessions_bind_same_source(
 # ===========================================================================
 
 
+@pytest.mark.hf_client
 def test_two_users_via_hf_hub_get_independent_cache_buckets(
     live_server_url, consistency_env, app,
 ):
@@ -714,6 +724,7 @@ def test_two_users_via_hf_hub_get_independent_cache_buckets(
     assert cache.get(None, "", "model", "owner", "scenario-repo") is None
 
 
+@pytest.mark.hf_client
 def test_external_token_rotation_via_hf_hub_evicts_user_cache(
     live_server_url, consistency_env, app,
 ):

@@ -106,6 +106,7 @@ async def member_hf_api_token(member_client):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.hf_client
 async def test_whoami_returns_gradio_shape(live_server_url, hf_api_token):
     """gradio/oauth, gradio/cli/commands/deploy_space.py:281 read
     ``whoami["auth"]["accessToken"]["role"]`` — assert that payload shape
@@ -123,6 +124,7 @@ async def test_whoami_returns_gradio_shape(live_server_url, hf_api_token):
     assert auth_block["role"] in {"write", "read", "admin"}
 
 
+@pytest.mark.hf_client
 async def test_repo_info_exposes_sha_and_lfs_sibling_metadata(
     live_server_url, hf_api_token
 ):
@@ -152,6 +154,7 @@ async def test_repo_info_exposes_sha_and_lfs_sibling_metadata(
     assert _field(lfs_block, "size") == len(b"safe tensor payload")
 
 
+@pytest.mark.hf_client
 async def test_repo_info_respects_explicit_revision(live_server_url, hf_api_token):
     """``repo_info(revision=...)`` must resolve branch / tag / commit sha."""
     api = _api(live_server_url, hf_api_token)
@@ -164,6 +167,7 @@ async def test_repo_info_respects_explicit_revision(live_server_url, hf_api_toke
     assert by_sha.sha == main_info.sha
 
 
+@pytest.mark.hf_client
 async def test_model_dataset_space_info_method_shortcuts(
     live_server_url, hf_api_token, member_hf_api_token
 ):
@@ -189,6 +193,7 @@ async def test_model_dataset_space_info_method_shortcuts(
     assert space.id == space_repo
 
 
+@pytest.mark.hf_client
 async def test_list_repo_tree_supports_path_in_repo_non_recursive(
     live_server_url, hf_api_token
 ):
@@ -240,6 +245,7 @@ async def test_list_repo_tree_supports_path_in_repo_non_recursive(
     assert "root.txt" not in paths
 
 
+@pytest.mark.hf_client
 async def test_list_repo_files_returns_flat_filename_list(
     live_server_url, hf_api_token
 ):
@@ -257,6 +263,7 @@ async def test_list_repo_files_returns_flat_filename_list(
     assert all(not f.endswith("/") for f in files)
 
 
+@pytest.mark.hf_client
 async def test_hf_hub_download_follows_explicit_revision(
     live_server_url, hf_api_token, tmp_path
 ):
@@ -303,6 +310,7 @@ async def test_hf_hub_download_follows_explicit_revision(
     assert Path(alt_path).read_bytes() == b"alt content\n"
 
 
+@pytest.mark.hf_client
 async def test_hf_hub_download_returns_lfs_object_bytes(
     live_server_url, hf_api_token, tmp_path
 ):
@@ -320,6 +328,7 @@ async def test_hf_hub_download_returns_lfs_object_bytes(
     assert Path(downloaded).read_bytes() == b"safe tensor payload"
 
 
+@pytest.mark.hf_client
 async def test_snapshot_download_allow_and_ignore_patterns(
     live_server_url, hf_api_token, tmp_path
 ):
@@ -371,6 +380,7 @@ async def test_snapshot_download_allow_and_ignore_patterns(
     assert not (ignore_root / "skip.bin").exists()
 
 
+@pytest.mark.hf_client
 async def test_raw_head_on_resolve_url_matches_hf_semantics(
     live_server_url, hf_api_token, outsider_hf_api_token
 ):
@@ -416,6 +426,7 @@ async def test_raw_head_on_resolve_url_matches_hf_semantics(
     assert r_hidden.status_code == 404
 
 
+@pytest.mark.hf_client
 async def test_hf_filesystem_supports_ls_and_glob_and_open(
     live_server_url, hf_api_token, tmp_path
 ):
@@ -455,6 +466,7 @@ async def test_hf_filesystem_supports_ls_and_glob_and_open(
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.hf_client
 async def test_create_repo_exist_ok_true_returns_without_error(
     live_server_url, hf_api_token
 ):
@@ -473,6 +485,7 @@ async def test_create_repo_exist_ok_true_returns_without_error(
     assert result is not None
 
 
+@pytest.mark.hf_client
 async def test_create_repo_exist_ok_false_raises_hf_hub_http_error(
     live_server_url, hf_api_token
 ):
@@ -485,6 +498,7 @@ async def test_create_repo_exist_ok_false_raises_hf_hub_http_error(
     assert exc.value.response.status_code == 409
 
 
+@pytest.mark.hf_client
 async def test_create_branch_exist_ok_true_does_not_raise(
     live_server_url, hf_api_token
 ):
@@ -500,6 +514,7 @@ async def test_create_branch_exist_ok_true_does_not_raise(
     await _run(api.create_branch, repo_id, branch="release", exist_ok=True)
 
 
+@pytest.mark.hf_client
 async def test_upload_folder_allow_and_ignore_patterns(
     live_server_url, hf_api_token, tmp_path
 ):
@@ -551,6 +566,7 @@ async def test_upload_folder_allow_and_ignore_patterns(
     assert "artifacts/skip.bin" not in tree_after
 
 
+@pytest.mark.hf_client
 async def test_datasets_style_preupload_then_create_commit(
     live_server_url, hf_api_token
 ):
@@ -611,6 +627,7 @@ async def test_datasets_style_preupload_then_create_commit(
     assert "data/train-00001-of-00002.parquet" in tree
 
 
+@pytest.mark.hf_client
 async def test_create_commit_supports_copy_operation(
     live_server_url, hf_api_token
 ):
@@ -678,6 +695,7 @@ async def test_create_commit_supports_copy_operation(
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.hf_client
 async def test_hidden_private_repo_is_invisible_to_outsider(
     live_server_url, hf_api_token, outsider_hf_api_token
 ):
@@ -706,6 +724,7 @@ async def test_hidden_private_repo_is_invisible_to_outsider(
         )
 
 
+@pytest.mark.hf_client
 async def test_get_paths_info_returns_size_and_lfs_metadata(
     live_server_url, hf_api_token
 ):
@@ -733,6 +752,7 @@ async def test_get_paths_info_returns_size_and_lfs_metadata(
     assert _field(lfs, "size") == len(b"safe tensor payload")
 
 
+@pytest.mark.hf_client
 async def test_file_exists_for_missing_file_returns_false_not_exception(
     live_server_url, hf_api_token
 ):
@@ -748,6 +768,7 @@ async def test_file_exists_for_missing_file_returns_false_not_exception(
     assert exists is False
 
 
+@pytest.mark.hf_client
 async def test_repo_info_revision_not_found_raises_named_error(
     live_server_url, hf_api_token
 ):
@@ -759,6 +780,7 @@ async def test_repo_info_revision_not_found_raises_named_error(
         await _run(api.repo_info, "owner/demo-model", revision="no-such-revision")
 
 
+@pytest.mark.hf_client
 async def test_entry_not_found_raises_named_error_on_download(
     live_server_url, hf_api_token, tmp_path
 ):
@@ -776,6 +798,7 @@ async def test_entry_not_found_raises_named_error_on_download(
         )
 
 
+@pytest.mark.hf_client
 async def test_create_repo_private_flag_is_honored_across_hf_versions(
     live_server_url, hf_api_token, outsider_hf_api_token
 ):
@@ -836,6 +859,7 @@ async def test_create_repo_private_flag_is_honored_across_hf_versions(
         await _run(outsider_api.repo_info, repo_id)
 
 
+@pytest.mark.hf_client
 async def test_create_repo_private_false_round_trips_as_public(
     live_server_url, hf_api_token
 ):
@@ -902,6 +926,7 @@ async def test_create_repo_rejects_unknown_visibility_value(
     assert "public" in error_text and "private" in error_text
 
 
+@pytest.mark.hf_client
 async def test_update_repo_settings_visibility_field_is_honored(
     live_server_url, hf_api_token
 ):
@@ -946,6 +971,7 @@ async def test_whoami_rejects_missing_token(live_server_url):
     assert response.status_code == 401
 
 
+@pytest.mark.hf_client
 async def test_create_commit_create_pr_flag_raises_readable_error(
     live_server_url, hf_api_token
 ):
@@ -1011,6 +1037,7 @@ async def test_create_commit_create_pr_flag_raises_readable_error(
     )
 
 
+@pytest.mark.hf_client
 async def test_like_endpoint_direct_http_end_to_end(
     live_server_url, hf_api_token, outsider_hf_api_token
 ):
@@ -1049,6 +1076,7 @@ async def test_like_endpoint_direct_http_end_to_end(
         assert "outsider" not in {u.username for u in likers_after}
 
 
+@pytest.mark.hf_client
 async def test_update_repo_settings_legacy_private_field_end_to_end(
     live_server_url, hf_api_token, outsider_hf_api_token
 ):

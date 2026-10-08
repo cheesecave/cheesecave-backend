@@ -91,6 +91,7 @@ async def _download(
     return await asyncio.to_thread(_run)
 
 
+@pytest.mark.hf_client
 @pytest.mark.asyncio
 async def test_real_hf_hub_download_pattern_A_resolve_cache(
     live_server_url, hf_api_token, fallback_points_to_mock, tmp_path,
@@ -110,6 +111,7 @@ async def test_real_hf_hub_download_pattern_A_resolve_cache(
     assert received == PATTERN_A_BYTES
 
 
+@pytest.mark.hf_client
 @pytest.mark.asyncio
 async def test_real_hf_hub_download_pattern_B_xet_cas_bridge(
     live_server_url, hf_api_token, fallback_points_to_mock, tmp_path,
@@ -131,6 +133,7 @@ async def test_real_hf_hub_download_pattern_B_xet_cas_bridge(
     assert received == PATTERN_B_BYTES
 
 
+@pytest.mark.hf_client
 @pytest.mark.asyncio
 async def test_real_hf_hub_download_pattern_C_direct_200(
     live_server_url, hf_api_token, fallback_points_to_mock, tmp_path,
@@ -151,6 +154,7 @@ async def test_real_hf_hub_download_pattern_C_direct_200(
     assert received == PATTERN_C_BYTES
 
 
+@pytest.mark.hf_client
 @pytest.mark.asyncio
 async def test_real_hf_hub_download_entry_not_found_propagates_no_cross_source(
     live_server_url, hf_api_token, backend_test_state, mock_hf_server_url, tmp_path,
@@ -228,6 +232,7 @@ def _hf_error(name):
     return getattr(mod, name)
 
 
+@pytest.mark.hf_client
 @pytest.mark.asyncio
 async def test_real_hf_hub_download_warm_cache_does_not_refetch(
     live_server_url, hf_api_token, fallback_points_to_mock, tmp_path,

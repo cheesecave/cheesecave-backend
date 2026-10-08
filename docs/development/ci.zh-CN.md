@@ -2,9 +2,9 @@
 
 [English](ci.md) | 简体中文
 
-此配置供将来手动运行。仓库 Actions 保持禁用，只有仓库所有者主动启用后才可使用。
-新增或推送配置不会发起运行；唯一事件为 `workflow_dispatch`，没有 push、PR、定时、
-部署、镜像发布或向第三方上传覆盖率的任务。
+仓库 Actions 已启用。本回归 workflow 仍只能手动运行：唯一事件为 `workflow_dispatch`，
+没有 push、PR、定时、部署、镜像发布或向第三方上传覆盖率的任务。每日前瞻性 huggingface_hub
+检查是独立 workflow，见 [前瞻性 HF CI](hf-forward-ci.zh-CN.md)。
 
 | 分类 | 范围 | 基础设施 |
 | --- | --- | --- |
@@ -21,9 +21,8 @@
 配置而跳过，原因保留在 JUnit 和日志中；不能据此宣称覆盖所有 Python/HF/LakeFS 版本
 及 bucket-in-endpoint 部署组合。
 
-workflow 已集成到默认分支 `main`，但 Actions 仍保持关闭。将来由所有者主动
-启用 Actions 后，再在 GitHub Actions UI 选择
-**Backend regression (manual only)**、分支和分类。此说明和配置不会启用或触发 Actions。
+workflow 已集成到默认分支 `main`。在 GitHub Actions UI 选择
+**Backend regression (manual only)**、分支和分类即可手动运行；编辑本说明不会触发运行。
 
 ## 本地命令与隔离
 

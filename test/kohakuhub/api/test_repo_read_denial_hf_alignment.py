@@ -256,6 +256,7 @@ async def test_resolve_get_outsider_on_private_dataset_returns_repo_not_found(ou
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.hf_client
 async def test_hf_api_dataset_info_anon_raises_repository_not_found(live_server_url):
     """Anonymous ``HfApi.dataset_info`` against a private hkub repo must raise
     ``RepositoryNotFoundError`` — not the generic ``HfHubHTTPError`` we
@@ -268,6 +269,7 @@ async def test_hf_api_dataset_info_anon_raises_repository_not_found(live_server_
         )
 
 
+@pytest.mark.hf_client
 async def test_hf_api_dataset_info_outsider_raises_repository_not_found(
     live_server_url, outsider_client
 ):
@@ -294,6 +296,7 @@ async def test_hf_api_dataset_info_outsider_raises_repository_not_found(
         )
 
 
+@pytest.mark.hf_client
 async def test_hf_hub_download_anon_on_private_dataset_raises_repository_not_found(
     live_server_url, tmp_path
 ):
