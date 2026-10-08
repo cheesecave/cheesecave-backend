@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from kohakuhub.db import (
+    Commit,
     DailyRepoStats,
     DownloadSession,
     File,
@@ -70,6 +71,23 @@ def make_file(repo, path, sha256, size=0, lfs=False, **overrides):
     }
     values.update(overrides)
     return File.create(**values)
+
+
+def make_commit(repo, commit_id, author=None, branch="main", **overrides):
+    """A commit row of ``repo`` made by ``author`` (default: the repository owner)."""
+    author = author or repo.owner
+    values = {
+        "repository": repo,
+        "commit_id": commit_id,
+        "repo_type": repo.repo_type,
+        "branch": branch,
+        "author": author,
+        "owner": repo.owner,
+        "username": author.username,
+        "message": f"commit {commit_id}",
+    }
+    values.update(overrides)
+    return Commit.create(**values)
 
 
 def make_daily_stats(repo, date, download_sessions=0, **overrides):
