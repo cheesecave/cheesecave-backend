@@ -1,7 +1,7 @@
 """Follow and derived activity contracts on the shared real-database fixtures.
 
 The app runs through TestClient (its own thread), so rows must be committed: the catalog
-uses ``db_committed``. Run with KOHAKU_HUB_DB_BACKEND=postgres to exercise PostgreSQL.
+uses ``db_dual``, so every test runs on SQLite and on PostgreSQL.
 """
 
 from datetime import datetime, timedelta, timezone
@@ -24,7 +24,7 @@ STAMP = datetime(2025, 1, 1, 12)
 
 
 @pytest.fixture
-def catalog(db_committed):
+def catalog(db_dual):
     viewer = make_user("viewer")
     author = make_user("author", full_name="An author")
     outsider = make_user("outsider")
@@ -42,7 +42,7 @@ def catalog(db_committed):
     app.dependency_overrides[get_optional_user] = lambda: auth["user"]
     with TestClient(app) as session:
         yield SimpleNamespace(
-            database=db_committed,
+            database=db_dual,
             viewer=viewer,
             author=author,
             outsider=outsider,
