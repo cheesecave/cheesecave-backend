@@ -1,6 +1,6 @@
 """Homepage migration preserves overrides and never hides pending older upgrades.
 
-Each test starts from an emptied ``db_fresh`` database: 027 checks the tables before it
+Each test starts from an emptied ``db_dual`` database (SQLite and PostgreSQL): 027 checks the tables before it
 (built here as raw DDL), so no model table may already exist.
 """
 
@@ -34,10 +34,10 @@ def _bind(monkeypatch, database, *modules):
 
 
 @pytest.fixture
-def empty_db(db_fresh):
+def empty_db(db_dual):
     """A new database for this test, with no tables (see ``_empty``)."""
-    _empty(db_fresh)
-    return db_fresh
+    _empty(db_dual)
+    return db_dual
 
 
 @pytest.fixture

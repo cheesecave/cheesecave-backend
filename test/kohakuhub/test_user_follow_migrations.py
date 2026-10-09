@@ -1,6 +1,6 @@
 """Frozen follow schema is idempotent and rejects incompatible tables without repair.
 
-Each test starts from an emptied ``db_fresh`` database: 030 checks its predecessors, so
+Each test starts from an emptied ``db_dual`` database (SQLite and PostgreSQL): 030 checks its predecessors, so
 no model table may already exist when the migration history starts.
 """
 
@@ -59,19 +59,19 @@ def _bind(monkeypatch, database, *modules):
 
 
 @pytest.fixture
-def migration(db_fresh, monkeypatch):
+def migration(db_dual, monkeypatch):
     path = Path(__file__).resolve().parents[2] / "scripts/db_migrations/030_user_follow.py"
     spec = importlib.util.spec_from_file_location("follow_migration", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    _empty(db_fresh)
-    _bind(monkeypatch, db_fresh, module)
-    db_fresh.create_tables([model for model in REFERENCE_MODELS if model != UserFollow])
+    _empty(db_dual)
+    _bind(monkeypatch, db_dual, module)
+    db_dual.create_tables([model for model in REFERENCE_MODELS if model != UserFollow])
     follower = User.create(username="keep", normalized_name="keep")
     followed = User.create(username="target", normalized_name="target")
     SiteHomepage.create(id=1, title="Keep homepage")
     SiteAppearance.create(id=1, theme='{"primary_light":"#abcdef"}')
-    return module, db_fresh, follower, followed
+    return module, db_dual, follower, followed
 
 
 def signature(database):

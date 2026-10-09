@@ -10,16 +10,16 @@ import pytest
 
 
 @pytest.fixture
-def column_probe(db_fresh):
+def column_probe(db_dual):
     path = Path(__file__).resolve().parents[2] / "scripts/db_migrations/_migration_utils.py"
     spec = importlib.util.spec_from_file_location("migration_column_probe", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    database = db_fresh
+    database = db_dual
     backend = "sqlite" if isinstance(database, SqliteDatabase) else "postgres"
     current = extra = None
     if backend == "postgres":
-        # db_fresh owns the connection and its schema; add a second schema to the search_path.
+        # db_dual owns the connection and its schema; add a second schema to the search_path.
         current = database.execute_sql("SELECT current_schema()").fetchone()[0]
         extra = "column_probe_" + uuid4().hex
         database.execute_sql(f'CREATE SCHEMA "{extra}"')
