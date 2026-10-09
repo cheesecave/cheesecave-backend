@@ -165,12 +165,19 @@ async def get_trending_repositories(
     # Get top repositories
     top_repos = sorted(repo_downloads.items(), key=lambda x: x[1], reverse=True)[:limit]
 
+    # Fetch the ranked repositories in one query instead of one per row
+    ranked_repos = {
+        repo.id: repo
+        for repo in Repository.select().where(
+            (Repository.id.in_([repo_id for repo_id, _ in top_repos]))
+            & (Repository.repo_type == repo_type)
+        )
+    }
+
     # Build response
     trending = []
     for repo_id, download_count in top_repos:
-        repo = Repository.get_or_none(
-            (Repository.id == repo_id) & (Repository.repo_type == repo_type)
-        )
+        repo = ranked_repos.get(repo_id)
 
         if not repo:
             continue
