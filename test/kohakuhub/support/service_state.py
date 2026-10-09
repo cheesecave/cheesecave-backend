@@ -7,6 +7,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 import os
 from pathlib import Path
+import sqlite3
 import time
 from typing import Any
 from urllib.parse import urlparse
@@ -65,6 +66,23 @@ def _lakefs_credentials_valid(endpoint: str, credentials_file: Path) -> bool:
 
 def _is_sqlite_url(database_url: str) -> bool:
     return database_url.startswith("sqlite:///")
+
+
+def _drop_sqlite_tables(path: str) -> None:
+    conn = sqlite3.connect(path)
+    try:
+        conn.execute("PRAGMA foreign_keys = OFF")
+        names = [
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
+            )
+        ]
+        for name in names:
+            conn.execute(f'DROP TABLE IF EXISTS "{name}"')
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def _postgres_admin_url(database_url: str) -> str:
@@ -196,11 +214,12 @@ class ServiceTestState:
         self._close_db()
         database_url = self.modules.config_module.cfg.app.database_url
         if _is_sqlite_url(database_url):
-            # ":memory:" has nothing on disk; a file is deleted with its journal.
+            # Drop the tables rather than the file: other threads (FastAPI runs sync
+            # handlers in a threadpool) keep their own connections, and a deleted file
+            # turns those into read-only handles.
             path = database_url.replace("sqlite:///", "")
             if path != ":memory:":
-                for suffix in ("", "-journal", "-wal", "-shm"):
-                    Path(path + suffix).unlink(missing_ok=True)
+                _drop_sqlite_tables(path)
             return
         conn = psycopg2.connect(database_url)
         conn.autocommit = True
