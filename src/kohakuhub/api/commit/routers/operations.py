@@ -134,22 +134,12 @@ async def process_regular_file(
 
     # Check if file unchanged (deduplication)
     existing = get_file(repo, path)
+    # ``get_file`` only returns active rows, so an unchanged match is always skipped
     if existing and existing.sha256 == git_blob_sha1 and existing.size == len(data):
-        if existing.is_deleted:
-            # File was deleted, now being restored - need to re-upload to LakeFS
-            logger.info(
-                f"Restoring deleted non-LFS file: {path} (sha256={git_blob_sha1[:8]}, size={file_size:,})"
-            )
-        else:
-            # File unchanged and active, skip
-            logger.info(f"Skipping unchanged file: {path}")
-            return False
+        logger.info(f"Skipping unchanged file: {path}")
+        return False
 
-    # File changed or needs restoration
-    if existing and existing.is_deleted:
-        logger.info(f"Uploading to restore non-LFS file: {path} ({file_size} bytes)")
-    else:
-        logger.info(f"Uploading regular file: {path} ({file_size} bytes)")
+    logger.info(f"Uploading regular file: {path} ({file_size} bytes)")
 
     # Upload to LakeFS
     try:

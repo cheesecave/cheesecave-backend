@@ -1,183 +1,85 @@
-"""Unit tests for admin quota routes."""
+"""Unit tests for admin quota routes, on real user rows."""
 
 from __future__ import annotations
-
-from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
 
 import kohakuhub.api.admin.routers.quota as admin_quota
+from kohakuhub.db import User
+from test.kohakuhub.support.factories import make_user
 
-
-class _Expr:
-    def __init__(self, value):
-        self.value = value
-
-    def __add__(self, other):
-        return _Expr(("add", self.value, getattr(other, "value", other)))
-
-    def __and__(self, other):
-        return _Expr(("and", self.value, getattr(other, "value", other)))
-
-    def alias(self, name):
-        return _Expr(("alias", self.value, name))
-
-    def desc(self):
-        return _Expr(("desc", self.value))
-
-
-class _Field:
-    def __init__(self, name: str):
-        self.name = name
-
-    def __eq__(self, other):
-        return _Expr((self.name, "==", other))
-
-    def __add__(self, other):
-        return _Expr(("add", self.name, getattr(other, "name", other)))
-
-
-class _Query:
-    def __init__(self, items=None, scalar_value=None):
-        self.items = list(items or [])
-        self.scalar_value = scalar_value
-        self.where_calls = []
-        self.order_by_calls = []
-        self.limit_value = None
-
-    def where(self, *args):
-        self.where_calls.append(args)
-        return self
-
-    def order_by(self, *args):
-        self.order_by_calls.append(args)
-        return self
-
-    def limit(self, value):
-        self.limit_value = value
-        return self
-
-    def scalar(self):
-        return self.scalar_value
-
-    def __iter__(self):
-        items = self.items
-        if self.limit_value is not None:
-            items = items[: self.limit_value]
-        return iter(items)
-
-
-class _FakeUserModel:
-    username = _Field("username")
-    is_org = _Field("is_org")
-    private_used_bytes = _Field("private_used_bytes")
-    public_used_bytes = _Field("public_used_bytes")
-
-    get_or_none_responses = []
-    select_queries = []
-
-    @classmethod
-    def reset(cls):
-        cls.get_or_none_responses = []
-        cls.select_queries = []
-
-    @classmethod
-    def get_or_none(cls, _expr):
-        if cls.get_or_none_responses:
-            return cls.get_or_none_responses.pop(0)
-        return None
-
-    @classmethod
-    def select(cls, *args):
-        if cls.select_queries:
-            return cls.select_queries.pop(0)
-        return _Query()
-
-
-@pytest.fixture(autouse=True)
-def _reset_models():
-    _FakeUserModel.reset()
-
-
-def _async_return(value=None, error=None):
-    async def _inner(*args, **kwargs):
-        if error:
-            raise error
-        return value
-
-    return _inner
+pytestmark = pytest.mark.usefixtures("db_scope")
 
 
 @pytest.mark.asyncio
-async def test_quota_namespace_routes_cover_not_found_and_success(monkeypatch):
-    monkeypatch.setattr(admin_quota, "User", _FakeUserModel)
-    monkeypatch.setattr(
-        admin_quota,
-        "get_storage_info",
-        lambda namespace, is_org: {"used_bytes": 10, "quota_bytes": 20},
-    )
-    monkeypatch.setattr(
-        admin_quota,
-        "set_quota",
-        lambda namespace, private_quota_bytes, public_quota_bytes, is_org: {
-            "private_quota_bytes": private_quota_bytes,
-            "public_quota_bytes": public_quota_bytes,
-        },
-    )
-    monkeypatch.setattr(admin_quota.usage, "enqueue_recount", lambda namespace=None: 7)
+async def test_get_quota_reports_real_usage_and_404s_unknown_names():
+    make_user("alice", private_quota_bytes=1000)
 
-    _FakeUserModel.get_or_none_responses = [None]
-    with pytest.raises(HTTPException) as missing_get:
-        await admin_quota.get_quota_admin("ghost", is_org=False)
-    assert missing_get.value.status_code == 404
-
-    _FakeUserModel.get_or_none_responses = [SimpleNamespace(username="alice")]
     got = await admin_quota.get_quota_admin("alice", is_org=False)
-    assert got == {
-        "namespace": "alice",
-        "is_organization": False,
-        "used_bytes": 10,
-        "quota_bytes": 20,
-    }
+    assert got["namespace"] == "alice"
+    assert got["is_organization"] is False
+    assert got["private_quota_bytes"] == 1000
+    assert got["private_used_bytes"] == 0
+    assert got["private_available_bytes"] == 1000
 
-    _FakeUserModel.get_or_none_responses = [None]
-    with pytest.raises(HTTPException) as missing_set:
-        await admin_quota.set_quota_admin(
-            "ghost",
-            admin_quota.SetQuotaRequest(private_quota_bytes=1),
-            is_org=True,
-        )
-    assert missing_set.value.status_code == 404
+    with pytest.raises(HTTPException) as missing:
+        await admin_quota.get_quota_admin("ghost", is_org=False)
+    assert missing.value.status_code == 404
 
-    _FakeUserModel.get_or_none_responses = [SimpleNamespace(username="org-team")]
+
+@pytest.mark.asyncio
+async def test_get_quota_for_org_does_not_match_a_user_of_the_same_name():
+    make_user("team", is_org=False)
+
+    with pytest.raises(HTTPException) as wrong_kind:
+        await admin_quota.get_quota_admin("team", is_org=True)
+    assert wrong_kind.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_set_quota_writes_the_row_and_404s_unknown_names():
+    make_user("org-team", is_org=True)
+
     updated = await admin_quota.set_quota_admin(
         "org-team",
         admin_quota.SetQuotaRequest(private_quota_bytes=100, public_quota_bytes=200),
         is_org=True,
     )
-    assert updated == {
-        "namespace": "org-team",
-        "is_organization": True,
-        "private_quota_bytes": 100,
-        "public_quota_bytes": 200,
-    }
+    assert updated["namespace"] == "org-team"
+    assert updated["is_organization"] is True
+    assert updated["private_quota_bytes"] == 100
+    assert updated["public_quota_bytes"] == 200
 
-    _FakeUserModel.get_or_none_responses = [None]
-    with pytest.raises(HTTPException) as missing_recalc:
-        await admin_quota.recalculate_quota_admin("ghost")
-    assert missing_recalc.value.status_code == 404
+    stored = User.get(User.username == "org-team")
+    assert (stored.private_quota_bytes, stored.public_quota_bytes) == (100, 200)
 
-    _FakeUserModel.get_or_none_responses = [SimpleNamespace(username="alice")]
+    with pytest.raises(HTTPException) as missing:
+        await admin_quota.set_quota_admin(
+            "ghost",
+            admin_quota.SetQuotaRequest(private_quota_bytes=1),
+            is_org=True,
+        )
+    assert missing.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_recalculate_schedules_a_recount_and_404s_unknown_names(monkeypatch):
+    make_user("alice")
+    scheduled = []
+    monkeypatch.setattr(
+        admin_quota.usage, "enqueue_recount", lambda namespace=None: scheduled.append(namespace) or 7
+    )
+
     recalculated = await admin_quota.recalculate_quota_admin("alice")
-    assert recalculated == {
-        "namespace": "alice",
-        "is_organization": False,
-        "task_id": 7,
-        "already_pending": False,
-        "used_bytes": 10,
-        "quota_bytes": 20,
-    }
+    assert recalculated["namespace"] == "alice"
+    assert recalculated["task_id"] == 7
+    assert recalculated["already_pending"] is False
+    assert scheduled == ["alice"]
+
+    with pytest.raises(HTTPException) as missing:
+        await admin_quota.recalculate_quota_admin("ghost")
+    assert missing.value.status_code == 404
 
 
 @pytest.mark.asyncio

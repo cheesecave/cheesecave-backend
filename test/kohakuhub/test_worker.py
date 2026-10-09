@@ -11,15 +11,9 @@ import pytest
 from kohakuhub import tasks, worker as worker_module
 from kohakuhub.db import BackgroundTask, BackgroundTaskEvent, BackgroundTaskLog, BackgroundWorker
 from kohakuhub.worker import Worker
+from test.kohakuhub.support.db import table_missing
 
-
-@pytest.fixture(autouse=True)
-def clean_tasks(prepared_backend_test_state):
-    BackgroundTask.delete().execute()
-    BackgroundWorker.delete().execute()
-    yield
-    BackgroundTask.delete().execute()
-    BackgroundWorker.delete().execute()
+pytestmark = pytest.mark.usefixtures("db_scope")
 
 
 @pytest.fixture(autouse=True)
@@ -267,6 +261,7 @@ async def test_worker_survives_claim_and_record_errors(monkeypatch):
 
 
 def test_reset_connection_logs_close_errors(monkeypatch):
+    # Deliberate driver failure: close() cannot be made to raise on a real connection.
     def broken_close():
         raise RuntimeError("already gone")
 
@@ -274,26 +269,33 @@ def test_reset_connection_logs_close_errors(monkeypatch):
     worker_module._reset_connection()  # does not raise
 
 
-async def test_wait_for_schema_retries_until_table_exists(monkeypatch):
-    answers = iter([RuntimeError("db down"), False, True])
+async def test_wait_for_schema_retries_until_table_exists(db_scope, monkeypatch):
+    # The outage is a deliberate failure: a database that is down cannot be produced
+    # in-process, so the first check raises through a targeted mock. The missing table
+    # itself is real (table_missing) and is back once the block exits.
+    real_table_exists = BackgroundWorker.table_exists
+    outages = [RuntimeError("db down")]
 
     def table_exists():
-        answer = next(answers)
-        if isinstance(answer, Exception):
-            raise answer
-        return answer
+        if outages:
+            raise outages.pop()
+        return real_table_exists()
 
     monkeypatch.setattr(BackgroundWorker, "table_exists", table_exists)
+    stop = asyncio.Event()
+    with table_missing(db_scope, BackgroundWorker):
+        waiter = asyncio.create_task(_worker(poll_interval=0.01).wait_for_schema(stop))
+        await asyncio.sleep(0.05)
+        assert not waiter.done()
+    assert await asyncio.wait_for(waiter, timeout=5) is True
 
-    assert await _worker(poll_interval=0.01).wait_for_schema(asyncio.Event()) is True
 
-
-async def test_wait_for_schema_returns_false_when_stopped(monkeypatch):
-    monkeypatch.setattr(BackgroundWorker, "table_exists", lambda: False)
+async def test_wait_for_schema_returns_false_when_stopped(db_scope):
     stop = asyncio.Event()
     asyncio.get_running_loop().call_later(0.05, stop.set)
 
-    assert await _worker(poll_interval=10).wait_for_schema(stop) is False
+    with table_missing(db_scope, BackgroundWorker):
+        assert await _worker(poll_interval=10).wait_for_schema(stop) is False
 
 
 async def test_serve_stops_on_sigterm():

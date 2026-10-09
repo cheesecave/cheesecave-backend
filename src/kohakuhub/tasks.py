@@ -750,7 +750,8 @@ def _capture(message) -> None:
     ctx = current_context.get()
     if ctx is not None:
         record = message.record
-        at = record["time"].astimezone(timezone.utc).replace(tzinfo=None)
+        # loguru's time is a datetime subclass that sqlite3 cannot bind; rebuild a plain one.
+        at = datetime.fromtimestamp(record["time"].timestamp(), tz=timezone.utc).replace(tzinfo=None)
         ctx.log(record["level"].name, record["message"], at)
 
 

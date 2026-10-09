@@ -232,3 +232,64 @@ async def hf_api_token(owner_client):
     )
     response.raise_for_status()
     return response.json()["token"]
+
+
+# Real-database fixtures for unit tests (see test/kohakuhub/support/db.py and AGENTS.md).
+from test.kohakuhub.support import db as _db  # noqa: E402
+
+
+@pytest.fixture(scope="module")
+def db_module_scope(tmp_path_factory):
+    """One database for the module; tables created once and dropped at module end."""
+    database, schema = _db.make_database(tmp_path_factory.mktemp("module-db"), name="module")
+    with _db.fresh_database(database, _db.MODELS, schema=schema) as scoped:
+        yield scoped
+    database.close()
+
+
+@pytest.fixture
+def db_scope(db_module_scope):
+    """Writes made by one test are rolled back before the next test (same thread only)."""
+    with _db.rolled_back(db_module_scope):
+        yield db_module_scope
+
+
+@pytest.fixture
+def db_committed(db_module_scope):
+    """Shared database whose tables are emptied before each test.
+
+    Rows are really committed, so code running on other threads (HTTP through TestClient)
+    sees them. Cheap on Postgres: one TRUNCATE per test instead of a new schema per test.
+    """
+    _db.clear_tables(db_module_scope)
+    yield db_module_scope
+    _db.clear_tables(db_module_scope)
+
+
+@pytest.fixture
+def db_fresh(tmp_path):
+    """A new database for this test; for code that commits or is driven through HTTP."""
+    database, schema = _db.make_database(tmp_path, name="fresh")
+    with _db.fresh_database(database, _db.MODELS, schema=schema) as scoped:
+        yield scoped
+    database.close()
+
+
+# Parametrized engines. Only a test that requests db_backend (directly or through db_dual)
+# is doubled; the other fixtures above follow KOHAKU_HUB_DB_BACKEND and are not parametrized,
+# so ~2000 tests keep one case each.
+@pytest.fixture(params=["sqlite", pytest.param("postgres", marks=pytest.mark.integration)])
+def db_backend(request):
+    """Each engine in turn. Postgres skips unless KOHAKU_HUB_DATABASE_URL is a PostgreSQL URL."""
+    if request.param == "postgres" and not _db.postgres_configured():
+        pytest.skip("no Postgres configured in KOHAKU_HUB_DATABASE_URL")
+    return request.param
+
+
+@pytest.fixture
+def db_dual(db_backend, tmp_path):
+    """A new database on the engine ``db_backend`` names: the test runs on SQLite and PostgreSQL."""
+    database, schema = _db.make_database(tmp_path, name="dual", backend=db_backend)
+    with _db.fresh_database(database, _db.MODELS, schema=schema) as scoped:
+        yield scoped
+    database.close()

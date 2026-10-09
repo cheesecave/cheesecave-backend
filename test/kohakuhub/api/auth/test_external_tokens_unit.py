@@ -1,66 +1,22 @@
-"""Unit tests for external token routes."""
+"""Unit tests for external token routes, on real user, token and fallback source rows."""
 
 from __future__ import annotations
-
-from datetime import datetime, timezone
-from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
 
 import kohakuhub.api.auth.external_tokens as external_tokens_api
-
-
-class _Expr:
-    def __and__(self, other):
-        return self
-
-
-class _Field:
-    def __eq__(self, other):
-        return _Expr()
-
-    def asc(self):
-        return self
-
-
-class _Query:
-    def __init__(self, items):
-        self.items = list(items)
-
-    def where(self, *args, **kwargs):
-        return self
-
-    def order_by(self, *args, **kwargs):
-        return self
-
-    def __iter__(self):
-        return iter(self.items)
-
-
-class _FakeFallbackSource:
-    namespace = _Field()
-    enabled = _Field()
-    priority = _Field()
-    select_items = []
-    fail = False
-
-    @classmethod
-    def select(cls):
-        if cls.fail:
-            raise RuntimeError("db down")
-        return _Query(cls.select_items)
-
-
-@pytest.fixture(autouse=True)
-def _patch_fallback_source(monkeypatch):
-    _FakeFallbackSource.select_items = []
-    _FakeFallbackSource.fail = False
-    monkeypatch.setattr(external_tokens_api, "FallbackSource", _FakeFallbackSource)
+from kohakuhub.db import FallbackSource
+from kohakuhub.db_operations import get_user_external_tokens, set_user_external_token
+from test.kohakuhub.support.db import table_missing
+from test.kohakuhub.support.factories import make_fallback_source, make_user
 
 
 @pytest.mark.asyncio
-async def test_get_available_fallback_sources_deduplicates_and_handles_database_errors(monkeypatch):
+@pytest.mark.usefixtures("db_scope")
+async def test_get_available_fallback_sources_deduplicates_and_handles_database_errors(
+    monkeypatch, db_scope
+):
     monkeypatch.setattr(
         external_tokens_api.cfg.fallback,
         "sources",
@@ -74,20 +30,8 @@ async def test_get_available_fallback_sources_deduplicates_and_handles_database_
             },
         ],
     )
-    _FakeFallbackSource.select_items = [
-        SimpleNamespace(
-            url="https://hf.local",
-            name="Duplicate HF",
-            source_type="huggingface",
-            priority=1,
-        ),
-        SimpleNamespace(
-            url="https://db.local",
-            name="Database",
-            source_type="huggingface",
-            priority=10,
-        ),
-    ]
+    make_fallback_source("Duplicate HF", url="https://hf.local", priority=1)
+    make_fallback_source("Database", url="https://db.local", priority=10)
 
     sources = await external_tokens_api.get_available_fallback_sources()
 
@@ -112,8 +56,9 @@ async def test_get_available_fallback_sources_deduplicates_and_handles_database_
         },
     ]
 
-    _FakeFallbackSource.fail = True
-    sources_without_db = await external_tokens_api.get_available_fallback_sources()
+    # A real failure: the fallback source table is missing for the block.
+    with table_missing(db_scope, FallbackSource):
+        sources_without_db = await external_tokens_api.get_available_fallback_sources()
     assert [source["url"] for source in sources_without_db] == [
         "https://mirror.local",
         "https://hf.local",
@@ -121,23 +66,11 @@ async def test_get_available_fallback_sources_deduplicates_and_handles_database_
 
 
 @pytest.mark.asyncio
-async def test_external_token_routes_cover_authorization_and_validation_errors(monkeypatch):
-    user = SimpleNamespace(username="owner")
-    other_user = SimpleNamespace(username="other")
-    now = datetime(2026, 4, 20, tzinfo=timezone.utc)
-
-    monkeypatch.setattr(
-        external_tokens_api,
-        "get_user_external_tokens",
-        lambda user: [
-            {
-                "url": "https://hf.local",
-                "token": "hf_secret",
-                "created_at": now,
-                "updated_at": now,
-            }
-        ],
-    )
+@pytest.mark.usefixtures("db_scope")
+async def test_external_token_routes_cover_authorization_and_validation_errors():
+    user = make_user("owner")
+    other_user = make_user("other")
+    set_user_external_token(user, "https://hf.local", "hf_secret")
 
     with pytest.raises(HTTPException) as list_exc:
         await external_tokens_api.list_external_tokens("owner", user=other_user)
@@ -158,39 +91,20 @@ async def test_external_token_routes_cover_authorization_and_validation_errors(m
         await external_tokens_api.delete_external_token("owner", "https://hf.local", user=other_user)
     assert delete_auth_exc.value.status_code == 403
 
-    monkeypatch.setattr(external_tokens_api, "delete_user_external_token", lambda user, url: 0)
+    # No token is stored for this URL, so the delete finds no row.
     with pytest.raises(HTTPException) as delete_missing_exc:
-        await external_tokens_api.delete_external_token("owner", "https://hf.local", user=user)
+        await external_tokens_api.delete_external_token("owner", "https://missing.local", user=user)
     assert delete_missing_exc.value.status_code == 404
+    assert [token["url"] for token in get_user_external_tokens(user)] == ["https://hf.local"]
 
 
 @pytest.mark.asyncio
-async def test_bulk_update_external_tokens_covers_deletions_authorization_and_invalid_urls(
-    monkeypatch,
-):
-    user = SimpleNamespace(username="owner")
-    other_user = SimpleNamespace(username="other")
-    deleted_urls = []
-    saved_tokens = []
-
-    monkeypatch.setattr(
-        external_tokens_api,
-        "get_user_external_tokens",
-        lambda user: [
-            {"url": "https://old.local"},
-            {"url": "https://keep.local"},
-        ],
-    )
-    monkeypatch.setattr(
-        external_tokens_api,
-        "delete_user_external_token",
-        lambda user, url: deleted_urls.append(url) or 1,
-    )
-    monkeypatch.setattr(
-        external_tokens_api,
-        "set_user_external_token",
-        lambda user, url, token: saved_tokens.append((url, token)),
-    )
+@pytest.mark.usefixtures("db_scope")
+async def test_bulk_update_external_tokens_covers_deletions_authorization_and_invalid_urls():
+    user = make_user("owner")
+    other_user = make_user("other")
+    set_user_external_token(user, "https://old.local", "old_token")
+    set_user_external_token(user, "https://keep.local", "keep_old")
 
     with pytest.raises(HTTPException) as auth_exc:
         await external_tokens_api.bulk_update_external_tokens(
@@ -212,5 +126,6 @@ async def test_bulk_update_external_tokens_covers_deletions_authorization_and_in
             user=user,
         )
     assert invalid_exc.value.status_code == 400
-    assert deleted_urls == ["https://old.local"]
-    assert saved_tokens == [("https://keep.local", "keep")]
+    # The URL missing from the new list is deleted, and the valid entry before the bad one is saved.
+    stored = {token["url"]: token["token"] for token in get_user_external_tokens(user)}
+    assert stored == {"https://keep.local": "keep"}

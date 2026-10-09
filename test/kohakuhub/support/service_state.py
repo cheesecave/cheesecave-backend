@@ -7,6 +7,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 import os
 from pathlib import Path
+import sqlite3
 import time
 from typing import Any
 from urllib.parse import urlparse
@@ -61,6 +62,27 @@ def _lakefs_credentials_valid(endpoint: str, credentials_file: Path) -> bool:
         return False
 
     return response.status_code == 200
+
+
+def _is_sqlite_url(database_url: str) -> bool:
+    return database_url.startswith("sqlite:///")
+
+
+def _drop_sqlite_tables(path: str) -> None:
+    conn = sqlite3.connect(path)
+    try:
+        conn.execute("PRAGMA foreign_keys = OFF")
+        names = [
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
+            )
+        ]
+        for name in names:
+            conn.execute(f'DROP TABLE IF EXISTS "{name}"')
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def _postgres_admin_url(database_url: str) -> str:
@@ -125,10 +147,11 @@ def _ensure_services_ready(
             progress_callback(message)
 
     cfg = get_service_test_config()
-    report("waiting for PostgreSQL")
-    _wait_for_postgres(cfg.database_url)
-    report("ensuring the test database exists")
-    _ensure_database_exists(cfg.database_url)
+    if not _is_sqlite_url(cfg.database_url):
+        report("waiting for PostgreSQL")
+        _wait_for_postgres(cfg.database_url)
+        report("ensuring the test database exists")
+        _ensure_database_exists(cfg.database_url)
     report("waiting for MinIO")
     # At the server's root, also when the endpoint's path names the bucket
     s3 = urlparse(cfg.s3_endpoint)
@@ -189,7 +212,16 @@ class ServiceTestState:
 
     def _reset_database(self) -> None:
         self._close_db()
-        conn = psycopg2.connect(self.modules.config_module.cfg.app.database_url)
+        database_url = self.modules.config_module.cfg.app.database_url
+        if _is_sqlite_url(database_url):
+            # Drop the tables rather than the file: other threads (FastAPI runs sync
+            # handlers in a threadpool) keep their own connections, and a deleted file
+            # turns those into read-only handles.
+            path = database_url.replace("sqlite:///", "")
+            if path != ":memory:":
+                _drop_sqlite_tables(path)
+            return
+        conn = psycopg2.connect(database_url)
         conn.autocommit = True
         try:
             with conn.cursor() as cursor:
@@ -298,7 +330,7 @@ class ServiceTestState:
         await self._clear_lakefs()
         report("clearing the object storage bucket")
         self._clear_bucket()
-        report("resetting the PostgreSQL schema")
+        report("resetting the database")
         self._reset_database()
         report("rebuilding the database schema")
         self.modules.db_module.init_db()

@@ -1,332 +1,86 @@
-"""Unit tests for admin user routes."""
+"""Unit tests for admin user routes, on real user and repository rows."""
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from types import SimpleNamespace
-
 import pytest
 from fastapi import HTTPException
-from peewee import SqliteDatabase
 
 import kohakuhub.api.admin.routers.users as admin_users
+from kohakuhub.db import Repository, User
+from test.kohakuhub.support.factories import make_repo, make_user
 
-
-class _Expr:
-    def __init__(self, value):
-        self.value = value
-
-    def __or__(self, other):
-        return _Expr(("or", self.value, getattr(other, "value", other)))
-
-
-class _Field:
-    def __init__(self, name: str):
-        self.name = name
-
-    def __eq__(self, other):
-        return _Expr((self.name, "==", other))
-
-    def contains(self, other):
-        return _Expr((self.name, "contains", other))
-
-
-class _Query:
-    def __init__(self, items=None):
-        self.items = list(items or [])
-        self.where_calls = []
-        self.limit_value = None
-        self.offset_value = 0
-
-    def where(self, *args):
-        self.where_calls.append(args)
-        return self
-
-    def limit(self, value):
-        self.limit_value = value
-        return self
-
-    def offset(self, value):
-        self.offset_value = value
-        return self
-
-    def count(self):
-        return len(self.items)
-
-    def order_by(self, field):
-        self.items.sort(key=lambda item: getattr(item, field.name))
-        return self
-
-    def __iter__(self):
-        items = self.items[self.offset_value :]
-        if self.limit_value is not None:
-            items = items[: self.limit_value]
-        return iter(items)
-
-
-class _AtomicContext:
-    def __init__(self, state: dict):
-        self.state = state
-
-    def __enter__(self):
-        self.state["entered"] = self.state.get("entered", 0) + 1
-        return self
-
-    def __exit__(self, exc_type, exc, tb):
-        self.state["exited"] = self.state.get("exited", 0) + 1
-        return False
-
-
-class _FakeUserModel:
-    id = _Field("id")
-    username = _Field("username")
-    email = _Field("email")
-    is_org = _Field("is_org")
-    private_quota_bytes = _Field("private_quota_bytes")
-    public_quota_bytes = _Field("public_quota_bytes")
-
-    select_query = _Query()
-    get_or_none_responses = []
-
-    @classmethod
-    def reset(cls):
-        cls.select_query = _Query()
-        cls.get_or_none_responses = []
-
-    @classmethod
-    def select(cls):
-        return cls.select_query
-
-    @classmethod
-    def get_or_none(cls, _expr):
-        if cls.get_or_none_responses:
-            return cls.get_or_none_responses.pop(0)
-        return None
-
-
-class _FakeRepositoryModel:
-    owner = _Field("owner")
-    select_query = _Query()
-
-    @classmethod
-    def reset(cls):
-        cls.select_query = _Query()
-
-    @classmethod
-    def select(cls):
-        return cls.select_query
-
-
-@pytest.fixture(autouse=True)
-def _reset_models():
-    _FakeUserModel.reset()
-    _FakeRepositoryModel.reset()
-
-
-def _usage(monkeypatch, used):
-    """Summed usage per namespace (kohakuhub.usage), as the routes read it."""
-    monkeypatch.setattr(
-        admin_users,
-        "namespace_usage",
-        lambda names: {name: used.get(name, {"private": 0, "public": 0}) for name in names},
-    )
+pytestmark = pytest.mark.usefixtures("db_scope")
 
 
 @pytest.mark.asyncio
-async def test_get_user_info_and_list_users_cover_not_found_and_filters(monkeypatch):
-    created_at = datetime(2024, 1, 2, tzinfo=timezone.utc)
-    alice = SimpleNamespace(
-        id=1,
-        username="alice",
-        email="alice@example.com",
-        email_verified=True,
-        is_active=True,
-        is_org=False,
-        private_quota_bytes=100,
-        public_quota_bytes=200,
-        created_at=created_at,
-    )
-    org = SimpleNamespace(
-        id=2,
-        username="org-team",
-        email=None,
-        email_verified=True,
-        is_active=True,
-        is_org=True,
-        private_quota_bytes=300,
-        public_quota_bytes=400,
-        created_at=created_at,
-    )
+async def test_get_user_info_reads_the_row_and_404s_unknown_names():
+    alice = make_user("alice", private_quota_bytes=100, public_quota_bytes=200)
 
-    monkeypatch.setattr(admin_users, "User", _FakeUserModel)
-    _usage(
-        monkeypatch,
-        {"alice": {"private": 10, "public": 20}, "org-team": {"private": 30, "public": 40}},
-    )
-    _usage(
-        monkeypatch,
-        {"alice": {"private": 10, "public": 20}, "org-team": {"private": 30, "public": 40}},
-    )
+    payload = await admin_users.get_user_info("alice")
+    assert payload.id == alice.id
+    assert payload.username == "alice"
+    assert payload.is_org is False
+    assert payload.private_quota_bytes == 100
+    assert payload.private_used_bytes == 0
 
     with pytest.raises(HTTPException) as not_found:
         await admin_users.get_user_info("missing")
     assert not_found.value.status_code == 404
 
-    _FakeUserModel.get_or_none_responses = [alice]
-    payload = await admin_users.get_user_info("alice")
-    assert payload.username == "alice"
-    assert payload.is_org is False
 
-    _FakeUserModel.select_query = _Query(items=[alice, org])
-    listed = await admin_users.list_users(search="ali", limit=1, offset=0, include_orgs=False)
-    assert listed["users"] == [
-        {
-            "id": 1,
-            "username": "alice",
-            "email": "alice@example.com",
-            "email_verified": True,
-            "is_active": True,
-            "is_org": False,
-            "private_quota_bytes": 100,
-            "public_quota_bytes": 200,
-            "private_used_bytes": 10,
-            "public_used_bytes": 20,
-            "created_at": created_at.isoformat(),
-        }
-    ]
-    assert listed["total"] == 2  # counted before the page is cut (the fake does not filter)
-    assert _FakeUserModel.select_query.where_calls
+@pytest.mark.asyncio
+async def test_list_users_filters_by_type_and_search_and_counts_before_paging():
+    make_user("ali-user")
+    make_user("org-team", is_org=True, email=None)
+    make_user("bob")
 
-    _FakeUserModel.select_query = _Query(items=[alice, org])
-    listed_with_orgs = await admin_users.list_users(include_orgs=True, limit=10, offset=1)
-    assert [item["username"] for item in listed_with_orgs["users"]] == ["org-team"]
-    assert listed_with_orgs["total"] == 2
+    users_only = await admin_users.list_users(include_orgs=False, limit=10, offset=0)
+    assert [item["username"] for item in users_only["users"]] == ["ali-user", "bob"]
+    assert users_only["total"] == 2
+
+    with_orgs = await admin_users.list_users(include_orgs=True, limit=1, offset=1)
+    assert [item["username"] for item in with_orgs["users"]] == ["org-team"]
+    assert with_orgs["total"] == 3
+
+    searched = await admin_users.list_users(search="ali", include_orgs=True)
+    assert [item["username"] for item in searched["users"]] == ["ali-user"]
+    assert searched["total"] == 1
 
 
 @pytest.mark.asyncio
-async def test_list_users_orders_before_pagination_and_preserves_total(monkeypatch):
-    """Updated users must not drift behind organizations in physical row order."""
-    created_at = datetime(2024, 1, 2, tzinfo=timezone.utc)
-    rows = [
-        SimpleNamespace(
-            id=user_id,
-            username=f"user-{user_id}",
-            email=None,
-            email_verified=True,
-            is_active=True,
-            is_org=user_id > 5,
-            private_quota_bytes=None,
-            public_quota_bytes=None,
-            created_at=created_at,
-        )
-        for user_id in [1, 2, 3, 6, 7, 5]
-    ]
-    monkeypatch.setattr(admin_users, "User", _FakeUserModel)
-    _usage(monkeypatch, {})
-    _FakeUserModel.select_query = _Query(items=rows)
+async def test_list_users_orders_by_id_before_pagination_and_keeps_total():
+    """A user updated after organizations exist must stay in its ID position."""
+    for user_id in range(1, 7):
+        make_user(f"user-{user_id}", is_org=user_id > 5, email=None if user_id > 5 else f"u{user_id}@x.io")
+    User.update(email_verified=True).where(User.username == "user-5").execute()
+
     first = await admin_users.list_users(include_orgs=True, limit=4, offset=0)
-    assert [user["id"] for user in first["users"]] == [1, 2, 3, 5]
+    assert [user["username"] for user in first["users"]] == ["user-1", "user-2", "user-3", "user-4"]
     assert first["total"] == 6
 
-    _FakeUserModel.select_query = _Query(items=rows)
     second = await admin_users.list_users(include_orgs=True, limit=4, offset=4)
-    assert [user["id"] for user in second["users"]] == [6, 7]
+    assert [user["username"] for user in second["users"]] == ["user-5", "user-6"]
+    assert second["users"][0]["email_verified"] is True
     assert second["total"] == 6
 
 
 @pytest.mark.asyncio
-async def test_list_users_total_and_pages_follow_organization_and_search_filters(monkeypatch):
-    """Exercise the real ORM query against an isolated, disposable database."""
-    user_model = admin_users.User
-    database = SqliteDatabase(":memory:")
-    _usage(monkeypatch, {})
-    with user_model.bind_ctx(database, bind_refs=False, bind_backrefs=False):
-        database.create_tables([user_model])
-        for user_id in range(1, 26):
-            user_model.create(
-                id=user_id,
-                username=f"entry-{user_id}",
-                normalized_name=f"entry-{user_id}",
-                is_org=user_id > 5,
-                email=f"user-{user_id}@example.com" if user_id <= 5 else None,
-            )
-        # A user updated after organizations exist must still be in its ID position.
-        user_model.update(email_verified=True).where(user_model.id == 5).execute()
-        first = await admin_users.list_users(include_orgs=True, limit=20, offset=0)
-        second = await admin_users.list_users(include_orgs=True, limit=20, offset=20)
-        assert [user["id"] for user in first["users"]] == list(range(1, 21))
-        assert [user["id"] for user in second["users"]] == list(range(21, 26))
-        assert first["total"] == second["total"] == 25
+async def test_create_user_rejects_taken_username_and_email_and_stores_hash():
+    make_user("taken", email="taken@example.com")
 
-        users_only = await admin_users.list_users(include_orgs=False, limit=20, offset=0)
-        assert [user["id"] for user in users_only["users"]] == list(range(1, 6))
-        assert users_only["total"] == 5
-
-        searched = await admin_users.list_users(search="user-5@", include_orgs=True)
-        assert [user["id"] for user in searched["users"]] == [5]
-        assert searched["total"] == 1
-    database.close()
-
-
-@pytest.mark.asyncio
-async def test_create_user_and_delete_user_cover_conflicts_force_and_success(monkeypatch):
-    created_at = datetime(2024, 1, 2, tzinfo=timezone.utc)
-    atomic_state = {}
-    created_calls = []
-    deleted_users = []
-    user = SimpleNamespace(
-        id=3,
-        username="bob",
-        email="bob@example.com",
-        email_verified=False,
-        is_active=True,
-        is_org=False,
-        private_quota_bytes=123,
-        public_quota_bytes=456,
-        created_at=created_at,
-    )
-    repo = SimpleNamespace(repo_type="model", full_id="bob/demo")
-
-    monkeypatch.setattr(admin_users, "User", _FakeUserModel)
-    _usage(monkeypatch, {})
-    monkeypatch.setattr(admin_users, "Repository", _FakeRepositoryModel)
-    monkeypatch.setattr(
-        admin_users, "db", SimpleNamespace(atomic=lambda: _AtomicContext(atomic_state))
-    )
-    monkeypatch.setattr(admin_users.bcrypt, "gensalt", lambda: b"salt")
-    monkeypatch.setattr(admin_users.bcrypt, "hashpw", lambda password, salt: b"hashed-password")
-    monkeypatch.setattr(
-        admin_users,
-        "create_user",
-        lambda **kwargs: created_calls.append(kwargs) or user,
-    )
-    monkeypatch.setattr(
-        admin_users, "delete_user", lambda target: deleted_users.append(target.username)
-    )
-
-    _FakeUserModel.get_or_none_responses = [SimpleNamespace()]
     with pytest.raises(HTTPException) as username_conflict:
         await admin_users.create_user_admin(
-            admin_users.CreateUserRequest(
-                username="bob",
-                email="bob@example.com",
-                password="secret",
-            )
+            admin_users.CreateUserRequest(username="taken", email="new@example.com", password="secret")
         )
     assert username_conflict.value.status_code == 400
 
-    _FakeUserModel.get_or_none_responses = [None, SimpleNamespace()]
     with pytest.raises(HTTPException) as email_conflict:
         await admin_users.create_user_admin(
-            admin_users.CreateUserRequest(
-                username="bob",
-                email="bob@example.com",
-                password="secret",
-            )
+            admin_users.CreateUserRequest(username="bob", email="taken@example.com", password="secret")
         )
     assert email_conflict.value.status_code == 400
+    assert User.select().where(User.username == "bob").count() == 0
 
-    _FakeUserModel.get_or_none_responses = [None, None]
     created = await admin_users.create_user_admin(
         admin_users.CreateUserRequest(
             username="bob",
@@ -338,62 +92,60 @@ async def test_create_user_and_delete_user_cover_conflicts_force_and_success(mon
         )
     )
     assert created.username == "bob"
-    assert created_calls[-1]["password_hash"] == "hashed-password"
-    assert atomic_state == {"entered": 3, "exited": 3}
+    assert created.private_quota_bytes == 123
+    stored = User.get(User.username == "bob")
+    assert stored.email_verified is True
+    assert stored.password_hash.startswith("$2")
+    assert stored.password_hash != "secret"
 
-    _FakeUserModel.get_or_none_responses = [None]
+
+@pytest.mark.asyncio
+async def test_delete_user_refuses_owners_without_force_and_removes_rows_with_force():
+    bob = make_user("bob")
+    make_repo(bob, "demo")
+
+    with pytest.raises(HTTPException) as owns_repos:
+        await admin_users.delete_user_admin("bob", force=False)
+    assert owns_repos.value.status_code == 400
+    assert owns_repos.value.detail["owned_repositories"] == ["model:bob/demo"]
+    assert User.select().where(User.username == "bob").count() == 1
+
+    deleted = await admin_users.delete_user_admin("bob", force=True)
+    assert deleted["deleted_repositories"] == ["model:bob/demo"]
+    assert deleted["storage_cleanup"] == "scheduled"
+    assert User.select().where(User.username == "bob").count() == 0
+    assert Repository.select().where(Repository.full_id == "bob/demo").count() == 0
+
     with pytest.raises(HTTPException) as missing_user:
         await admin_users.delete_user_admin("ghost")
     assert missing_user.value.status_code == 404
 
-    _FakeUserModel.get_or_none_responses = [user]
-    _FakeRepositoryModel.select_query = _Query(items=[repo])
-    with pytest.raises(HTTPException) as owns_repos:
-        await admin_users.delete_user_admin("bob", force=False)
-    assert owns_repos.value.status_code == 400
 
-    _FakeUserModel.get_or_none_responses = [user]
-    _FakeRepositoryModel.select_query = _Query(items=[repo])
-    deleted = await admin_users.delete_user_admin("bob", force=True)
-    assert deleted["deleted_repositories"] == ["model:bob/demo"]
-    # delete_user deletes the repositories and schedules their storage cleanup.
-    assert deleted["storage_cleanup"] == "scheduled"
-    assert deleted_users[-1] == "bob"
+@pytest.mark.asyncio
+async def test_delete_user_without_repositories_reports_no_cleanup():
+    make_user("carol")
+
+    deleted = await admin_users.delete_user_admin("carol")
+    assert deleted["deleted_repositories"] == []
+    assert deleted["storage_cleanup"] == "none"
 
 
 @pytest.mark.asyncio
-async def test_email_verification_and_quota_update_cover_not_found_and_success(monkeypatch):
-    save_calls = []
-    user = SimpleNamespace(
-        username="alice",
-        email="alice@example.com",
-        email_verified=False,
-        private_quota_bytes=10,
-        public_quota_bytes=20,
-        save=lambda **kwargs: save_calls.append("saved"),
-    )
+async def test_email_verification_and_quota_update_write_the_row_and_404_unknown_names():
+    make_user("alice", email="alice@example.com", private_quota_bytes=10, public_quota_bytes=20)
 
-    monkeypatch.setattr(admin_users, "User", _FakeUserModel)
-    _usage(monkeypatch, {"alice": {"private": 1, "public": 2}})
-
-    _FakeUserModel.get_or_none_responses = [None]
     with pytest.raises(HTTPException) as verification_missing:
-        await admin_users.set_email_verification("alice", True)
+        await admin_users.set_email_verification("ghost", True)
     assert verification_missing.value.status_code == 404
 
-    _FakeUserModel.get_or_none_responses = [user]
     verified = await admin_users.set_email_verification("alice", True)
-    assert verified["email_verified"] is True
-    assert save_calls == ["saved"]
+    assert verified == {"username": "alice", "email": "alice@example.com", "email_verified": True}
+    assert User.get(User.username == "alice").email_verified is True
 
-    _FakeUserModel.get_or_none_responses = [None]
     with pytest.raises(HTTPException) as quota_missing:
-        await admin_users.update_user_quota(
-            "alice", admin_users.UpdateQuotaRequest(private_quota_bytes=99)
-        )
+        await admin_users.update_user_quota("ghost", admin_users.UpdateQuotaRequest(private_quota_bytes=1))
     assert quota_missing.value.status_code == 404
 
-    _FakeUserModel.get_or_none_responses = [user]
     updated = await admin_users.update_user_quota(
         "alice",
         admin_users.UpdateQuotaRequest(private_quota_bytes=99, public_quota_bytes=199),
@@ -402,7 +154,8 @@ async def test_email_verification_and_quota_update_cover_not_found_and_success(m
         "username": "alice",
         "private_quota_bytes": 99,
         "public_quota_bytes": 199,
-        "private_used_bytes": 1,
-        "public_used_bytes": 2,
+        "private_used_bytes": 0,
+        "public_used_bytes": 0,
     }
-    assert save_calls == ["saved", "saved"]
+    stored = User.get(User.username == "alice")
+    assert (stored.private_quota_bytes, stored.public_quota_bytes) == (99, 199)

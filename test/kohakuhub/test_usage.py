@@ -11,6 +11,7 @@ import json
 import random
 from datetime import timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -18,6 +19,7 @@ from peewee import fn
 
 from test.kohakuhub.api.helpers import encode_ndjson
 from test.kohakuhub.api.commit.test_availability import Repo, _delete, _file, _live, lfs
+from test.kohakuhub.support.db import history_operations_need_postgres
 
 MIGRATION = (
     Path(__file__).resolve().parents[2]
@@ -53,6 +55,19 @@ def u(prepared_backend_test_state, monkeypatch):
         ns.db.BackgroundTask.kind.startswith("usage.")
     ).execute()
     ns.rest._singleton_client = None
+
+
+@pytest.fixture
+def u_db(db_scope):
+    """Query-shaped status tests: real task and worker rows, rolled back after each test.
+
+    No LakeFS or bucket is involved, so these run on SQLite; the rest of the file needs the stack.
+    """
+    return SimpleNamespace(
+        db=_live("kohakuhub.db"),
+        usage=_live("kohakuhub.usage"),
+        tasks=_live("kohakuhub.tasks"),
+    )
 
 
 def _row(u, full_id):
@@ -174,6 +189,7 @@ async def test_commits_keep_a_repository_usage_exact(u, owner_client):
     assert _kept(u, other.id) == (0, len(weights))
 
 
+@history_operations_need_postgres
 async def test_branch_operations_keep_it_exact(u, owner_client):
     repo = await _new(u, owner_client, "usage-branch-ops")
     first = await repo.commit(_file("a.txt", "a" * 100), lfs("a.bin", b"first " * 50))
@@ -785,24 +801,24 @@ async def test_a_recount_goes_on_past_a_repository_it_cannot_read(
     )
 
 
-def test_the_status_is_not_the_next_periodic_recount(u):
-    T = u.db.BackgroundTask
-    started = u.usage.enqueue_recount()
-    T.update(status=u.tasks.SUCCEEDED, dedupe_key=None).where(T.id == started).execute()
+def test_the_status_is_not_the_next_periodic_recount(u_db):
+    T = u_db.db.BackgroundTask
+    started = u_db.usage.enqueue_recount()
+    T.update(status=u_db.tasks.SUCCEEDED, dedupe_key=None).where(T.id == started).execute()
     # A periodic recount queues its next occurrence when it starts
-    u.tasks.enqueue(
-        u.usage.RECOUNT_KIND,
-        dedupe_key=u.tasks.periodic_key(u.usage.RECOUNT_KIND),
-        run_after=u.db.utcnow() + timedelta(hours=6),
+    u_db.tasks.enqueue(
+        u_db.usage.RECOUNT_KIND,
+        dedupe_key=u_db.tasks.periodic_key(u_db.usage.RECOUNT_KIND),
+        run_after=u_db.db.utcnow() + timedelta(hours=6),
     )
-    assert u.usage.recount_status()["task"]["id"] == started
+    assert u_db.usage.recount_status()["task"]["id"] == started
     # A recount waiting to retry after a failed attempt is shown
     T.update(
-        status=u.tasks.QUEUED,
+        status=u_db.tasks.QUEUED,
         attempts=1,
-        run_after=u.db.utcnow() + timedelta(minutes=1),
+        run_after=u_db.db.utcnow() + timedelta(minutes=1),
     ).where(T.id == started).execute()
-    shown = u.usage.recount_status()["task"]
+    shown = u_db.usage.recount_status()["task"]
     assert (shown["id"], shown["status"]) == (started, "queued")
 
 
@@ -851,11 +867,11 @@ async def test_changes_during_a_recount_are_not_drift(u, owner_client, monkeypat
     }
 
 
-def test_the_status_says_whether_a_worker_can_run_it(u):
-    W = u.db.BackgroundWorker
+def test_the_status_says_whether_a_worker_can_run_it(u_db):
+    W = u_db.db.BackgroundWorker
     W.delete().execute()
-    assert u.usage.recount_status()["workers_online"] == 0
-    now = u.db.utcnow()
+    assert u_db.usage.recount_status()["workers_online"] == 0
+    now = u_db.db.utcnow()
 
     def worker(worker_id, queues="[]", state="running", heartbeat=now):
         W.create(
@@ -874,8 +890,8 @@ def test_the_status_says_whether_a_worker_can_run_it(u):
     worker("stopped", state="stopped")
     worker("draining", state="draining")
     worker("elsewhere", queues='["gpu"]')
-    assert u.usage.recount_status()["workers_online"] == 0
+    assert u_db.usage.recount_status()["workers_online"] == 0
     worker("every-queue")
     worker("default-queue", queues='["default"]')
-    assert u.usage.recount_status()["workers_online"] == 2
+    assert u_db.usage.recount_status()["workers_online"] == 2
     W.delete().execute()

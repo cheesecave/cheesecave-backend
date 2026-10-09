@@ -1,7 +1,9 @@
-"""Unit tests for auth routes."""
+"""Unit tests for auth routes, on real user, session, token, invitation and verification rows."""
 
 from __future__ import annotations
 
+import json
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
@@ -9,281 +11,108 @@ import pytest
 from fastapi import HTTPException, Response
 
 import kohakuhub.auth.routes as auth_routes
+from kohakuhub.auth.utils import hash_password, hash_token
+from kohakuhub.db import EmailVerification, Session, Token, UserOrganization
+from kohakuhub.utils.names import normalize_name
+from test.kohakuhub.support.factories import (
+    make_email_verification,
+    make_invitation,
+    make_org,
+    make_session,
+    make_token,
+    make_user,
+)
+
+pytestmark = pytest.mark.usefixtures("db_scope")
 
 
-class _Expr:
-    def __init__(self, value):
-        self.value = value
+def _count_transactions(monkeypatch, db_scope, seen):
+    """Count the transactions the routes open; the writes inside stay real on ``db_scope``."""
 
-    def __and__(self, other):
-        return _Expr(("and", self.value, getattr(other, "value", other)))
+    @contextmanager
+    def counted():
+        seen["entered"] = seen.get("entered", 0) + 1
+        try:
+            with db_scope.atomic():
+                yield
+        finally:
+            seen["exited"] = seen.get("exited", 0) + 1
 
-
-class _Field:
-    def __init__(self, name: str):
-        self.name = name
-
-    def __eq__(self, other):
-        return _Expr((self.name, "==", other))
-
-
-class _DeleteQuery:
-    def __init__(self, execute_result=1):
-        self.execute_result = execute_result
-        self.where_calls = []
-
-    def where(self, *args):
-        self.where_calls.append(args)
-        return self
-
-    def execute(self):
-        return self.execute_result
-
-
-class _AtomicContext:
-    def __init__(self, state: dict):
-        self.state = state
-
-    def __enter__(self):
-        self.state["entered"] = self.state.get("entered", 0) + 1
-        return self
-
-    def __exit__(self, exc_type, exc, tb):
-        self.state["exited"] = self.state.get("exited", 0) + 1
-        return False
-
-
-class _FakeUserModel:
-    normalized_name = _Field("normalized_name")
-    get_or_none_responses = []
-
-    @classmethod
-    def reset(cls):
-        cls.get_or_none_responses = []
-
-    @classmethod
-    def get_or_none(cls, _expr):
-        if cls.get_or_none_responses:
-            return cls.get_or_none_responses.pop(0)
-        return None
-
-
-class _FakeSessionModel:
-    user = _Field("user")
-    get_or_none_responses = []
-    delete_query = _DeleteQuery()
-
-    @classmethod
-    def reset(cls):
-        cls.get_or_none_responses = []
-        cls.delete_query = _DeleteQuery()
-
-    @classmethod
-    def get_or_none(cls, _expr):
-        if cls.get_or_none_responses:
-            return cls.get_or_none_responses.pop(0)
-        return None
-
-    @classmethod
-    def delete(cls):
-        return cls.delete_query
-
-
-class _FakeTokenModel:
-    id = _Field("id")
-    user = _Field("user")
-    get_or_none_responses = []
-
-    @classmethod
-    def reset(cls):
-        cls.get_or_none_responses = []
-
-    @classmethod
-    def get_or_none(cls, _expr):
-        if cls.get_or_none_responses:
-            return cls.get_or_none_responses.pop(0)
-        return None
-
-
-@pytest.fixture(autouse=True)
-def _reset_models():
-    _FakeUserModel.reset()
-    _FakeSessionModel.reset()
-    _FakeTokenModel.reset()
+    monkeypatch.setattr(auth_routes, "db", SimpleNamespace(atomic=counted))
 
 
 @pytest.mark.asyncio
-async def test_register_covers_invitation_reserved_and_conflict_paths(monkeypatch):
+async def test_register_covers_invitation_reserved_and_conflict_paths(monkeypatch, db_scope):
     atomic_state = {}
-    user = SimpleNamespace(id=1, username="new-user", email="new@example.com")
-
-    monkeypatch.setattr(auth_routes, "User", _FakeUserModel)
-    monkeypatch.setattr(
-        auth_routes, "db", SimpleNamespace(atomic=lambda: _AtomicContext(atomic_state))
-    )
+    _count_transactions(monkeypatch, db_scope, atomic_state)
     monkeypatch.setattr(auth_routes.cfg.auth, "invitation_only", True)
     monkeypatch.setattr(auth_routes.cfg.auth, "require_email_verification", False)
-    monkeypatch.setattr(auth_routes, "normalize_name", lambda value: value.lower().replace("-", ""))
-    monkeypatch.setattr(auth_routes, "get_user_by_username", lambda username: None)
-    monkeypatch.setattr(auth_routes, "get_user_by_email", lambda email: None)
-    monkeypatch.setattr(auth_routes, "hash_password", lambda password: f"hashed:{password}")
-    monkeypatch.setattr(auth_routes, "create_user", lambda **kwargs: user)
-    monkeypatch.setattr(auth_routes, "get_invitation", lambda token: None)
+
+    def request(username="new-user", email="new@example.com"):
+        return auth_routes.RegisterRequest(username=username, email=email, password="secret")
 
     with pytest.raises(HTTPException) as missing_token:
-        await auth_routes.register(
-            auth_routes.RegisterRequest(
-                username="new-user",
-                email="new@example.com",
-                password="secret",
-            )
-        )
+        await auth_routes.register(request())
     assert missing_token.value.status_code == 403
 
     with pytest.raises(HTTPException) as invalid_token:
-        await auth_routes.register(
-            auth_routes.RegisterRequest(
-                username="new-user",
-                email="new@example.com",
-                password="secret",
-            ),
-            invitation_token="bad-token",
-        )
+        await auth_routes.register(request(), invitation_token="bad-token")
     assert invalid_token.value.status_code == 400
 
-    monkeypatch.setattr(
-        auth_routes,
-        "get_invitation",
-        lambda token: SimpleNamespace(action="join_org", parameters="{}"),
-    )
+    make_invitation("wrong-type", action="join_org")
     with pytest.raises(HTTPException) as invalid_type:
-        await auth_routes.register(
-            auth_routes.RegisterRequest(
-                username="new-user",
-                email="new@example.com",
-                password="secret",
-            ),
-            invitation_token="wrong-type",
-        )
+        await auth_routes.register(request(), invitation_token="wrong-type")
     assert invalid_type.value.status_code == 400
 
-    monkeypatch.setattr(
-        auth_routes,
-        "get_invitation",
-        lambda token: SimpleNamespace(action="register_account", parameters="{}"),
-    )
-    monkeypatch.setattr(
-        auth_routes,
-        "check_invitation_available",
-        lambda invitation: (False, "invitation expired"),
-    )
+    make_invitation("expired", expires_at=datetime.now(timezone.utc) - timedelta(hours=1))
     with pytest.raises(HTTPException) as unavailable:
-        await auth_routes.register(
-            auth_routes.RegisterRequest(
-                username="new-user",
-                email="new@example.com",
-                password="secret",
-            ),
-            invitation_token="expired",
-        )
-    assert unavailable.value.detail == "invitation expired"
+        await auth_routes.register(request(), invitation_token="expired")
+    assert unavailable.value.detail == "Invitation has expired"
 
     monkeypatch.setattr(auth_routes.cfg.auth, "invitation_only", False)
     with pytest.raises(HTTPException) as reserved:
-        await auth_routes.register(
-            auth_routes.RegisterRequest(
-                username="api",
-                email="new@example.com",
-                password="secret",
-            )
-        )
+        await auth_routes.register(request(username="api"))
     assert reserved.value.status_code == 400
 
-    monkeypatch.setattr(auth_routes, "get_user_by_username", lambda username: SimpleNamespace())
+    make_user("taken")
     with pytest.raises(HTTPException) as username_exists:
-        await auth_routes.register(
-            auth_routes.RegisterRequest(
-                username="new-user",
-                email="new@example.com",
-                password="secret",
-            )
-        )
+        await auth_routes.register(request(username="taken"))
     assert username_exists.value.detail == "Username already exists"
 
-    monkeypatch.setattr(auth_routes, "get_user_by_username", lambda username: None)
-    monkeypatch.setattr(auth_routes, "get_user_by_email", lambda email: SimpleNamespace())
+    make_user("emailowner", email="new@example.com")
     with pytest.raises(HTTPException) as email_exists:
-        await auth_routes.register(
-            auth_routes.RegisterRequest(
-                username="new-user",
-                email="new@example.com",
-                password="secret",
-            )
-        )
+        await auth_routes.register(request())
     assert email_exists.value.detail == "Email already exists"
 
-    monkeypatch.setattr(auth_routes, "get_user_by_email", lambda email: None)
-    _FakeUserModel.get_or_none_responses = [SimpleNamespace(username="Taken-User", is_org=True)]
+    make_org("Taken-User", normalized_name=normalize_name("Taken-User"))
     with pytest.raises(HTTPException) as normalized_conflict:
-        await auth_routes.register(
-            auth_routes.RegisterRequest(
-                username="Taken_User",
-                email="new@example.com",
-                password="secret",
-            )
-        )
+        await auth_routes.register(request(username="Taken_User", email="conflict@example.com"))
     assert "organization: Taken-User" in normalized_conflict.value.detail
     assert atomic_state["entered"] >= 3
 
 
 @pytest.mark.asyncio
-async def test_register_covers_invitation_processing_and_email_verification(monkeypatch):
+async def test_register_covers_invitation_processing_and_email_verification(monkeypatch, db_scope):
     atomic_state = {}
-    create_email_calls = []
-    used_invitations = []
-    org_memberships = []
-    user = SimpleNamespace(id=7, username="fresh-user", email="fresh@example.com")
-    org = SimpleNamespace(id=42, username="org-team")
-
-    invitation_valid = SimpleNamespace(
-        action="register_account",
-        parameters='{"org_id": 42, "org_name": "org-team", "role": "admin"}',
+    _count_transactions(monkeypatch, db_scope, atomic_state)
+    org = make_org("org-team")
+    make_invitation(
+        "invite-1",
+        parameters=json.dumps({"org_id": org.id, "org_name": "org-team", "role": "admin"}),
     )
-    invitation_invalid_json = SimpleNamespace(
-        action="register_account",
-        parameters="{not-json",
-    )
+    make_invitation("invite-2", parameters="{not-json")
 
     async def _fake_to_thread(func, *args):
         return func(*args)
 
-    monkeypatch.setattr(auth_routes, "User", _FakeUserModel)
-    monkeypatch.setattr(
-        auth_routes, "db", SimpleNamespace(atomic=lambda: _AtomicContext(atomic_state))
-    )
     monkeypatch.setattr(auth_routes.cfg.auth, "invitation_only", True)
     monkeypatch.setattr(auth_routes.cfg.auth, "require_email_verification", True)
-    monkeypatch.setattr(auth_routes, "normalize_name", lambda value: value.lower())
-    monkeypatch.setattr(auth_routes, "get_user_by_username", lambda username: None)
-    monkeypatch.setattr(auth_routes, "get_user_by_email", lambda email: None)
-    monkeypatch.setattr(auth_routes, "hash_password", lambda password: f"hashed:{password}")
-    monkeypatch.setattr(auth_routes, "create_user", lambda **kwargs: user)
-    monkeypatch.setattr(auth_routes, "check_invitation_available", lambda invitation: (True, None))
-    monkeypatch.setattr(auth_routes, "mark_invitation_used", lambda invitation, target: used_invitations.append((invitation, target.username)))
-    monkeypatch.setattr(auth_routes, "get_user_by_id", lambda user_id: org if user_id == 42 else None)
-    monkeypatch.setattr(auth_routes, "create_user_organization", lambda target, organization, role: org_memberships.append((target.username, organization.username, role)))
-    monkeypatch.setattr(auth_routes, "generate_token", lambda: "verify-token")
-    monkeypatch.setattr(auth_routes, "get_expiry_time", lambda hours: f"expiry:{hours}")
-    monkeypatch.setattr(
-        auth_routes,
-        "create_email_verification",
-        lambda **kwargs: create_email_calls.append(kwargs),
-    )
+    verify_tokens = iter(["verify-token", "verify-token-2"])
+    monkeypatch.setattr(auth_routes, "generate_token", lambda: next(verify_tokens))
     monkeypatch.setattr(auth_routes.asyncio, "to_thread", _fake_to_thread)
-
-    invitations = [invitation_valid, invitation_valid]
-    monkeypatch.setattr(auth_routes, "get_invitation", lambda token: invitations.pop(0))
+    # SMTP stays mocked; the verification row it belongs to is real.
     monkeypatch.setattr(auth_routes, "send_verification_email", lambda email, username, token: False)
+
     first = await auth_routes.register(
         auth_routes.RegisterRequest(
             username="fresh-user",
@@ -297,16 +126,21 @@ async def test_register_covers_invitation_processing_and_email_verification(monk
         "message": "User created but failed to send verification email",
         "email_verified": False,
     }
-    assert used_invitations == [(invitation_valid, "fresh-user")]
-    assert org_memberships == [("fresh-user", "org-team", "admin")]
+    fresh = auth_routes.get_user_by_username("fresh-user")
+    db_invitation = auth_routes.get_invitation("invite-1")
+    assert db_invitation.used_by_id == fresh.id
+    assert db_invitation.usage_count == 1
+    membership = UserOrganization.get_or_none(
+        (UserOrganization.user == fresh) & (UserOrganization.organization == org)
+    )
+    assert membership is not None and membership.role == "admin"
+    assert EmailVerification.get(EmailVerification.user == fresh).token == "verify-token"
 
-    invitations = [invitation_invalid_json, invitation_invalid_json]
-    monkeypatch.setattr(auth_routes, "get_invitation", lambda token: invitations.pop(0))
     monkeypatch.setattr(auth_routes, "send_verification_email", lambda email, username, token: True)
     second = await auth_routes.register(
         auth_routes.RegisterRequest(
-            username="fresh-user",
-            email="fresh@example.com",
+            username="second-user",
+            email="second@example.com",
             password="secret",
         ),
         invitation_token="invite-2",
@@ -316,103 +150,61 @@ async def test_register_covers_invitation_processing_and_email_verification(monk
         "message": "User created. Please check your email to verify your account.",
         "email_verified": False,
     }
-    assert create_email_calls[-1] == {
-        "user": user,
-        "token": "verify-token",
-        "expires_at": "expiry:24",
-    }
+    second_user = auth_routes.get_user_by_username("second-user")
+    assert EmailVerification.get(EmailVerification.user == second_user).token == "verify-token-2"
+    # The invalid invitation JSON is logged and skipped, so it is not marked used.
+    assert auth_routes.get_invitation("invite-2").usage_count == 0
 
 
 @pytest.mark.asyncio
-async def test_verify_login_logout_and_token_routes_cover_remaining_paths(monkeypatch):
+async def test_verify_login_logout_and_token_routes_cover_remaining_paths(monkeypatch, db_scope):
     now = datetime.now(timezone.utc)
     atomic_state = {}
-    session_creations = []
-    created_tokens = []
-    deleted_tokens = []
+    _count_transactions(monkeypatch, db_scope, atomic_state)
+    password_hash = hash_password("secret")
 
-    active_user = SimpleNamespace(
-        id=9,
-        username="alice",
+    active_user = make_user(
+        "alice",
         email="alice@example.com",
         email_verified=True,
-        password_hash="stored",
-        is_active=True,
-        created_at=now,
+        password_hash=password_hash,
     )
-    disabled_user = SimpleNamespace(
-        id=10,
-        username="disabled",
+    make_user(
+        "disabled",
         email="disabled@example.com",
         email_verified=True,
-        password_hash="stored",
+        password_hash=password_hash,
         is_active=False,
-        created_at=now,
     )
-    unverified_user = SimpleNamespace(
-        id=11,
-        username="unverified",
+    make_user(
+        "unverified",
         email="unverified@example.com",
         email_verified=False,
-        password_hash="stored",
-        is_active=True,
-        created_at=now,
+        password_hash=password_hash,
     )
+    # Stored naive, as a timestamp column without a zone returns it, to reach the naive-expiry branch.
+    make_email_verification(
+        active_user,
+        "expired-token",
+        expires_at=(now - timedelta(hours=1)).replace(tzinfo=None),
+    )
+    make_email_verification(active_user, "valid-token", expires_at=now + timedelta(hours=1))
 
-    monkeypatch.setattr(auth_routes, "Session", _FakeSessionModel)
-    monkeypatch.setattr(auth_routes, "Token", _FakeTokenModel)
-    monkeypatch.setattr(
-        auth_routes, "db", SimpleNamespace(atomic=lambda: _AtomicContext(atomic_state))
-    )
     monkeypatch.setattr(auth_routes.cfg.auth, "session_expire_hours", 12)
-    monkeypatch.setattr(auth_routes, "update_user", lambda user, **fields: None)
-    monkeypatch.setattr(auth_routes, "delete_email_verification", lambda verification: None)
-    monkeypatch.setattr(
-        auth_routes,
-        "create_session",
-        lambda **kwargs: session_creations.append(kwargs),
-    )
-    monkeypatch.setattr(auth_routes, "get_expiry_time", lambda hours: f"expiry:{hours}")
     token_values = iter(["session-id", "login-session-id", "api-token"])
     monkeypatch.setattr(auth_routes, "generate_token", lambda: next(token_values))
     monkeypatch.setattr(auth_routes, "generate_session_secret", lambda: "session-secret")
-    monkeypatch.setattr(
-        auth_routes, "verify_password", lambda password, password_hash: password == "secret"
-    )
-    monkeypatch.setattr(
-        auth_routes,
-        "create_token",
-        lambda **kwargs: created_tokens.append(kwargs) or SimpleNamespace(id=55),
-    )
-    monkeypatch.setattr(auth_routes, "hash_token", lambda token: f"hash:{token}")
-    monkeypatch.setattr(auth_routes, "delete_token", lambda token_id: deleted_tokens.append(token_id))
-    monkeypatch.setattr(
-        auth_routes,
-        "list_user_tokens",
-        lambda user: [
-            SimpleNamespace(id=1, name="first", last_used=None, created_at=now),
-            SimpleNamespace(id=2, name="second", last_used=now, created_at=now),
-        ],
-    )
-    monkeypatch.setattr(
-        auth_routes,
-        "get_email_verification",
-        lambda token: {
-            "missing-token": None,
-            "expired-token": SimpleNamespace(
-                expires_at=(now - timedelta(hours=1)).replace(tzinfo=None),
-                user=active_user,
-            ),
-            "no-user-token": SimpleNamespace(
-                expires_at=now + timedelta(hours=1),
-                user=None,
-            ),
-            "valid-token": SimpleNamespace(
-                expires_at=now + timedelta(hours=1),
-                user=active_user,
-            ),
-        }[token],
-    )
+
+    # The schema forbids a verification row without a user, so the orphan branch in
+    # verify_email can only be reached by stubbing the lookup for that one token.
+    real_get_email_verification = auth_routes.get_email_verification
+
+    def get_email_verification(token):
+        if token == "no-user-token":
+            return SimpleNamespace(expires_at=now + timedelta(hours=1), user=None)
+        return real_get_email_verification(token)
+
+    monkeypatch.setattr(auth_routes, "get_email_verification", get_email_verification)
 
     invalid_verify = await auth_routes.verify_email("missing-token", Response())
     assert invalid_verify.headers["location"].startswith("/?error=invalid_token")
@@ -429,16 +221,11 @@ async def test_verify_login_logout_and_token_routes_cover_remaining_paths(monkey
     success_verify = await auth_routes.verify_email("valid-token", Response())
     assert success_verify.headers["location"] == "/alice"
     assert any(header[0] == b"set-cookie" for header in success_verify.raw_headers)
-
-    monkeypatch.setattr(
-        auth_routes,
-        "get_user_by_username",
-        lambda username: {
-            "alice": active_user,
-            "disabled": disabled_user,
-            "unverified": unverified_user,
-        }.get(username),
-    )
+    assert EmailVerification.get_or_none(EmailVerification.token == "valid-token") is None
+    verified_session = Session.get(Session.session_id == "session-id")
+    assert verified_session.user_id == active_user.id
+    assert verified_session.secret == "session-secret"
+    assert verified_session.expires_at.replace(tzinfo=timezone.utc) > now + timedelta(hours=11)
 
     with pytest.raises(HTTPException) as bad_login:
         await auth_routes.login(
@@ -470,45 +257,40 @@ async def test_verify_login_logout_and_token_routes_cover_remaining_paths(monkey
     )
     assert login_payload["session_secret"] == "session-secret"
     assert "session_id=login-session-id" in success_response.headers["set-cookie"]
+    assert Session.get(Session.session_id == "login-session-id").user_id == active_user.id
 
-    _FakeSessionModel.delete_query = _DeleteQuery(execute_result=3)
     logout_response = Response()
     logout_payload = await auth_routes.logout(logout_response, active_user)
     assert logout_payload["success"] is True
+    assert Session.select().where(Session.user == active_user).count() == 0
 
     me = auth_routes.get_me(active_user)
     assert me["username"] == "alice"
 
+    make_token(active_user, hash_token("first-token"), name="first")
+    make_token(active_user, hash_token("second-token"), name="second", last_used=now)
     listed_tokens = await auth_routes.list_tokens(active_user)
-    assert listed_tokens["tokens"][0]["last_used"] is None
-    assert listed_tokens["tokens"][1]["name"] == "second"
+    by_name = {t["name"]: t for t in listed_tokens["tokens"]}
+    assert by_name["first"]["last_used"] is None
+    assert by_name["second"]["last_used"] is not None
 
-    _FakeSessionModel.get_or_none_responses = [SimpleNamespace(secret="browser-secret")]
+    make_session(active_user, "browser-session", secret="browser-secret")
     created = await auth_routes.create_token_endpoint(
         auth_routes.CreateTokenRequest(name="cli"),
         active_user,
     )
     assert created["session_secret"] == "browser-secret"
-    assert created_tokens[-1] == {
-        "user": active_user,
-        "token_hash": "hash:api-token",
-        "name": "cli",
-    }
+    created_row = Token.get(Token.id == created["token_id"])
+    assert created_row.user_id == active_user.id
+    assert created_row.token_hash == hash_token("api-token")
+    assert created_row.name == "cli"
 
-    _FakeTokenModel.get_or_none_responses = [None]
     with pytest.raises(HTTPException) as missing_token:
-        await auth_routes.revoke_token(123, active_user)
+        await auth_routes.revoke_token(created["token_id"] + 100, active_user)
     assert missing_token.value.status_code == 404
 
-    _FakeTokenModel.get_or_none_responses = [SimpleNamespace(id=88)]
-    revoked = await auth_routes.revoke_token(88, active_user)
+    revoked = await auth_routes.revoke_token(created["token_id"], active_user)
     assert revoked["success"] is True
-    assert deleted_tokens == [88]
+    assert Token.get_or_none(Token.id == created["token_id"]) is None
 
-    assert session_creations[0] == {
-        "session_id": "session-id",
-        "user": active_user,
-        "secret": "session-secret",
-        "expires_at": "expiry:12",
-    }
     assert atomic_state["entered"] >= 1

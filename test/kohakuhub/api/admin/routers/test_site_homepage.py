@@ -1,4 +1,4 @@
-"""Homepage API checks use isolated SQLite storage and real admin authentication."""
+"""Homepage API checks use the shared real-database fixture and real admin authentication."""
 
 from unittest.mock import Mock
 from concurrent.futures import ThreadPoolExecutor
@@ -6,7 +6,7 @@ from threading import Barrier
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from peewee import OperationalError, SqliteDatabase
+from peewee import OperationalError
 import pytest
 
 from kohakuhub import db as db_module, site_homepage
@@ -22,22 +22,16 @@ HEADERS = {"X-Admin-Token": TOKEN}
 
 
 @pytest.fixture
-def homepage_client(tmp_path, monkeypatch):
-    database = SqliteDatabase(str(tmp_path / "homepage.db"))
-    original_database = SiteHomepage._meta.database
-    SiteHomepage.bind(database)
-    database.create_tables([SiteHomepage])
+def homepage_client(db_fresh, monkeypatch):
+    # Requests run on TestClient's worker threads, so the rows must be committed:
+    # db_fresh is a file-backed database, not a rolled-back transaction.
     monkeypatch.setattr(cfg.admin, "enabled", True)
     monkeypatch.setattr(cfg.admin, "secret_token", TOKEN)
     app = FastAPI()
     app.include_router(public_router, prefix="/api")
     app.include_router(admin_router, prefix="/admin/api")
-    try:
-        with TestClient(app, raise_server_exceptions=False) as session:
-            yield session, database
-    finally:
-        database.close()
-        SiteHomepage.bind(original_database)
+    with TestClient(app, raise_server_exceptions=False) as session:
+        yield session, db_fresh
 
 
 def test_defaults_and_partial_edits_persist_after_restart(homepage_client):
@@ -54,10 +48,10 @@ def test_defaults_and_partial_edits_persist_after_restart(homepage_client):
     patch = {"animation_enabled": False, "primary_label": "", "primary_url": "https://example.com"}
     assert session.put(ADMIN_URL, headers=HEADERS, json=patch).status_code == 200
     expected.update(patch)
+    # Close and reopen the file: the saved configuration is on disk, not in memory.
     database.close()
-    restarted_database = SqliteDatabase(database.database)
-    with SiteHomepage.bind_ctx(restarted_database), restarted_database.connection_context():
-        assert site_homepage.get_homepage() == expected
+    database.connect()
+    assert site_homepage.get_homepage() == expected
     assert session.get(PUBLIC_URL).json() == expected
     assert session.get(ADMIN_URL, headers=HEADERS).json() == expected
     assert SiteHomepage.select().count() == 1
@@ -152,6 +146,8 @@ def test_safe_links_and_hidden_actions(homepage_client, url):
 def test_database_outage_uses_public_defaults_but_admin_reports_failure(
     homepage_client, monkeypatch
 ):
+    # Deliberate outage: the request runs on a worker thread, where a rolled-back
+    # DROP TABLE would not be visible, so the failing read is injected here.
     session, _ = homepage_client
     monkeypatch.setattr(SiteHomepage, "get_or_none", Mock(side_effect=OperationalError("offline")))
     response = session.get(PUBLIC_URL)

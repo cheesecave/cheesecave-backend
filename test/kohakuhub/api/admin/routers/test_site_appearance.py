@@ -7,7 +7,7 @@ from unittest.mock import Mock
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from peewee import OperationalError, SqliteDatabase
+from peewee import OperationalError
 import pytest
 
 from kohakuhub import db as db_module, site_appearance
@@ -23,22 +23,16 @@ HEADERS = {"X-Admin-Token": TOKEN}
 
 
 @pytest.fixture
-def appearance_client(tmp_path, monkeypatch):
-    database = SqliteDatabase(str(tmp_path / "appearance.db"), timeout=10)
-    original_database = SiteAppearance._meta.database
-    SiteAppearance.bind(database)
-    database.create_tables([SiteAppearance])
+def appearance_client(db_fresh, monkeypatch):
+    # Requests run on TestClient's worker threads, so rows must be committed:
+    # db_fresh is a file-backed database, not a rolled-back transaction.
     monkeypatch.setattr(cfg.admin, "enabled", True)
     monkeypatch.setattr(cfg.admin, "secret_token", TOKEN)
     app = FastAPI()
     app.include_router(public_router, prefix="/api")
     app.include_router(admin_router, prefix="/admin/api")
-    try:
-        with TestClient(app, raise_server_exceptions=False) as session:
-            yield session, database
-    finally:
-        database.close()
-        SiteAppearance.bind(original_database)
+    with TestClient(app, raise_server_exceptions=False) as session:
+        yield session, db_fresh
 
 
 def test_public_defaults_do_not_insert_overrides(appearance_client):
@@ -95,10 +89,10 @@ def test_partial_nested_updates_persist_without_resetting_unsupplied_fields(appe
     assert response.headers["Cache-Control"] == "no-store"
     record = SiteAppearance.get_by_id(1)
     assert json.loads(record.theme) == {"primary_light": "#123456", "default_mode": "dark"}
+    # Close and reopen the file: the saved configuration is on disk, not in memory.
     database.close()
-    restarted = SqliteDatabase(database.database)
-    with SiteAppearance.bind_ctx(restarted), restarted.connection_context():
-        assert site_appearance.get_appearance() == expected
+    database.connect()
+    assert site_appearance.get_appearance() == expected
     assert session.get(PUBLIC_URL).json() == expected
     admin_response = session.get(ADMIN_URL, headers=HEADERS)
     assert admin_response.json() == expected
@@ -288,6 +282,8 @@ def test_legacy_credit_overrides_are_ignored_and_cleaned_on_footer_save(appearan
 
 
 def test_database_outage_returns_public_defaults_and_admin_errors(appearance_client, monkeypatch):
+    # Deliberate outage: the request runs on a worker thread, where a rolled-back
+    # DROP TABLE would not be visible, so the failing read is injected here.
     session, _ = appearance_client
     monkeypatch.setattr(
         SiteAppearance, "get_or_none", Mock(side_effect=OperationalError("offline"))

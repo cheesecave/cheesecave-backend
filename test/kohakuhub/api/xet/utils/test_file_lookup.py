@@ -1,4 +1,4 @@
-"""Tests for XET file lookup helpers."""
+"""Tests for XET file lookup helpers, on real repository and file rows."""
 
 from __future__ import annotations
 
@@ -8,55 +8,33 @@ import pytest
 from fastapi import HTTPException
 
 import kohakuhub.api.xet.utils.file_lookup as file_lookup
+from test.kohakuhub.support.factories import make_file, make_repo, make_user
 
 
-class _Field:
-    def __init__(self, name: str):
-        self.name = name
-
-    def __eq__(self, other):
-        return (self.name, "==", other)
-
-
-def test_lookup_file_by_sha256_returns_repo_and_file(monkeypatch):
-    repo = SimpleNamespace(full_id="owner/repo")
-    file_record = SimpleNamespace(repository=repo)
-    seen = {}
-
-    class FakeFile:
-        sha256 = _Field("sha256")
-        is_deleted = _Field("is_deleted")
-
-        @staticmethod
-        def get_or_none(*args):
-            seen["args"] = args
-            return file_record
-
-    monkeypatch.setattr(file_lookup, "File", FakeFile)
+def test_lookup_file_by_sha256_returns_repo_and_file(db_scope):
+    repo = make_repo(make_user("owner"), "repo")
+    file_record = make_file(repo, "weights.bin", "abc123")
+    make_file(repo, "old.bin", "abc123", is_deleted=True)
 
     actual_repo, actual_file = file_lookup.lookup_file_by_sha256("abc123")
 
-    assert actual_repo is repo
-    assert actual_file is file_record
-    assert seen["args"] == (("sha256", "==", "abc123"), ("is_deleted", "==", False))
+    assert actual_repo == repo
+    assert actual_file == file_record
 
 
-def test_lookup_file_by_sha256_raises_for_missing_file(monkeypatch):
-    class FakeFile:
-        sha256 = _Field("sha256")
-        is_deleted = _Field("is_deleted")
-
-        @staticmethod
-        def get_or_none(*_args):
-            return None
-
-    monkeypatch.setattr(file_lookup, "File", FakeFile)
+def test_lookup_file_by_sha256_raises_for_missing_file(db_scope):
+    make_file(make_repo(make_user("owner"), "repo"), "gone.bin", "abc123", is_deleted=True)
 
     with pytest.raises(HTTPException) as exc_info:
         file_lookup.lookup_file_by_sha256("deadbeef")
 
     assert exc_info.value.status_code == 404
     assert "deadbeef" in exc_info.value.detail["error"]
+
+    # a deleted file is not found either
+    with pytest.raises(HTTPException) as deleted:
+        file_lookup.lookup_file_by_sha256("abc123")
+    assert deleted.value.status_code == 404
 
 
 def test_check_file_read_permission_delegates_to_repo_permission(monkeypatch):

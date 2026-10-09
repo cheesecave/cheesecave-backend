@@ -1,4 +1,8 @@
-"""Follow and derived activity contracts on isolated SQLite and PostgreSQL databases."""
+"""Follow and derived activity contracts on the shared real-database fixtures.
+
+The app runs through TestClient (its own thread), so rows must be committed: the catalog
+uses ``db_dual``, so every test runs on SQLite and on PostgreSQL.
+"""
 
 from datetime import datetime, timedelta, timezone
 from concurrent.futures import ThreadPoolExecutor
@@ -12,32 +16,19 @@ import pytest
 
 from kohakuhub.api import social
 from kohakuhub.auth.dependencies import get_current_user, get_optional_user
-from kohakuhub.db import Commit, Repository, RepositoryLike, User, UserFollow, UserOrganization, db
+from kohakuhub.db import Commit, Repository, RepositoryLike, User, UserFollow, UserOrganization
+from test.kohakuhub.support.db import peer_connection
+from test.kohakuhub.support.factories import make_commit, make_org, make_repo, make_user
 
-MODELS = [User, UserFollow, UserOrganization, Repository, Commit, RepositoryLike]
 STAMP = datetime(2025, 1, 1, 12)
 
 
-@pytest.fixture(params=["sqlite", pytest.param("postgres", marks=pytest.mark.integration)])
-def catalog(request, tmp_path):
-    database = (
-        SqliteDatabase(str(tmp_path / "social.db"), pragmas={"foreign_keys": 1})
-        if request.param == "sqlite"
-        else PostgresqlDatabase(db.database, **db.connect_params)
-    )
-    database.connect()
-    schema = "social_" + uuid4().hex
-    if request.param == "postgres":
-        database.execute_sql(f'CREATE SCHEMA "{schema}"')
-        database.execute_sql(f'SET search_path TO "{schema}"')
-        database.connect_params["options"] = f"-c search_path={schema}"
-    original = {model: model._meta.database for model in MODELS}
-    database.bind(MODELS)
-    database.create_tables(MODELS)
-    viewer = User.create(username="viewer", normalized_name="viewer")
-    author = User.create(username="author", normalized_name="author", full_name="An author")
-    outsider = User.create(username="outsider", normalized_name="outsider")
-    org = User.create(username="org", normalized_name="org", is_org=True)
+@pytest.fixture
+def catalog(db_dual):
+    viewer = make_user("viewer")
+    author = make_user("author", full_name="An author")
+    outsider = make_user("outsider")
+    org = make_org("org")
     auth = {"user": viewer}
     app = FastAPI()
     app.include_router(social.router, prefix="/api")
@@ -49,33 +40,23 @@ def catalog(request, tmp_path):
 
     app.dependency_overrides[get_current_user] = authenticated
     app.dependency_overrides[get_optional_user] = lambda: auth["user"]
-    try:
-        with TestClient(app) as session:
-            yield SimpleNamespace(
-                database=database,
-                viewer=viewer,
-                author=author,
-                outsider=outsider,
-                org=org,
-                auth=auth,
-                session=session,
-                app=app,
-            )
-    finally:
-        if request.param == "postgres":
-            database.execute_sql(f'DROP SCHEMA "{schema}" CASCADE')
-        database.close()
-        for model, connection in original.items():
-            model.bind(connection)
+    with TestClient(app) as session:
+        yield SimpleNamespace(
+            database=db_dual,
+            viewer=viewer,
+            author=author,
+            outsider=outsider,
+            org=org,
+            auth=auth,
+            session=session,
+            app=app,
+        )
 
 
 def repository(catalog, owner=None, private=False, repo_type="model", name="repo", stamp=STAMP):
-    owner = owner or catalog.author
-    return Repository.create(
-        owner=owner,
-        namespace=owner.username,
-        name=name,
-        full_id=f"{owner.username}/{name}",
+    return make_repo(
+        owner or catalog.author,
+        name,
         repo_type=repo_type,
         private=private,
         created_at=stamp,
@@ -83,15 +64,11 @@ def repository(catalog, owner=None, private=False, repo_type="model", name="repo
 
 
 def commit(catalog, repo, author=None, stamp=STAMP, branch="main", sha=None):
-    author = author or catalog.author
-    return Commit.create(
-        repository=repo,
-        author=author,
-        owner=repo.owner_id,
-        username=author.username,
-        repo_type=repo.repo_type,
+    return make_commit(
+        repo,
+        sha or uuid4().hex,
+        author=author or catalog.author,
         branch=branch,
-        commit_id=sha or uuid4().hex,
         message="Real change",
         created_at=stamp,
     )
@@ -406,7 +383,7 @@ def test_read_snapshot_survives_concurrent_cascade(catalog, monkeypatch):
         pytest.skip("Concurrent deletion while reading is tested against PostgreSQL MVCC")
     repo = repository(catalog, owner=catalog.viewer)
     commit(catalog, repo, author=catalog.viewer)
-    other = PostgresqlDatabase(catalog.database.database, **catalog.database.connect_params)
+    other = peer_connection(catalog.database)
     real_execute = catalog.database.execute_sql
     deleted = []
 

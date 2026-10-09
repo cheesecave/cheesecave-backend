@@ -10,6 +10,7 @@ import pytest
 from fastapi import HTTPException
 
 import kohakuhub.api.git.routers.lfs as lfs_router
+from test.kohakuhub.support.factories import make_file, make_org, make_repo, make_user
 
 
 class _FakeRequest:
@@ -30,9 +31,8 @@ def test_get_lfs_key_uses_balanced_directory_layout():
 
 
 @pytest.mark.asyncio
-async def test_process_upload_object_skips_existing_content(monkeypatch):
+async def test_process_upload_object_skips_existing_content(monkeypatch, db_scope):
     monkeypatch.setattr(lfs_router, "object_exists", lambda bucket, key: _async_return(True))
-    monkeypatch.setattr(lfs_router, "get_file_by_sha256", lambda oid: None)
 
     response = await lfs_router.process_upload_object("a" * 64, 123, "owner/repo")
 
@@ -45,13 +45,12 @@ async def _async_return(value):
 
 
 @pytest.mark.asyncio
-async def test_process_upload_object_supports_multipart_and_single_part(monkeypatch):
+async def test_process_upload_object_supports_multipart_and_single_part(monkeypatch, db_scope):
     multipart_seen = {}
     single_seen = {}
     monkeypatch.setattr(lfs_router.cfg.s3, "bucket", "hub-storage")
     monkeypatch.setattr(lfs_router.cfg.app, "base_url", "https://hub.example.com")
     monkeypatch.setattr(lfs_router, "object_exists", lambda bucket, key: _async_return(False))
-    monkeypatch.setattr(lfs_router, "get_file_by_sha256", lambda oid: None)
     monkeypatch.setattr(lfs_router, "get_multipart_threshold", lambda: 10)
     monkeypatch.setattr(lfs_router, "get_multipart_chunk_size", lambda: 4)
 
@@ -128,9 +127,8 @@ async def test_process_upload_object_supports_multipart_and_single_part(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_process_upload_object_returns_error_when_presign_fails(monkeypatch):
+async def test_process_upload_object_returns_error_when_presign_fails(monkeypatch, db_scope):
     monkeypatch.setattr(lfs_router, "object_exists", lambda bucket, key: _async_return(False))
-    monkeypatch.setattr(lfs_router, "get_file_by_sha256", lambda oid: None)
     monkeypatch.setattr(lfs_router, "get_multipart_threshold", lambda: 100)
 
     async def broken_upload(**_kwargs):
@@ -145,14 +143,13 @@ async def test_process_upload_object_returns_error_when_presign_fails(monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_process_download_object_covers_missing_success_and_failure(monkeypatch):
+async def test_process_download_object_covers_missing_success_and_failure(monkeypatch, db_scope):
     monkeypatch.setattr(lfs_router.cfg.s3, "bucket", "hub-storage")
-    monkeypatch.setattr(lfs_router, "get_file_by_sha256", lambda oid: None)
 
     missing = await lfs_router.process_download_object("e" * 64, 123)
     assert missing.error.code == 404
 
-    monkeypatch.setattr(lfs_router, "get_file_by_sha256", lambda oid: SimpleNamespace(size=123))
+    make_file(make_repo(make_user("owner"), "repo"), "weights.bin", "e" * 64, size=123)
     monkeypatch.setattr(
         lfs_router,
         "generate_download_presigned_url",
@@ -170,15 +167,14 @@ async def test_process_download_object_covers_missing_success_and_failure(monkey
 
 
 @pytest.mark.asyncio
-async def test_lfs_batch_validates_payload_auth_quota_and_operations(monkeypatch):
-    repo = SimpleNamespace(private=True)
-    writer = SimpleNamespace(username="owner")
+async def test_lfs_batch_validates_payload_auth_quota_and_operations(monkeypatch, db_scope):
+    writer = make_user("owner")
+    repo = make_repo(writer, "repo", private=True)
+    make_repo(make_org("org", admin=writer), "repo", private=True)
     permission_calls = []
     upload_calls = []
     download_calls = []
 
-    monkeypatch.setattr(lfs_router, "get_repository", lambda *_args: repo)
-    monkeypatch.setattr(lfs_router, "get_organization", lambda namespace: SimpleNamespace() if namespace == "org" else None)
     monkeypatch.setattr(lfs_router, "check_repo_write_permission", lambda repo_arg, user_arg: permission_calls.append(("write", repo_arg, user_arg)))
     monkeypatch.setattr(lfs_router, "check_repo_read_permission", lambda repo_arg, user_arg: permission_calls.append(("read", repo_arg, user_arg)))
     monkeypatch.setattr(lfs_router, "check_quota", lambda namespace, total_bytes, is_private, is_org: (True, None))
@@ -536,9 +532,8 @@ def test_authorize_followup_refuses_anonymous_callers_with_a_bad_ticket():
         assert refused.value.status_code == 401
 
 
-def _repos(monkeypatch, repos: dict, *, readable=None, writable=None):
-    """Install fake lookups: ``repos`` maps repo type -> repo object."""
-    monkeypatch.setattr(lfs_router, "get_repository", lambda t, ns, name: repos.get(t))
+def _permissions(monkeypatch, *, readable=None, writable=None):
+    """Permission checks answer from the given lists; repository lookups stay real."""
 
     def read(repo, user):
         if readable is not None and repo not in readable:
@@ -552,41 +547,41 @@ def _repos(monkeypatch, repos: dict, *, readable=None, writable=None):
     monkeypatch.setattr(lfs_router, "check_repo_write_permission", write)
 
 
-def test_authorize_followup_signed_in_paths(monkeypatch):
+def test_authorize_followup_signed_in_paths(monkeypatch, db_scope):
     user = SimpleNamespace(username="u")
-    model = SimpleNamespace(name="m", full_id="o/r", repo_type="model")
-    dataset = SimpleNamespace(name="d", full_id="o/r", repo_type="dataset")
+    owner = make_user("o")
+    model = make_repo(owner, "r", repo_type="model")
+    dataset = make_repo(owner, "r", repo_type="dataset")
 
-    # no repository by that name at all
-    _repos(monkeypatch, {})
+    # no repository by that name at all (the rows above are under "r", not "nope")
     with pytest.raises(HTTPException) as missing:
-        lfs_router._authorize_followup("o", "r", user, None, "verify", "a" * 64)
+        lfs_router._authorize_followup("o", "nope", user, None, "verify", "a" * 64)
     assert missing.value.status_code == 404
     assert missing.value.headers["X-Error-Code"] == "RepoNotFound"
 
     # one that exists but cannot be seen: same answer
-    _repos(monkeypatch, {"model": model}, readable=[])
+    _permissions(monkeypatch, readable=[])
     with pytest.raises(HTTPException) as hidden:
         lfs_router._authorize_followup("o", "r", user, None, "verify", "a" * 64)
     assert hidden.value.status_code == 404
 
     # readable but not writable
-    _repos(monkeypatch, {"model": model}, readable=[model], writable=[])
+    _permissions(monkeypatch, readable=[model], writable=[])
     with pytest.raises(HTTPException) as readonly:
         lfs_router._authorize_followup("o", "r", user, None, "verify", "a" * 64)
     assert readonly.value.status_code == 403
 
     # writable on the second of two repositories sharing the name
-    _repos(monkeypatch, {"model": model, "dataset": dataset}, writable=[dataset])
+    _permissions(monkeypatch, writable=[dataset])
     assert lfs_router._authorize_followup("o", "r", user, None, "verify", "a" * 64) is None
 
 
-def test_authorize_batch_decisions(monkeypatch):
+def test_authorize_batch_decisions(monkeypatch, db_scope):
     user = SimpleNamespace(username="u")
-    repo = SimpleNamespace(name="r", full_id="o/r", repo_type="model")
+    repo = make_repo(make_user("o"), "r")
     writes = []
 
-    _repos(monkeypatch, {"model": repo}, readable=[repo])
+    _permissions(monkeypatch, readable=[repo])
     monkeypatch.setattr(
         lfs_router, "check_repo_write_permission", lambda r, u: writes.append((r, u))
     )
@@ -600,13 +595,13 @@ def test_authorize_batch_decisions(monkeypatch):
     assert signed_in.value.status_code == 404
 
     # a repo the caller cannot read behaves the same
-    _repos(monkeypatch, {"model": repo}, readable=[])
+    _permissions(monkeypatch, readable=[])
     with pytest.raises(HTTPException) as hidden:
         lfs_router._authorize_batch(repo, "download", None)
     assert hidden.value.status_code == 401
 
     # readable: download needs nothing more, upload needs a user with write access
-    _repos(monkeypatch, {"model": repo}, readable=[repo])
+    _permissions(monkeypatch, readable=[repo])
     monkeypatch.setattr(
         lfs_router, "check_repo_write_permission", lambda r, u: writes.append((r, u))
     )

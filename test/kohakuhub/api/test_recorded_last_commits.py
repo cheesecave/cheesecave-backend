@@ -11,6 +11,7 @@ import pytest
 
 from test.kohakuhub.api.commit.test_availability import Repo, _delete, _file, _live
 from test.kohakuhub.api.helpers import encode_ndjson
+from test.kohakuhub.support.db import history_operations_need_postgres
 
 MIGRATION = (
     Path(__file__).resolve().parents[3] / "scripts" / "db_migrations" / "026_path_commits.py"
@@ -144,6 +145,7 @@ async def test_a_path_without_a_record_falls_back(m, owner_client):
     assert expanded["dir/f.txt"]["id"] == commit
 
 
+@history_operations_need_postgres
 async def test_revert_and_reset_record_their_commits(m, owner_client):
     repo = await _repo(m, owner_client, "pc-history")
     base = await repo.commit(_file("k/f.txt", "1"), _file("g.txt", "g"), summary="base")
@@ -167,6 +169,7 @@ async def test_revert_and_reset_record_their_commits(m, owner_client):
     assert rows["k/f.txt"] == revert_title  # unchanged by the reset: same content
 
 
+@history_operations_need_postgres
 async def test_a_squash_makes_its_commit_everyones_last(m, owner_client):
     repo = await _repo(m, owner_client, "pc-squash")
     await repo.commit(_file("a/f.txt", "1"), summary="one")
@@ -212,6 +215,7 @@ async def test_the_backfill_records_an_existing_repository(m, owner_client):
     assert m.pc.ensure_backfill() is None  # nothing left to record
 
 
+@history_operations_need_postgres
 async def test_the_backfill_records_a_squashed_repository(m, owner_client):
     repo = await _repo(m, owner_client, "pc-backfill-squash")
     await repo.commit(_file("a/f.txt", "1"), summary="one")
@@ -464,9 +468,14 @@ async def test_the_backfill_skips_a_repository_lakefs_lost_and_retries_on_errors
     assert calls == [repo.id]
 
 
+@history_operations_need_postgres
 async def test_failing_to_record_never_fails_the_change(m, owner_client, monkeypatch):
     repo = await _repo(m, owner_client, "pc-resilient")
 
+    # Deliberate database failure, kept as a targeted mock: a real missing table
+    # fails inside the test's outer Postgres transaction, which then rejects every
+    # later statement of the request (InFailedSqlTransaction), so the change itself
+    # could not finish. Production autocommits, where the failure stays contained.
     async def broken(*args):
         raise RuntimeError("database is gone")
 

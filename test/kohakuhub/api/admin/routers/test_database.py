@@ -1,5 +1,7 @@
 """API tests for admin database viewer routes."""
 
+from test.kohakuhub.support.db import postgres_configured
+
 
 async def test_admin_database_routes_list_tables_templates_and_execute_queries(admin_client):
     tables_response = await admin_client.get("/admin/api/database/tables")
@@ -25,7 +27,8 @@ async def test_admin_database_routes_list_tables_templates_and_execute_queries(a
     assert payload["columns"] == ["username", "is_org"]
     assert payload["count"] >= 1
     assert isinstance(payload["rows"][0]["username"], str)
-    assert payload["rows"][0]["is_org"] in {"True", "False"}
+    # PostgreSQL returns the boolean and the console shows "True"/"False"; SQLite returns 0/1
+    assert payload["rows"][0]["is_org"] in ({"True", "False"} if postgres_configured() else {0, 1})
 
 
 async def test_admin_database_query_rejects_invalid_or_failing_sql(admin_client):

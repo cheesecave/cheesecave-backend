@@ -5,37 +5,33 @@ from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
 
-from peewee import PostgresqlDatabase, SqliteDatabase
+from peewee import SqliteDatabase
 import pytest
 
-from kohakuhub.db import db
 
-
-@pytest.fixture(params=["sqlite", pytest.param("postgres", marks=pytest.mark.integration)])
-def column_probe(request):
+@pytest.fixture
+def column_probe(db_dual):
     path = Path(__file__).resolve().parents[2] / "scripts/db_migrations/_migration_utils.py"
     spec = importlib.util.spec_from_file_location("migration_column_probe", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    database = (
-        SqliteDatabase(":memory:")
-        if request.param == "sqlite"
-        else PostgresqlDatabase(db.database, **db.connect_params)
-    )
-    database.connect()
-    schemas = ["column_probe_" + uuid4().hex for _ in range(2)]
-    if request.param == "postgres":
-        for schema in schemas:
-            database.execute_sql(f'CREATE SCHEMA "{schema}"')
-        database.execute_sql(f'SET search_path TO "{schemas[0]}", "{schemas[1]}"')
-    config = SimpleNamespace(app=SimpleNamespace(db_backend=request.param))
+    database = db_dual
+    backend = "sqlite" if isinstance(database, SqliteDatabase) else "postgres"
+    current = extra = None
+    if backend == "postgres":
+        # db_dual owns the connection and its schema; add a second schema to the search_path.
+        current = database.execute_sql("SELECT current_schema()").fetchone()[0]
+        extra = "column_probe_" + uuid4().hex
+        database.execute_sql(f'CREATE SCHEMA "{extra}"')
+        database.execute_sql(f'SET search_path TO "{current}", "{extra}"')
+    schemas = [current, extra]
+    config = SimpleNamespace(app=SimpleNamespace(db_backend=backend))
     try:
         yield module, database, config, schemas
     finally:
-        if request.param == "postgres":
-            for schema in schemas:
-                database.execute_sql(f'DROP SCHEMA "{schema}" CASCADE')
-        database.close()
+        if backend == "postgres":
+            database.execute_sql(f'SET search_path TO "{current}"')
+            database.execute_sql(f'DROP SCHEMA "{extra}" CASCADE')
 
 
 def test_column_lookup_ignores_same_named_relation_in_other_schema(column_probe):

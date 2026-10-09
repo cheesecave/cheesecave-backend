@@ -15,6 +15,7 @@ import pytest
 
 from kohakuhub import lakefs_rest_client
 from test.kohakuhub.api.helpers import encode_ndjson
+from test.kohakuhub.support.db import history_operations_need_postgres
 
 REPO = "owner/avail-demo"
 
@@ -143,6 +144,7 @@ def _verdict(body, op):
 # ----- revert -----
 
 
+@history_operations_need_postgres
 async def test_revert_rules_on_a_linear_history(m, owner_client):
     repo, (initial, c1, c2, c3, c4, c5) = await _linear(m, owner_client)
 
@@ -165,6 +167,7 @@ async def test_revert_rules_on_a_linear_history(m, owner_client):
     assert _verdict(body, "revert") == (False, "no_changes")
 
 
+@history_operations_need_postgres
 async def test_reverting_needs_the_versions_it_restores(m, owner_client):
     repo = await Repo(m, owner_client, "avail-lfs").create()
     c1 = await repo.commit(lfs("w.bin", b"w v1"), lfs("x.bin", b"x v1"))
@@ -189,6 +192,7 @@ async def test_reverting_needs_the_versions_it_restores(m, owner_client):
 # ----- reset -----
 
 
+@history_operations_need_postgres
 async def test_reset_rules(m, owner_client):
     repo, (initial, c1, c2, c3, c4, c5) = await _linear(m, owner_client, "avail-reset")
 
@@ -217,6 +221,7 @@ async def test_reset_rules(m, owner_client):
 # ----- who may ask, and when nothing is evaluated -----
 
 
+@history_operations_need_postgres
 async def test_permissions_capabilities_and_missing_refs(m, owner_client, visitor_client, app):
     repo, (initial, c1, *_rest) = await _linear(m, owner_client, "avail-perm")
 
@@ -264,6 +269,7 @@ async def test_permissions_capabilities_and_missing_refs(m, owner_client, visito
 # ----- the commit list page -----
 
 
+@history_operations_need_postgres
 async def test_the_list_marks_only_what_is_proven(m, owner_client, monkeypatch):
     repo, commits = await _linear(m, owner_client, "avail-quick")
     initial, c1, c2, c3, c4, c5 = commits
@@ -330,6 +336,7 @@ async def _lakefs_revert_outcome(m, repo, commit, head):
         await client.delete_branch(repository=repo.lakefs_repo, branch=branch)
 
 
+@history_operations_need_postgres
 async def test_revert_predictions_match_lakefs_on_a_tangled_history(m, owner_client):
     rng = random.Random(115)
     repo = await Repo(m, owner_client, "avail-tangled").create()
@@ -398,6 +405,7 @@ async def test_big_diffs_page_and_list_instead_of_one_stat_each(m, owner_client,
     assert [(await repo.preflight(commit)).json() for commit in commits] == expected
 
 
+@history_operations_need_postgres
 async def test_lakefs_failures_other_than_not_found_surface(m, owner_client, monkeypatch):
     repo, (initial, c1, *_rest) = await _linear(m, owner_client, "avail-errors")
     routes = _live("kohakuhub.api.commit.routers.availability")
@@ -424,6 +432,7 @@ async def test_lakefs_failures_other_than_not_found_surface(m, owner_client, mon
             )
 
 
+@history_operations_need_postgres
 async def test_the_list_reports_an_operation_disabled_on_its_own(m, owner_client):
     repo, commits = await _linear(m, owner_client, "avail-one-off")
     m.cfg.app.repository_reset_enabled = False
@@ -435,6 +444,7 @@ async def test_the_list_reports_an_operation_disabled_on_its_own(m, owner_client
     assert (await repo.quick(commits)).json()["commits"] == {}  # nothing to act on
 
 
+@history_operations_need_postgres
 async def test_reverting_additions_already_deleted_changes_nothing(m, owner_client):
     """No file's content would change. LakeFS refuses such a revert, or
     records an empty commit where its internal layout differs; the verdict
@@ -456,6 +466,7 @@ async def test_reverting_additions_already_deleted_changes_nothing(m, owner_clie
     assert _verdict(body, "revert") == (False, "no_changes")
 
 
+@history_operations_need_postgres
 async def test_a_collected_version_outranks_a_conflict(m, owner_client):
     repo = await Repo(m, owner_client, "avail-both").create()
     await repo.commit(lfs("w.bin", b"w v1"))
@@ -489,6 +500,7 @@ def test_only_not_found_counts_as_missing_from_the_bucket(m):
         m.avail._stored(Bucket("SlowDown"), "a" * 64)
 
 
+@history_operations_need_postgres
 async def test_too_many_changed_paths_are_left_to_the_operation(m, owner_client, monkeypatch):
     repo, (initial, c1, *_rest) = await _linear(m, owner_client, "avail-large")
     monkeypatch.setattr(m.avail, "EXACT_PATHS", 1)
@@ -648,6 +660,7 @@ async def test_the_diff_survives_the_bucket_failing(m, owner_client, monkeypatch
     )
 
 
+@history_operations_need_postgres
 async def test_the_list_proves_nothing_from_an_object_the_head_links(m, owner_client):
     """An object the head links unclaimed (after a revert, merge or reset) can
     be collected; where the head links it too, nothing needs it."""

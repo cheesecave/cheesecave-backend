@@ -34,6 +34,33 @@ in `NOTICE.md`, `LICENSE` and `provenance/` intact when editing inherited code.
 - **Documentation.** Keep English as the source of repository documents. Where a Chinese
   companion exists (`*.zh-CN.md`), update both in the same change.
 
+## Test database discipline
+
+- **Real SQL by default.** A test that checks what the database decides (queries, filters,
+  ordering, counts, uniqueness, foreign keys, transactions, what gets written) runs real SQL.
+  Do not replace the ORM or query objects with fakes for those checks.
+- **Use the shared fixtures.** They live in `test/conftest.py` and `test/kohakuhub/support/db.py`:
+  `db_fresh` for code that commits over HTTP, migrations and DDL (a new file-backed database per
+  test); `db_committed` for rows that must be really committed but may be emptied per test;
+  `db_scope` (rolled back after each test, same thread only) for query-shaped tests; `db_dual`
+  (a fresh database per test, requested with the `db_backend` parametrization) when the test must
+  run on both SQLite and PostgreSQL. Use `table_missing(database, Model)` for a real database
+  failure. Seed rows with `test/kohakuhub/support/factories.py`. Do not construct `SqliteDatabase` or `PostgresqlDatabase`
+  in a test file; only `support/db.py` does.
+- **Keep the mocks that belong to the environment.** External services (LakeFS, S3, Hugging
+  Face HTTP, SMTP) stay mocked; their database side uses real rows. Pure logic that never reads
+  the database may stay a plain unit test without fake ORM objects. A deliberate database
+  failure (outage, injected constraint error) may keep a targeted mock; say why in a comment.
+- **Ratchet (discipline, not CI).** The count from `python scripts/dev/mock_ratchet.py` may go
+  down and must not go up. Baseline when the migration started (2026-10-09): **291** (67 ORM
+  attribute monkeypatches, 224 fake query or field references, 0 mocked database calls). A PR
+  that touches tests states the count before and after in its description. Reviewers reject a
+  PR that raises the count without a stated reason in the description and a linked issue.
+- **Coverage must not drop.** A change keeps or raises the branch coverage of the lines it
+  touches; new runtime code aims for 100 % branch coverage. The coverage number before and after
+  goes in the PR description.
+- **Migrations keep a fresh database.** Tests of schema history use `db_fresh`; never `db_scope`.
+
 ## Layout
 
 - `src/kohakuhub/`: application package. `api/` holds routers, `auth/` permissions and tokens,

@@ -1,8 +1,12 @@
-"""Unit tests for repository CRUD routes and helpers."""
+"""Unit tests for repository CRUD routes and helpers, on real repository rows.
+
+The LakeFS client, the LakeFS id allocator and the S3 helpers are external
+services and stay fakes. Repository lookup, uniqueness, owners, quotas and
+the writes of create, delete and move are real SQL.
+"""
 
 from __future__ import annotations
 
-from contextlib import asynccontextmanager
 import json
 from types import SimpleNamespace
 
@@ -11,87 +15,13 @@ from fastapi import HTTPException
 
 import kohakuhub.api.repo.routers.crud as repo_crud
 import kohakuhub.api.operation_capabilities as operation_capabilities
+from kohakuhub.db import BackgroundTask, File, Repository
+from kohakuhub.storage_cleanup import PURGE_KIND
 from kohakuhub.utils.lakefs import lakefs_repo_name
+from test.kohakuhub.support.db import table_missing
+from test.kohakuhub.support.factories import make_org, make_repo, make_user
 
-
-class _Expr:
-    def __init__(self, value):
-        self.value = value
-
-    def __and__(self, other):
-        return _Expr(("and", self.value, getattr(other, "value", other)))
-
-
-class _Field:
-    def __init__(self, name: str):
-        self.name = name
-
-    def __eq__(self, other):
-        return _Expr((self.name, "==", other))
-
-    def __hash__(self):
-        return hash(self.name)
-
-
-class _Query:
-    def __init__(self, items=None, execute_result=1):
-        self.items = list(items or [])
-        self.execute_result = execute_result
-        self.where_calls = []
-
-    def where(self, *args):
-        self.where_calls.append(args)
-        return self
-
-    def execute(self):
-        return self.execute_result
-
-    def __iter__(self):
-        return iter(self.items)
-
-
-class _AtomicContext:
-    def __init__(self, seen: dict):
-        self.seen = seen
-
-    def __enter__(self):
-        self.seen["entered"] = self.seen.get("entered", 0) + 1
-        return self
-
-    def __exit__(self, exc_type, exc, tb):
-        self.seen["exited"] = self.seen.get("exited", 0) + 1
-        return False
-
-
-class _FakeRepositoryModel:
-    repo_type = _Field("repo_type")
-    namespace = _Field("namespace")
-    name = _Field("name")
-    id = _Field("id")
-
-    select_query = _Query()
-    update_query = _Query()
-    get_or_create_calls = []
-
-    @classmethod
-    def reset(cls):
-        cls.select_query = _Query()
-        cls.update_query = _Query()
-        cls.get_or_create_calls = []
-
-    @classmethod
-    def select(cls):
-        return cls.select_query
-
-    @classmethod
-    def update(cls, **kwargs):
-        cls.update_kwargs = kwargs
-        return cls.update_query
-
-    @classmethod
-    def get_or_create(cls, **kwargs):
-        cls.get_or_create_calls.append(kwargs)
-        return SimpleNamespace(full_id=kwargs["full_id"]), True
+pytestmark = pytest.mark.usefixtures("db_scope")
 
 
 class _FakeClient:
@@ -147,6 +77,10 @@ class _FakeClient:
             return self.repository_exists_values.pop(0)
         return False
 
+    async def get_branch(self, **kwargs):
+        self.calls.append(("get_branch", kwargs))
+        return {"commit_id": "c0"}
+
 
 def _async_return(value):
     async def _inner(*args, **kwargs):
@@ -155,43 +89,22 @@ def _async_return(value):
     return _inner()
 
 
-@asynccontextmanager
-async def _no_lock(repo):
-    yield
-
-
-@pytest.fixture(autouse=True)
-def _repository_not_held(monkeypatch):
-    """No history operation holds the fake repositories (the lock itself is
-    tested against the real database in test_super_squash.py)."""
-    monkeypatch.setattr(repo_crud.operation_lock, "ensure_free", lambda repo: None)
-    monkeypatch.setattr(repo_crud.operation_lock, "writing", _no_lock)
-
-
-@pytest.fixture(autouse=True)
-def _reset_repo_model():
-    _FakeRepositoryModel.reset()
+def _repo_count(full_id):
+    return Repository.select().where(Repository.full_id == full_id).count()
 
 
 @pytest.mark.asyncio
 async def test_create_repo_covers_conflicts_lakefs_failure_and_success(monkeypatch):
-    user = SimpleNamespace(username="owner")
+    owner = make_user("owner")
     client = _FakeClient()
-    monkeypatch.setattr(repo_crud, "Repository", _FakeRepositoryModel)
-    monkeypatch.setattr(repo_crud, "check_namespace_permission", lambda namespace, user, is_admin=False: None)
     monkeypatch.setattr(repo_crud, "get_lakefs_client", lambda: client)
     monkeypatch.setattr(repo_crud.cfg.s3, "bucket", "hub-storage")
     monkeypatch.setattr(repo_crud.cfg.app, "base_url", "https://hub.example.com")
-    monkeypatch.setattr(repo_crud, "get_repository", lambda *_args: None)
-    monkeypatch.setattr(
-        repo_crud,
-        "normalize_name",
-        lambda name: name.lower().replace("-", "").replace("_", ""),
-    )
 
-    _FakeRepositoryModel.select_query = _Query(items=[SimpleNamespace(name="demo-model")])
+    demo = make_repo(owner, "demo-model")
+    # Only the normalized name matches: "Demo_Model" normalizes like "demo-model"
     conflict = await repo_crud.create_repo(
-        repo_crud.CreateRepoPayload(type="model", name="Demo_Model"), user=user
+        repo_crud.CreateRepoPayload(type="model", name="Demo_Model"), user=owner
     )
     # huggingface_hub's create_repo(exist_ok=True) only shortcuts on 409, so the
     # conflict response now uses 409 Conflict with a JSON body carrying `url`.
@@ -199,41 +112,60 @@ async def test_create_repo_covers_conflicts_lakefs_failure_and_success(monkeypat
     assert conflict.headers.get("x-error-code") == repo_crud.HFErrorCode.REPO_EXISTS
     assert json.loads(bytes(conflict.body)).get("url")
 
-    monkeypatch.setattr(repo_crud, "get_repository", lambda *_args: SimpleNamespace())
     exact_conflict = await repo_crud.create_repo(
-        repo_crud.CreateRepoPayload(type="model", name="demo-model"), user=user
+        repo_crud.CreateRepoPayload(type="model", name="demo-model"), user=owner
     )
     assert exact_conflict.status_code == 409
     assert json.loads(bytes(exact_conflict.body)).get("url")
 
-    monkeypatch.setattr(repo_crud, "get_repository", lambda *_args: None)
-    _FakeRepositoryModel.select_query = _Query(items=[])
+    demo.delete_instance()
     client.raise_on["create_repository"] = RuntimeError("lakefs failed")
     lakefs_error = await repo_crud.create_repo(
-        repo_crud.CreateRepoPayload(type="model", name="demo-model"), user=user
+        repo_crud.CreateRepoPayload(type="model", name="demo-model"), user=owner
     )
     assert lakefs_error.status_code == 500
+    assert _repo_count("owner/demo-model") == 0, "a failed LakeFS create leaves no row"
 
     client.raise_on.pop("create_repository", None)
     success = await repo_crud.create_repo(
-        repo_crud.CreateRepoPayload(type="model", name="demo-model"), user=user
+        repo_crud.CreateRepoPayload(type="model", name="demo-model"), user=owner
     )
     assert success["repo_id"] == "owner/demo-model"
-    assert _FakeRepositoryModel.get_or_create_calls
+    created = Repository.get(full_id="owner/demo-model")
+    assert created.lakefs_repo == lakefs_repo_name("model", "owner/demo-model")
+    # Usage counting starts from main's head commit, which the row records
+    assert created.main_counted_commit == "c0"
 
 
 @pytest.mark.asyncio
-async def test_delete_repo_covers_admin_validation_not_found_and_failures(monkeypatch):
-    repo_row = SimpleNamespace(repo_type="model", full_id="owner/demo-model")
-    deleted = []
+async def test_create_repo_succeeds_when_usage_counting_cannot_start(monkeypatch):
+    """Usage counting is best effort: a failed head lookup leaves the row for a recount."""
+    owner = make_user("owner")
 
-    def delete(repo):
-        if repo is not repo_row:
-            raise RuntimeError("db broke")
-        deleted.append(repo)
+    class _NoHeadClient(_FakeClient):
+        async def get_branch(self, **kwargs):
+            raise RuntimeError("lakefs unreachable")
 
-    monkeypatch.setattr(repo_crud, "check_repo_delete_permission", lambda repo, user, is_admin=False: None)
-    monkeypatch.setattr(repo_crud, "delete_repository", delete)
+    monkeypatch.setattr(repo_crud, "get_lakefs_client", lambda: _NoHeadClient())
+    monkeypatch.setattr(
+        repo_crud, "allocate_lakefs_repo_name", lambda *a, **k: _async_return("m-owner-demo")
+    )
+    monkeypatch.setattr(repo_crud.cfg.s3, "bucket", "hub-storage")
+    monkeypatch.setattr(repo_crud.cfg.app, "base_url", "https://hub.example.com")
+
+    response = await repo_crud.create_repo(
+        repo_crud.CreateRepoPayload(type="model", name="demo-model"), user=owner
+    )
+
+    assert response["repo_id"] == "owner/demo-model"
+    assert Repository.get(full_id="owner/demo-model").main_counted_commit is None
+
+
+@pytest.mark.asyncio
+async def test_delete_repo_covers_admin_validation_not_found_and_failures(
+    monkeypatch, db_scope
+):
+    owner = make_user("owner")
 
     with pytest.raises(HTTPException) as admin_missing_org:
         await repo_crud.delete_repo(
@@ -242,33 +174,37 @@ async def test_delete_repo_covers_admin_validation_not_found_and_failures(monkey
         )
     assert admin_missing_org.value.status_code == 400
 
-    monkeypatch.setattr(repo_crud, "get_repository", lambda *_args: None)
     not_found = await repo_crud.delete_repo(
         repo_crud.DeleteRepoPayload(type="model", name="demo-model"),
-        auth=(SimpleNamespace(username="owner"), False),
+        auth=(owner, False),
     )
     assert not_found.status_code == 404
 
     # The row goes at once; its storage is purged by a task scheduled with it
-    monkeypatch.setattr(repo_crud, "get_repository", lambda *_args: repo_row)
+    make_repo(owner, "demo-model")
     success = await repo_crud.delete_repo(
         repo_crud.DeleteRepoPayload(type="model", name="demo-model"),
-        auth=(SimpleNamespace(username="owner"), False),
+        auth=(owner, False),
     )
     assert "deleted" in success["message"].lower()
-    assert deleted == [repo_row]
+    assert _repo_count("owner/demo-model") == 0
+    purge = BackgroundTask.select().where(BackgroundTask.kind == PURGE_KIND)
+    assert purge.count() == 1
 
-    monkeypatch.setattr(repo_crud, "get_repository", lambda *_args: SimpleNamespace())
-    db_failure = await repo_crud.delete_repo(
-        repo_crud.DeleteRepoPayload(type="model", name="demo-model"),
-        auth=(SimpleNamespace(username="owner"), False),
-    )
+    # A database failure while the row is being deleted: File cannot be read
+    make_repo(owner, "demo-model")
+    with table_missing(db_scope, File):
+        db_failure = await repo_crud.delete_repo(
+            repo_crud.DeleteRepoPayload(type="model", name="demo-model"),
+            auth=(owner, False),
+        )
     assert db_failure.status_code == 500
+    assert _repo_count("owner/demo-model") == 1, "a failed delete keeps the row"
 
 
-def test_update_repository_database_records_covers_same_and_cross_namespace_moves(monkeypatch):
-    repo_row = SimpleNamespace(id=1, quota_bytes=100, used_bytes=50, private=False)
-    monkeypatch.setattr(repo_crud, "Repository", _FakeRepositoryModel)
+def test_update_repository_database_records_covers_same_and_cross_namespace_moves():
+    owner = make_user("owner")
+    repo_row = make_repo(owner, "from", quota_bytes=100, used_bytes=50)
 
     repo_crud._update_repository_database_records(
         repo_row=repo_row,
@@ -280,8 +216,9 @@ def test_update_repository_database_records_covers_same_and_cross_namespace_move
         moving_namespace=False,
         to_lakefs_repo="m-owner-to",
     )
-    assert _FakeRepositoryModel.update_kwargs["quota_bytes"] == 100
-    assert _FakeRepositoryModel.update_kwargs["lakefs_repo"] == "m-owner-to", (
+    same = Repository.get_by_id(repo_row.id)
+    assert (same.full_id, same.quota_bytes) == ("owner/to", 100)
+    assert same.lakefs_repo == "m-owner-to", (
         "the row must point at the LakeFS repository the migration created"
     )
 
@@ -295,9 +232,11 @@ def test_update_repository_database_records_covers_same_and_cross_namespace_move
         moving_namespace=True,
         to_lakefs_repo="m-org-team-to",
     )
-    assert _FakeRepositoryModel.update_kwargs["quota_bytes"] is None
+    moved = Repository.get_by_id(repo_row.id)
+    assert moved.quota_bytes is None
     # Its usage goes along with the row: nothing to write
-    assert "used_bytes" not in _FakeRepositoryModel.update_kwargs
+    assert moved.used_bytes == 50
+    assert (moved.namespace, moved.lakefs_repo) == ("org-team", "m-org-team-to")
 
 
 @pytest.mark.asyncio
@@ -308,20 +247,9 @@ async def test_move_repo_covers_validation_quota_and_metadata_only_success(monke
     history, other branches and tags. Since migration 016 the LakeFS id lives on
     the row, so the row can keep it across a rename.
     """
-    # The fake owner exists without depending on the service suite's seed data.
-    monkeypatch.setattr(
-        repo_crud,
-        "_namespace_owner",
-        lambda namespace: SimpleNamespace(id=1, username="owner") if namespace == "owner" else None,
-    )
-    repo_row = SimpleNamespace(
-        private=False,
-        repo_type="model",
-        full_id="owner/from",
-        lakefs_repo="m-owner-from",
-        used_bytes=12,
-    )
-    atomic_state = {}
+    owner = make_user("owner")
+    org = make_org("other", admin=owner)
+    repo_row = make_repo(owner, "from", used_bytes=12, lakefs_repo="m-owner-from")
 
     def _forbidden(name):
         def _raise(*_args, **_kwargs):
@@ -329,79 +257,70 @@ async def test_move_repo_covers_validation_quota_and_metadata_only_success(monke
 
         return _raise
 
-    monkeypatch.setattr(repo_crud, "check_repo_delete_permission", lambda repo, user, is_admin=False: None)
-    monkeypatch.setattr(repo_crud, "check_namespace_permission", lambda namespace, user, is_admin=False: None)
-    monkeypatch.setattr(repo_crud, "get_repository", lambda repo_type, namespace, name: repo_row if (namespace, name) == ("owner", "from") else None)
-    monkeypatch.setattr(repo_crud, "get_organization", lambda namespace: None)
-    monkeypatch.setattr(repo_crud, "check_quota", lambda **kwargs: (True, None))
-    monkeypatch.setattr(repo_crud, "_update_repository_database_records", lambda **kwargs: atomic_state.setdefault("updated", []).append(kwargs))
-    monkeypatch.setattr(repo_crud, "db", SimpleNamespace(atomic=lambda: _AtomicContext(atomic_state)))
-    monkeypatch.setattr(repo_crud.cfg.app, "base_url", "https://hub.example.com")
-    monkeypatch.setattr(repo_crud, "Repository", _FakeRepositoryModel)
-    _FakeRepositoryModel.reset()
     for name in (
         "allocate_lakefs_repo_name",
         "get_lakefs_client",
     ):
         monkeypatch.setattr(repo_crud, name, _forbidden(name))
+    monkeypatch.setattr(repo_crud.cfg.app, "base_url", "https://hub.example.com")
 
     bad_source = await repo_crud.move_repo(
         repo_crud.MoveRepoPayload(fromRepo="bad", toRepo="owner/to", type="model"),
-        auth=(SimpleNamespace(username="owner"), False),
+        auth=(owner, False),
     )
     assert bad_source.status_code == 400
 
     bad_target = await repo_crud.move_repo(
         repo_crud.MoveRepoPayload(fromRepo="owner/from", toRepo="bad", type="model"),
-        auth=(SimpleNamespace(username="owner"), False),
+        auth=(owner, False),
     )
     assert bad_target.status_code == 400
 
-    monkeypatch.setattr(repo_crud, "get_repository", lambda repo_type, namespace, name: None)
     not_found = await repo_crud.move_repo(
-        repo_crud.MoveRepoPayload(fromRepo="owner/from", toRepo="owner/to", type="model"),
-        auth=(SimpleNamespace(username="owner"), False),
+        repo_crud.MoveRepoPayload(fromRepo="owner/ghost", toRepo="owner/to", type="model"),
+        auth=(owner, False),
     )
     assert not_found.status_code == 404
 
-    monkeypatch.setattr(repo_crud, "get_repository", lambda repo_type, namespace, name: repo_row if (namespace, name) == ("owner", "from") else SimpleNamespace())
+    make_repo(owner, "to")
     exists = await repo_crud.move_repo(
         repo_crud.MoveRepoPayload(fromRepo="owner/from", toRepo="owner/to", type="model"),
-        auth=(SimpleNamespace(username="owner"), False),
+        auth=(owner, False),
     )
     assert exists.status_code == 409
     assert exists.headers.get("x-error-code") == repo_crud.HFErrorCode.REPO_EXISTS
 
-    monkeypatch.setattr(repo_crud, "get_repository", lambda repo_type, namespace, name: repo_row if (namespace, name) == ("owner", "from") else None)
-    # The target namespace must name an account
-    monkeypatch.setattr(repo_crud, "_namespace_owner", lambda namespace: None)
+    # The target namespace must name an account (admin bypasses the namespace check)
     nowhere = await repo_crud.move_repo(
         repo_crud.MoveRepoPayload(fromRepo="owner/from", toRepo="nobody/to", type="model"),
-        auth=(SimpleNamespace(username="owner"), False),
+        auth=(None, True),
     )
     assert nowhere.status_code == 404
-    monkeypatch.setattr(repo_crud, "_namespace_owner", lambda namespace: SimpleNamespace(id=2, username=namespace))
-    monkeypatch.setattr(repo_crud, "check_quota", lambda **kwargs: (False, "quota exceeded"))
+
+    # The organization's public quota (the repository is public) is 10 bytes; the repository uses 12
+    org.public_quota_bytes = 10
+    org.save()
     with pytest.raises(HTTPException) as quota_error:
         await repo_crud.move_repo(
             repo_crud.MoveRepoPayload(fromRepo="owner/from", toRepo="other/to", type="model"),
-            auth=(SimpleNamespace(username="owner"), False),
+            auth=(owner, False),
         )
     assert quota_error.value.status_code == 400
 
-    monkeypatch.setattr(repo_crud, "check_quota", lambda **kwargs: (True, None))
+    org.public_quota_bytes = None
+    org.save()
     success = await repo_crud.move_repo(
         repo_crud.MoveRepoPayload(fromRepo="owner/from", toRepo="other/to", type="model"),
-        auth=(SimpleNamespace(username="owner"), False),
+        auth=(owner, False),
     )
     assert success["success"] is True
     assert success["url"] == "https://hub.example.com/models/other/to"
-    update = atomic_state["updated"][-1]
+    moved = Repository.get_by_id(repo_row.id)
+    assert (moved.namespace, moved.name, moved.full_id) == ("other", "to", "other/to")
     # The row keeps pointing at the LakeFS repository that holds its data.
-    assert update["to_lakefs_repo"] == "m-owner-from"
-    assert (update["to_namespace"], update["to_name"], update["moving_namespace"]) == ("other", "to", True)
+    assert moved.lakefs_repo == "m-owner-from"
     # It goes to the account the namespace names
-    assert update["to_owner"].username == "other"
+    assert moved.owner_id == org.id
 
 
 @pytest.mark.asyncio
@@ -410,6 +329,8 @@ async def test_disabled_squash_rejects_before_repository_lookup(monkeypatch):
         operation_capabilities.cfg.app, "repository_squash_enabled", False
     )
 
+    # Ordering check: the guard must answer before any lookup runs. A row cannot
+    # show that, so the lookup is a spy that fails the test if it is reached.
     def unexpected_repository_lookup(*_args):
         raise AssertionError("disabled operation reached repository lookup")
 
@@ -522,7 +443,7 @@ async def test_create_repo_heals_orphan_dummy_marker_and_retries_lakefs_create(
     Post-fix, the orphan dummy marker is recognised, removed via the safe
     cleanup path, and the LakeFS create is retried exactly once.
     """
-    user = SimpleNamespace(username="owner")
+    user = make_user("owner")
 
     storage_namespace = "s3://hub-storage/model:owner/demo-model"
     namespace_in_use_error = RuntimeError(
@@ -556,12 +477,6 @@ async def test_create_repo_heals_orphan_dummy_marker_and_retries_lakefs_create(
         delete_marker_calls.append(repo_prefix)
         return True
 
-    monkeypatch.setattr(repo_crud, "Repository", _FakeRepositoryModel)
-    monkeypatch.setattr(
-        repo_crud,
-        "check_namespace_permission",
-        lambda namespace, user, is_admin=False: None,
-    )
     monkeypatch.setattr(repo_crud, "get_lakefs_client", lambda: client)
     # create_repo allocates its LakeFS id rather than deriving it, so the
     # allocator is the seam that fixes the name this test asserts against.
@@ -572,8 +487,6 @@ async def test_create_repo_heals_orphan_dummy_marker_and_retries_lakefs_create(
     )
     monkeypatch.setattr(repo_crud.cfg.s3, "bucket", "hub-storage")
     monkeypatch.setattr(repo_crud.cfg.app, "base_url", "https://hub.example.com")
-    monkeypatch.setattr(repo_crud, "get_repository", lambda *_args: None)
-    monkeypatch.setattr(repo_crud, "normalize_name", lambda name: name.lower())
 
     # The heal helpers exist only on the fix branch; `raising=False` keeps the
     # patch call safe so the failure mode on a pre-fix branch is the assertion
@@ -607,7 +520,7 @@ async def test_create_repo_heals_orphan_dummy_marker_and_retries_lakefs_create(
         "The cleanup must target only this repo's exact prefix, not a broader "
         f"path; got {delete_marker_calls!r}"
     )
-    assert _FakeRepositoryModel.get_or_create_calls, (
+    assert _repo_count("owner/demo-model") == 1, (
         "After a successful retry, the DB row must still be persisted"
     )
 
@@ -639,12 +552,6 @@ async def test_create_repo_does_not_retry_on_unrelated_lakefs_error(monkeypatch)
         delete_calls.append(repo_prefix)
         return True
 
-    monkeypatch.setattr(repo_crud, "Repository", _FakeRepositoryModel)
-    monkeypatch.setattr(
-        repo_crud,
-        "check_namespace_permission",
-        lambda namespace, user, is_admin=False: None,
-    )
     monkeypatch.setattr(repo_crud, "get_lakefs_client", lambda: client)
     monkeypatch.setattr(
         repo_crud,
@@ -653,8 +560,6 @@ async def test_create_repo_does_not_retry_on_unrelated_lakefs_error(monkeypatch)
     )
     monkeypatch.setattr(repo_crud.cfg.s3, "bucket", "hub-storage")
     monkeypatch.setattr(repo_crud.cfg.app, "base_url", "https://hub.example.com")
-    monkeypatch.setattr(repo_crud, "get_repository", lambda *_args: None)
-    monkeypatch.setattr(repo_crud, "normalize_name", lambda name: name.lower())
     monkeypatch.setattr(
         repo_crud, "_list_repo_namespace_keys", fake_list_keys, raising=False
     )
@@ -729,7 +634,7 @@ async def test_create_repo_returns_retryable_conflict_when_no_lakefs_id_is_usabl
     """Last resort only: a taken id is normally stepped over (see
     test_create_repo_steps_over_a_taken_lakefs_id). When every fresh id is taken
     too, the client gets huggingface_hub's retryable conflict, not an error."""
-    user = SimpleNamespace(username="owner")
+    owner = make_user("owner")
     sleeps = []
 
     class _IdTakenClient(_FakeClient):
@@ -746,21 +651,15 @@ async def test_create_repo_returns_retryable_conflict_when_no_lakefs_id_is_usabl
         sleeps.append(seconds)
 
     monkeypatch.setattr(repo_crud.asyncio, "sleep", fake_sleep)
-    monkeypatch.setattr(repo_crud, "Repository", _FakeRepositoryModel)
-    monkeypatch.setattr(
-        repo_crud, "check_namespace_permission", lambda namespace, user, is_admin=False: None
-    )
     monkeypatch.setattr(repo_crud, "get_lakefs_client", lambda: client)
     monkeypatch.setattr(
         repo_crud, "allocate_lakefs_repo_name", lambda *a, **k: _async_return("m-owner-demo")
     )
     monkeypatch.setattr(repo_crud.cfg.s3, "bucket", "hub-storage")
     monkeypatch.setattr(repo_crud.cfg.app, "base_url", "https://hub.example.com")
-    monkeypatch.setattr(repo_crud, "get_repository", lambda *_args: None)
-    monkeypatch.setattr(repo_crud, "normalize_name", lambda name: name.lower())
 
     response = await repo_crud.create_repo(
-        repo_crud.CreateRepoPayload(type="model", name="demo-model"), user=user
+        repo_crud.CreateRepoPayload(type="model", name="demo-model"), user=owner
     )
 
     assert response.status_code == 409
@@ -771,7 +670,7 @@ async def test_create_repo_returns_retryable_conflict_when_no_lakefs_id_is_usabl
         "hf_hub's retry loop has no backoff of its own, so the server supplies "
         "the delay by holding the response briefly"
     )
-    assert not _FakeRepositoryModel.get_or_create_calls, (
+    assert _repo_count("owner/demo-model") == 0, (
         "A retryable conflict must not leave a half-created DB row behind"
     )
 
@@ -788,14 +687,10 @@ def _create_repo_env(monkeypatch, client, allocations):
         return None
 
     monkeypatch.setattr(repo_crud.asyncio, "sleep", no_sleep)
-    monkeypatch.setattr(repo_crud, "Repository", _FakeRepositoryModel)
-    monkeypatch.setattr(repo_crud, "check_namespace_permission", lambda namespace, user, is_admin=False: None)
     monkeypatch.setattr(repo_crud, "get_lakefs_client", lambda: client)
     monkeypatch.setattr(repo_crud, "allocate_lakefs_repo_name", fake_allocate)
     monkeypatch.setattr(repo_crud.cfg.s3, "bucket", "hub-storage")
     monkeypatch.setattr(repo_crud.cfg.app, "base_url", "https://hub.example.com")
-    monkeypatch.setattr(repo_crud, "get_repository", lambda *_args: None)
-    monkeypatch.setattr(repo_crud, "normalize_name", lambda name: name.lower())
     return allocated
 
 
@@ -804,7 +699,7 @@ async def test_create_repo_steps_over_a_taken_lakefs_id(monkeypatch):
     """An id that LakeFS reports taken at create time (still being deleted, or a
     probe race) is skipped automatically: the user gets their repository under a
     fresh LakeFS id instead of an error or a "retry later"."""
-    _FakeRepositoryModel.get_or_create_calls = []
+    owner = make_user("owner")
 
     class _FirstIdTaken(_FakeClient):
         async def create_repository(self, **kwargs):
@@ -817,7 +712,7 @@ async def test_create_repo_steps_over_a_taken_lakefs_id(monkeypatch):
 
     response = await repo_crud.create_repo(
         repo_crud.CreateRepoPayload(type="model", name="demo-model"),
-        user=SimpleNamespace(username="owner"),
+        user=owner,
     )
 
     assert response["repo_id"] == "owner/demo-model"
@@ -825,7 +720,7 @@ async def test_create_repo_steps_over_a_taken_lakefs_id(monkeypatch):
     created = [kwargs["name"] for name, kwargs in client.calls if name == "create_repository"]
     assert created == ["m-owner-demo-gen0", "m-owner-demo-gen1"]
     assert created_storage_namespace(client) == "s3://hub-storage/m-owner-demo-gen1"
-    assert _FakeRepositoryModel.get_or_create_calls[-1]["defaults"]["lakefs_repo"] == "m-owner-demo-gen1"
+    assert Repository.get(full_id="owner/demo-model").lakefs_repo == "m-owner-demo-gen1"
 
 
 def created_storage_namespace(client):
@@ -838,7 +733,7 @@ def created_storage_namespace(client):
 async def test_create_repo_steps_over_a_storage_namespace_it_cannot_heal(monkeypatch):
     """A leftover storage namespace that is not safe to delete used to fail the
     create with a 500; now the create moves on to a fresh LakeFS id."""
-    _FakeRepositoryModel.get_or_create_calls = []
+    owner = make_user("owner")
 
     class _NamespaceInUse(_FakeClient):
         async def create_repository(self, **kwargs):
@@ -856,41 +751,34 @@ async def test_create_repo_steps_over_a_storage_namespace_it_cannot_heal(monkeyp
 
     response = await repo_crud.create_repo(
         repo_crud.CreateRepoPayload(type="model", name="demo-model"),
-        user=SimpleNamespace(username="owner"),
+        user=owner,
     )
 
     assert response["repo_id"] == "owner/demo-model"
     assert allocated == [set(), {"m-owner-demo-gen0"}]
-    assert _FakeRepositoryModel.get_or_create_calls[-1]["defaults"]["lakefs_repo"] == "m-owner-demo-gen1"
+    assert Repository.get(full_id="owner/demo-model").lakefs_repo == "m-owner-demo-gen1"
 
 
 @pytest.mark.asyncio
 async def test_create_repo_persists_the_allocated_lakefs_repo_id(monkeypatch):
-    user = SimpleNamespace(username="owner")
+    owner = make_user("owner")
     client = _FakeClient()
 
-    monkeypatch.setattr(repo_crud, "Repository", _FakeRepositoryModel)
-    monkeypatch.setattr(
-        repo_crud, "check_namespace_permission", lambda namespace, user, is_admin=False: None
-    )
     monkeypatch.setattr(repo_crud, "get_lakefs_client", lambda: client)
     monkeypatch.setattr(
         repo_crud, "allocate_lakefs_repo_name", lambda *a, **k: _async_return("m-owner-demo-gen1")
     )
     monkeypatch.setattr(repo_crud.cfg.s3, "bucket", "hub-storage")
     monkeypatch.setattr(repo_crud.cfg.app, "base_url", "https://hub.example.com")
-    monkeypatch.setattr(repo_crud, "get_repository", lambda *_args: None)
-    monkeypatch.setattr(repo_crud, "normalize_name", lambda name: name.lower())
 
     result = await repo_crud.create_repo(
-        repo_crud.CreateRepoPayload(type="model", name="demo-model"), user=user
+        repo_crud.CreateRepoPayload(type="model", name="demo-model"), user=owner
     )
 
     assert result["repo_id"] == "owner/demo-model"
-    created_kwargs = _FakeRepositoryModel.get_or_create_calls[-1]
-    assert created_kwargs["defaults"]["lakefs_repo"] == "m-owner-demo-gen1", (
-        "An allocated id that is not persisted makes the repository unreachable"
-    )
+    # An allocated id that is not persisted makes the repository unreachable
+    stored = Repository.get(full_id="owner/demo-model")
+    assert stored.lakefs_repo == "m-owner-demo-gen1"
     create_calls = [kwargs for name, kwargs in client.calls if name == "create_repository"]
     assert create_calls[-1]["name"] == "m-owner-demo-gen1"
     assert create_calls[-1]["storage_namespace"].endswith("/m-owner-demo-gen1"), (
@@ -945,71 +833,52 @@ async def test_create_repo_reports_allocation_failure_as_a_shaped_server_error(
     request can fail. Letting that exception escape would return a bare 500 with
     no X-Error-Code, losing the header protocol the rest of the API follows.
     """
-    user = SimpleNamespace(username="owner")
+    owner = make_user("owner")
 
     def _boom(*_args, **_kwargs):
         raise RuntimeError("lakefs unreachable")
 
-    monkeypatch.setattr(repo_crud, "Repository", _FakeRepositoryModel)
-    monkeypatch.setattr(
-        repo_crud, "check_namespace_permission", lambda namespace, user, is_admin=False: None
-    )
     monkeypatch.setattr(repo_crud, "get_lakefs_client", lambda: _FakeClient())
     monkeypatch.setattr(repo_crud, "allocate_lakefs_repo_name", _boom)
     monkeypatch.setattr(repo_crud.cfg.s3, "bucket", "hub-storage")
     monkeypatch.setattr(repo_crud.cfg.app, "base_url", "https://hub.example.com")
-    monkeypatch.setattr(repo_crud, "get_repository", lambda *_args: None)
-    monkeypatch.setattr(repo_crud, "normalize_name", lambda name: name.lower())
 
     response = await repo_crud.create_repo(
-        repo_crud.CreateRepoPayload(type="model", name="demo-model"), user=user
+        repo_crud.CreateRepoPayload(type="model", name="demo-model"), user=owner
     )
 
     assert response.status_code == 500
     assert response.headers.get("x-error-code") == repo_crud.HFErrorCode.SERVER_ERROR
-    assert not _FakeRepositoryModel.get_or_create_calls
+    assert _repo_count("owner/demo-model") == 0
 
 
 @pytest.mark.asyncio
-async def test_move_repo_reports_a_lost_rename_race_as_exists(monkeypatch):
+async def test_move_repo_reports_a_lost_rename_race_as_exists(monkeypatch, db_scope):
     """Two moves (or a move and a create) racing for the same target: the unique
     (repo_type, namespace, name) index rejects the loser, which must see the
     ordinary "already exists" answer rather than a 500."""
-    # The fake owner exists without depending on the service suite's seed data.
-    monkeypatch.setattr(
-        repo_crud,
-        "_namespace_owner",
-        lambda namespace: SimpleNamespace(id=1, username="owner") if namespace == "owner" else None,
-    )
-    repo_row = SimpleNamespace(
-        private=False,
-        repo_type="model",
-        full_id="owner/from",
-        lakefs_repo="m-owner-from",
-    )
+    owner = make_user("owner")
+    make_repo(owner, "from")
 
-    def _lost_race(**_kwargs):
-        raise repo_crud.IntegrityError("duplicate key value violates unique constraint")
+    # The rename runs in the test database's transaction, so its savepoint is real
+    monkeypatch.setattr(repo_crud, "db", db_scope)
+    real_update = repo_crud._update_repository_database_records
 
-    monkeypatch.setattr(repo_crud, "check_repo_delete_permission", lambda repo, user, is_admin=False: None)
-    monkeypatch.setattr(repo_crud, "check_namespace_permission", lambda namespace, user, is_admin=False: None)
-    monkeypatch.setattr(
-        repo_crud,
-        "get_repository",
-        lambda repo_type, namespace, name: repo_row if (namespace, name) == ("owner", "from") else None,
-    )
-    monkeypatch.setattr(repo_crud, "_update_repository_database_records", _lost_race)
-    monkeypatch.setattr(repo_crud, "db", SimpleNamespace(atomic=lambda: _AtomicContext({})))
-    monkeypatch.setattr(repo_crud, "Repository", _FakeRepositoryModel)
-    _FakeRepositoryModel.reset()
+    def _winner_lands_first(**kwargs):
+        # A concurrent create takes the target name after the checks and before the rename
+        make_repo(owner, "to")
+        return real_update(**kwargs)
+
+    monkeypatch.setattr(repo_crud, "_update_repository_database_records", _winner_lands_first)
 
     response = await repo_crud.move_repo(
         repo_crud.MoveRepoPayload(fromRepo="owner/from", toRepo="owner/to", type="model"),
-        auth=(SimpleNamespace(username="owner"), False),
+        auth=(owner, False),
     )
 
     assert response.status_code == 409
     assert response.headers.get("x-error-code") == repo_crud.HFErrorCode.REPO_EXISTS
+    assert _repo_count("owner/from") == 1, "the losing rename changes nothing"
 
 
 @pytest.mark.asyncio
@@ -1022,44 +891,32 @@ async def test_create_repo_reports_a_concurrent_winner_as_exists_not_retry(monke
     client spin (and cost it the pacing hold) before it eventually learns the
     repo exists. Distinguish the two by re-checking the DB.
     """
-    user = SimpleNamespace(username="owner")
+    owner = make_user("owner")
     sleeps = []
 
     class _IdTakenClient(_FakeClient):
         async def create_repository(self, **kwargs):
             self.calls.append(("create_repository", kwargs))
+            # The concurrent winner's row lands while this create is in flight
+            make_repo(owner, "demo-model")
             raise RuntimeError(
                 "LakeFS API error 409 Conflict: "
                 '{"message":"error creating repository: not unique"}'
             )
 
-    # Absent on the pre-flight check, present by the time the create fails -
-    # exactly what a concurrent winner looks like.
-    lookups = {"count": 0}
-
-    def fake_get_repository(*_args):
-        lookups["count"] += 1
-        return None if lookups["count"] == 1 else SimpleNamespace()
-
     async def fake_sleep(seconds):
         sleeps.append(seconds)
 
     monkeypatch.setattr(repo_crud.asyncio, "sleep", fake_sleep)
-    monkeypatch.setattr(repo_crud, "Repository", _FakeRepositoryModel)
-    monkeypatch.setattr(
-        repo_crud, "check_namespace_permission", lambda namespace, user, is_admin=False: None
-    )
     monkeypatch.setattr(repo_crud, "get_lakefs_client", lambda: _IdTakenClient())
     monkeypatch.setattr(
         repo_crud, "allocate_lakefs_repo_name", lambda *a, **k: _async_return("m-owner-demo")
     )
     monkeypatch.setattr(repo_crud.cfg.s3, "bucket", "hub-storage")
     monkeypatch.setattr(repo_crud.cfg.app, "base_url", "https://hub.example.com")
-    monkeypatch.setattr(repo_crud, "get_repository", fake_get_repository)
-    monkeypatch.setattr(repo_crud, "normalize_name", lambda name: name.lower())
 
     response = await repo_crud.create_repo(
-        repo_crud.CreateRepoPayload(type="model", name="demo-model"), user=user
+        repo_crud.CreateRepoPayload(type="model", name="demo-model"), user=owner
     )
 
     assert response.status_code == 409
@@ -1072,63 +929,41 @@ async def test_create_repo_reports_a_concurrent_winner_as_exists_not_retry(monke
     assert sleeps == [], "no need to pace a client that should stop retrying"
 
 
-def _move_env(monkeypatch, repo_row, siblings):
-    """Stubs for move tests: `siblings` are the target namespace's repositories."""
-    # The fake owner exists without depending on the service suite's seed data.
-    monkeypatch.setattr(
-        repo_crud,
-        "_namespace_owner",
-        lambda namespace: SimpleNamespace(id=1, username="owner") if namespace == "owner" else None,
-    )
-    updates = []
-    monkeypatch.setattr(repo_crud, "check_repo_delete_permission", lambda repo, user, is_admin=False: None)
-    monkeypatch.setattr(repo_crud, "check_namespace_permission", lambda namespace, user, is_admin=False: None)
-    monkeypatch.setattr(
-        repo_crud,
-        "get_repository",
-        lambda repo_type, namespace, name: repo_row if (namespace, name) == ("owner", repo_row.name) else None,
-    )
-    monkeypatch.setattr(repo_crud, "_update_repository_database_records", lambda **kwargs: updates.append(kwargs))
-    monkeypatch.setattr(repo_crud, "db", SimpleNamespace(atomic=lambda: _AtomicContext({})))
-    monkeypatch.setattr(repo_crud, "Repository", _FakeRepositoryModel)
-    _FakeRepositoryModel.reset()
-    _FakeRepositoryModel.select_query = _Query(items=siblings)
-    return updates
-
-
 @pytest.mark.asyncio
 async def test_move_repo_rejects_a_target_that_normalizes_to_an_existing_name(monkeypatch):
     """Create refuses names that differ only by case, '-' or '_' from an existing
     repository; a move must not be a way around that."""
-    repo_row = SimpleNamespace(id=1, name="from", private=False, repo_type="model", full_id="owner/from", lakefs_repo="m-owner-from")
-    existing = SimpleNamespace(id=2, name="demo_model")
-    updates = _move_env(monkeypatch, repo_row, [repo_row, existing])
+    owner = make_user("owner")
+    repo_row = make_repo(owner, "from")
+    make_repo(owner, "demo_model")
+    monkeypatch.setattr(repo_crud.cfg.app, "base_url", "https://hub.example.com")
 
     response = await repo_crud.move_repo(
         repo_crud.MoveRepoPayload(fromRepo="owner/from", toRepo="owner/Demo-Model", type="model"),
-        auth=(SimpleNamespace(username="owner"), False),
+        auth=(owner, False),
     )
 
     assert response.status_code == 409
     assert response.headers.get("x-error-code") == repo_crud.HFErrorCode.REPO_EXISTS
     assert "demo_model" in json.loads(bytes(response.body))["error"]
-    assert updates == []
+    assert Repository.get_by_id(repo_row.id).full_id == "owner/from"
 
 
 @pytest.mark.asyncio
 async def test_move_repo_allows_renaming_a_repository_to_a_variant_of_its_own_name(monkeypatch):
     """Changing only case or separators of a repository's own name is allowed:
     the only normalized match is the repository being renamed."""
-    repo_row = SimpleNamespace(id=1, name="demo-model", private=False, repo_type="model", full_id="owner/demo-model", lakefs_repo="m-owner-demo-model")
-    updates = _move_env(monkeypatch, repo_row, [repo_row])
+    owner = make_user("owner")
+    repo_row = make_repo(owner, "demo-model")
+    monkeypatch.setattr(repo_crud.cfg.app, "base_url", "https://hub.example.com")
 
     response = await repo_crud.move_repo(
         repo_crud.MoveRepoPayload(fromRepo="owner/demo-model", toRepo="owner/Demo_Model", type="model"),
-        auth=(SimpleNamespace(username="owner"), False),
+        auth=(owner, False),
     )
 
     assert response["success"] is True
-    assert updates[-1]["to_name"] == "Demo_Model"
+    assert Repository.get_by_id(repo_row.id).name == "Demo_Model"
 
 
 @pytest.mark.asyncio
@@ -1136,30 +971,19 @@ async def test_move_repo_pins_the_derived_lakefs_id_of_a_legacy_row(monkeypatch)
     """A row from before migration 016 has no stored LakeFS id and derives it from
     its repo id. After a rename it would derive from the *new* id - a repository
     that does not exist - so the move must store the old derivation explicitly."""
-    repo_row = SimpleNamespace(id=1, name="legacy", private=False, repo_type="model", full_id="owner/legacy", lakefs_repo=None)
-    updates = _move_env(monkeypatch, repo_row, [repo_row])
+    owner = make_user("owner")
+    repo_row = make_repo(owner, "legacy", lakefs_repo=None)
+    monkeypatch.setattr(repo_crud.cfg.app, "base_url", "https://hub.example.com")
 
     response = await repo_crud.move_repo(
         repo_crud.MoveRepoPayload(fromRepo="owner/legacy", toRepo="owner/renamed", type="model"),
-        auth=(SimpleNamespace(username="owner"), False),
+        auth=(owner, False),
     )
 
     assert response["success"] is True
-    assert updates[-1]["to_lakefs_repo"] == lakefs_repo_name("model", "owner/legacy")
-    assert updates[-1]["to_lakefs_repo"] != lakefs_repo_name("model", "owner/renamed")
-
-
-class _RowAlreadyThere(_FakeRepositoryModel):
-    @classmethod
-    def get_or_create(cls, **kwargs):
-        cls.get_or_create_calls.append(kwargs)
-        return SimpleNamespace(full_id=kwargs["full_id"]), False
-
-
-class _RowInsertFails(_FakeRepositoryModel):
-    @classmethod
-    def get_or_create(cls, **kwargs):
-        raise RuntimeError("database connection lost")
+    stored = Repository.get_by_id(repo_row.id).lakefs_repo
+    assert stored == lakefs_repo_name("model", "owner/legacy")
+    assert stored != lakefs_repo_name("model", "owner/renamed")
 
 
 @pytest.mark.asyncio
@@ -1167,14 +991,21 @@ async def test_create_repo_reports_a_row_claimed_during_the_lakefs_create_as_exi
     """Two concurrent creates of one name: the loser's LakeFS create can succeed
     (on another id) before the winner's row is visible. The loser must then drop
     its own LakeFS repository and answer "exists", not report success."""
-    client = _FakeClient()
+    owner = make_user("owner")
+
+    class _WinnerLandsDuringCreate(_FakeClient):
+        async def create_repository(self, **kwargs):
+            await super().create_repository(**kwargs)
+            # The winner's row is committed while this create is in flight
+            make_repo(owner, "demo-model")
+            return {"ok": True}
+
+    client = _WinnerLandsDuringCreate()
     _create_repo_env(monkeypatch, client, ["m-owner-demo-gen0"])
-    monkeypatch.setattr(repo_crud, "Repository", _RowAlreadyThere)
-    _RowAlreadyThere.get_or_create_calls = []
 
     response = await repo_crud.create_repo(
         repo_crud.CreateRepoPayload(type="model", name="demo-model"),
-        user=SimpleNamespace(username="owner"),
+        user=owner,
     )
 
     assert response.status_code == 409
@@ -1184,10 +1015,13 @@ async def test_create_repo_reports_a_row_claimed_during_the_lakefs_create_as_exi
 
 @pytest.mark.asyncio
 async def test_create_repo_removes_its_lakefs_repo_when_the_row_insert_fails(monkeypatch):
-    """A LakeFS repository without a row is unreachable: remove it on failure."""
+    """A LakeFS repository without a row is unreachable: remove it on failure.
+
+    No account is named "owner", so the row has no owner and the insert hits the
+    real NOT NULL constraint on `owner_id`.
+    """
     client = _FakeClient()
     _create_repo_env(monkeypatch, client, ["m-owner-demo-gen0"])
-    monkeypatch.setattr(repo_crud, "Repository", _RowInsertFails)
 
     response = await repo_crud.create_repo(
         repo_crud.CreateRepoPayload(type="model", name="demo-model"),
@@ -1197,6 +1031,7 @@ async def test_create_repo_removes_its_lakefs_repo_when_the_row_insert_fails(mon
     assert response.status_code == 500
     assert response.headers.get("x-error-code") == repo_crud.HFErrorCode.SERVER_ERROR
     assert ("delete_repository", {"repository": "m-owner-demo-gen0", "force": True}) in client.calls
+    assert _repo_count("owner/demo-model") == 0
 
 
 @pytest.mark.asyncio
@@ -1205,7 +1040,6 @@ async def test_create_repo_row_failure_survives_lakefs_cleanup_errors(monkeypatc
     client = _FakeClient()
     client.raise_on["delete_repository"] = RuntimeError("lakefs down")
     _create_repo_env(monkeypatch, client, ["m-owner-demo-gen0"])
-    monkeypatch.setattr(repo_crud, "Repository", _RowInsertFails)
 
     response = await repo_crud.create_repo(
         repo_crud.CreateRepoPayload(type="model", name="demo-model"),

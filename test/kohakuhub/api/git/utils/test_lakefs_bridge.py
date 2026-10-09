@@ -8,36 +8,8 @@ import pytest
 
 import kohakuhub.api.git.utils.lakefs_bridge as lakefs_bridge
 from kohakuhub.api.git.utils.objects import create_blob_object
+from test.kohakuhub.support.factories import make_file, make_repo, make_user
 from test.kohakuhub.support.fakes import FakeLakeFSClient, FakeS3Service
-
-
-class FakeField:
-    """Minimal Peewee-like field stub."""
-
-    def __eq__(self, other):  # noqa: D105
-        return self
-
-    def __and__(self, other):  # noqa: D105
-        return self
-
-
-class FakeFileQuery(list):
-    """Minimal query object returning the stored records."""
-
-    def where(self, *_args):
-        return self
-
-
-def _install_file_model(monkeypatch, records):
-    class FakeFileModel:
-        repository = FakeField()
-        is_deleted = FakeField()
-
-        @staticmethod
-        def select():
-            return FakeFileQuery(records)
-
-    monkeypatch.setattr(lakefs_bridge, "File", FakeFileModel)
 
 
 def _make_bridge(monkeypatch, client):
@@ -113,7 +85,7 @@ def test_parse_gitattributes_match_patterns_and_generate_output(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_build_blob_sha1s_creates_regular_blobs_lfs_pointers_and_support_files(monkeypatch):
+async def test_build_blob_sha1s_creates_regular_blobs_lfs_pointers_and_support_files(monkeypatch, db_scope):
     s3 = FakeS3Service()
     client = FakeLakeFSClient(s3_service=s3, default_bucket="bucket")
     await client.create_repository("m-owner-demo", "s3://bucket/m-owner-demo", default_branch="main")
@@ -122,18 +94,8 @@ async def test_build_blob_sha1s_creates_regular_blobs_lfs_pointers_and_support_f
     await client.commit("m-owner-demo", "main", "seed objects")
     bridge = _make_bridge(monkeypatch, client)
 
-    _install_file_model(
-        monkeypatch,
-        [
-            SimpleNamespace(
-                path_in_repo="weights/model.safetensors",
-                lfs=True,
-                sha256="f" * 64,
-                size=12,
-            )
-        ],
-    )
-    monkeypatch.setattr(lakefs_bridge, "get_repository", lambda repo_type, namespace, name: object())
+    repo = make_repo(make_user("owner"), "demo")
+    make_file(repo, "weights/model.safetensors", "f" * 64, size=12, lfs=True)
     monkeypatch.setattr(lakefs_bridge, "should_use_lfs", lambda repo, path, size: False)
     monkeypatch.setattr(lakefs_bridge.cfg.app, "base_url", "https://hub.local")
 
@@ -157,7 +119,7 @@ async def test_build_blob_sha1s_creates_regular_blobs_lfs_pointers_and_support_f
 
 
 @pytest.mark.asyncio
-async def test_build_blob_sha1s_respects_existing_gitattributes(monkeypatch):
+async def test_build_blob_sha1s_respects_existing_gitattributes(monkeypatch, db_scope):
     s3 = FakeS3Service()
     client = FakeLakeFSClient(s3_service=s3, default_bucket="bucket")
     await client.create_repository("m-owner-demo", "s3://bucket/m-owner-demo", default_branch="main")
@@ -171,8 +133,7 @@ async def test_build_blob_sha1s_respects_existing_gitattributes(monkeypatch):
     await client.commit("m-owner-demo", "main", "seed objects")
     bridge = _make_bridge(monkeypatch, client)
 
-    _install_file_model(monkeypatch, [])
-    monkeypatch.setattr(lakefs_bridge, "get_repository", lambda repo_type, namespace, name: object())
+    make_repo(make_user("owner"), "demo")  # a repository with no File rows yet
     monkeypatch.setattr(lakefs_bridge, "should_use_lfs", lambda repo, path, size: False)
     monkeypatch.setattr(lakefs_bridge.cfg.app, "base_url", "https://hub.local")
 

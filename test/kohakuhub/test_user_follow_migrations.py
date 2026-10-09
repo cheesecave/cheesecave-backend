@@ -1,68 +1,77 @@
-"""Frozen follow schema is idempotent and rejects incompatible tables without repair."""
+"""Frozen follow schema is idempotent and rejects incompatible tables without repair.
+
+Each test starts from an emptied ``db_dual`` database (SQLite and PostgreSQL): 030 checks its predecessors, so
+no model table may already exist when the migration history starts.
+"""
 
 import importlib.util
 from pathlib import Path
-from uuid import uuid4
+from types import SimpleNamespace
 
 from peewee import PostgresqlDatabase, SqliteDatabase
 import pytest
 
 from kohakuhub.db import (
+    LfsGcState,
+    PathCommit,
     Repository,
     RepositoryFacet,
     RepositoryMetadata,
+    RepositoryWrite,
     SiteAppearance,
     SiteBranding,
     SiteHomepage,
     User,
     UserFollow,
-    db,
 )
+from test.kohakuhub.support.db import MODELS as ALL_MODELS
+
+# The predecessor tables. PathCommit, LfsGcState and RepositoryWrite are the real models
+# here (the file used to create one-column stand-ins for them).
+REFERENCE_MODELS = [
+    User,
+    UserFollow,
+    Repository,
+    RepositoryMetadata,
+    RepositoryFacet,
+    SiteBranding,
+    SiteHomepage,
+    SiteAppearance,
+    PathCommit,
+    LfsGcState,
+    RepositoryWrite,
+]
 
 
-@pytest.fixture(params=["sqlite", pytest.param("postgres", marks=pytest.mark.integration)])
-def migration(request, tmp_path, monkeypatch):
+def _empty(database):
+    """Drop every model table: migration history starts from no tables at all."""
+    database.drop_tables(ALL_MODELS, safe=True)
+
+
+def _bind(monkeypatch, database, *modules):
+    """Point the migration modules at the test's database and its backend."""
+    backend = "sqlite" if isinstance(database, SqliteDatabase) else "postgres"
+    for module in modules:
+        monkeypatch.setattr(module, "db", database)
+        monkeypatch.setattr(
+            module, "cfg", SimpleNamespace(app=SimpleNamespace(db_backend=backend))
+        )
+
+
+@pytest.fixture
+def migration(db_dual, monkeypatch):
     path = Path(__file__).resolve().parents[2] / "scripts/db_migrations/030_user_follow.py"
     spec = importlib.util.spec_from_file_location("follow_migration", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    connection = (
-        SqliteDatabase(str(tmp_path / "upgrade.db"), pragmas={"foreign_keys": 1})
-        if request.param == "sqlite"
-        else PostgresqlDatabase(db.database, **db.connect_params)
-    )
-    connection.connect()
-    schema = "follow_upgrade_" + uuid4().hex
-    if request.param == "postgres":
-        connection.execute_sql(f'CREATE SCHEMA "{schema}"')
-        connection.execute_sql(f'SET search_path TO "{schema}"')
-    monkeypatch.setattr(module, "db", connection)
-    monkeypatch.setattr(module.cfg.app, "db_backend", request.param)
-    models = [
-        User,
-        UserFollow,
-        Repository,
-        RepositoryMetadata,
-        RepositoryFacet,
-        SiteBranding,
-        SiteHomepage,
-        SiteAppearance,
-    ]
-    try:
-        with connection.bind_ctx(models):
-            connection.create_tables([model for model in models if model != UserFollow])
-            connection.execute_sql('CREATE TABLE "lfs_gc_state" ("id" INTEGER PRIMARY KEY)')
-            connection.execute_sql('CREATE TABLE "repository_write" ("id" INTEGER PRIMARY KEY)')
-            connection.execute_sql('CREATE TABLE "path_commit" ("id" INTEGER PRIMARY KEY)')
-            follower = User.create(username="keep", normalized_name="keep")
-            followed = User.create(username="target", normalized_name="target")
-            SiteHomepage.create(id=1, title="Keep homepage")
-            SiteAppearance.create(id=1, theme='{"primary_light":"#abcdef"}')
-            yield module, connection, follower, followed
-    finally:
-        if request.param == "postgres":
-            connection.execute_sql(f'DROP SCHEMA "{schema}" CASCADE')
-        connection.close()
+    _empty(db_dual)
+    _bind(monkeypatch, db_dual, module)
+    db_dual.create_tables([model for model in REFERENCE_MODELS if model != UserFollow])
+    follower = User.create(username="keep", normalized_name="keep")
+    followed = User.create(username="target", normalized_name="target")
+    SiteHomepage.create(id=1, title="Keep homepage")
+    SiteAppearance.create(id=1, theme='{"primary_light":"#abcdef"}')
+    return module, db_dual, follower, followed
 
 
 def signature(database):

@@ -1,4 +1,4 @@
-"""Unit tests for authentication dependencies."""
+"""Unit tests for authentication dependencies, on real session, token and user rows."""
 
 from __future__ import annotations
 
@@ -8,74 +8,17 @@ import pytest
 from fastapi import HTTPException
 
 import kohakuhub.auth.dependencies as auth_deps
+from kohakuhub.auth.utils import hash_token
+from kohakuhub.db import Token
+from test.kohakuhub.support.factories import make_session, make_token, make_user
 
 
-class _Expr:
-    def __and__(self, other):
-        return self
-
-
-class _Field:
-    def __eq__(self, other):
-        return _Expr()
-
-    def __gt__(self, other):
-        return _Expr()
-
-
-class _UpdateQuery:
-    def where(self, *args, **kwargs):
-        return self
-
-    def execute(self):
-        return 1
-
-
-class _FakeSessionModel:
-    session_id = _Field()
-    expires_at = _Field()
-    result = None
-
-    @classmethod
-    def get_or_none(cls, expr):
-        return cls.result
-
-
-class _FakeTokenModel:
-    token_hash = _Field()
-    id = _Field()
-    result = None
-    update_calls = []
-
-    @classmethod
-    def get_or_none(cls, expr):
-        return cls.result
-
-    @classmethod
-    def update(cls, **kwargs):
-        cls.update_calls.append(kwargs)
-        return _UpdateQuery()
-
-
-@pytest.fixture(autouse=True)
-def _patch_models(monkeypatch):
-    _FakeSessionModel.result = None
-    _FakeTokenModel.result = None
-    _FakeTokenModel.update_calls = []
-    monkeypatch.setattr(auth_deps, "Session", _FakeSessionModel)
-    monkeypatch.setattr(auth_deps, "Token", _FakeTokenModel)
-    monkeypatch.setattr(auth_deps, "hash_token", lambda token: f"hashed:{token}")
-
-
+@pytest.mark.usefixtures("db_scope")
 def test_get_current_user_rejects_inactive_session_and_token(monkeypatch):
     request = SimpleNamespace(state=SimpleNamespace())
-    _FakeSessionModel.result = SimpleNamespace(
-        user=SimpleNamespace(username="alice", is_active=False)
-    )
-    _FakeTokenModel.result = SimpleNamespace(
-        id=9,
-        user=SimpleNamespace(username="alice", is_active=False),
-    )
+    alice = make_user("alice", is_active=False)
+    make_session(alice, "session-1")
+    token = make_token(alice, hash_token("plain-token"))
     monkeypatch.setattr(
         auth_deps,
         "parse_auth_header",
@@ -87,9 +30,11 @@ def test_get_current_user_rejects_inactive_session_and_token(monkeypatch):
 
     assert exc.value.status_code == 401
     assert request.state.external_tokens == {"https://hf.local": "hf_token"}
-    assert len(_FakeTokenModel.update_calls) == 1
+    # The token lookup ran its update: last_used is now set on the real row.
+    assert Token.get_by_id(token.id).last_used is not None
 
 
+@pytest.mark.usefixtures("db_scope")
 def test_get_current_user_handles_missing_session_and_invalid_token(monkeypatch):
     request = SimpleNamespace(state=SimpleNamespace())
     monkeypatch.setattr(
@@ -104,12 +49,10 @@ def test_get_current_user_handles_missing_session_and_invalid_token(monkeypatch)
     assert exc.value.status_code == 401
 
 
+@pytest.mark.usefixtures("db_scope")
 def test_get_current_user_accepts_active_token_user(monkeypatch):
     request = SimpleNamespace(state=SimpleNamespace())
-    _FakeTokenModel.result = SimpleNamespace(
-        id=10,
-        user=SimpleNamespace(username="token-user", is_active=True),
-    )
+    make_token(make_user("token-user"), hash_token("plain-token"))
     monkeypatch.setattr(
         auth_deps,
         "parse_auth_header",

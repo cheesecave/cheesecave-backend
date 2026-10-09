@@ -17,7 +17,7 @@ from peewee import (
     CharField,
     Check,
     DateField,
-    DateTimeField,
+    DateTimeField as PeeweeDateTimeField,
     ForeignKeyField,
     IntegerField,
     Model,
@@ -30,6 +30,29 @@ from kohakuhub.config import cfg
 from kohakuhub.logger import get_logger
 
 logger = get_logger("DB")
+
+
+def _naive_utc(value):
+    if isinstance(value, datetime) and value.tzinfo is not None:
+        return value.astimezone(timezone.utc).replace(tzinfo=None)
+    return value
+
+
+class DateTimeField(PeeweeDateTimeField):
+    """Naive UTC on both sides, on every backend.
+
+    PostgreSQL's ``timestamp`` column is naive and drops the offset of an aware value,
+    so it always returns naive datetimes. SQLite stores the offset as text and returns
+    an aware datetime, which made the same code compare naive with aware (TypeError)
+    and sort mixed text. Aware values are converted to UTC going in and coming out;
+    naive values and NULL pass through unchanged.
+    """
+
+    def db_value(self, value):
+        return super().db_value(_naive_utc(value))
+
+    def python_value(self, value):
+        return _naive_utc(super().python_value(value))
 
 
 def _sqlite_path(url: str) -> str:

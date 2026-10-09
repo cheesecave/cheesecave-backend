@@ -6,6 +6,9 @@ import httpx
 import pytest
 
 import kohakuhub.api.operation_capabilities as operation_capabilities
+from test.kohakuhub.support.db import postgres_configured
+
+from test.kohakuhub.support.db import history_operations_need_postgres
 
 
 async def test_version_site_config_and_yaml_validation(client):
@@ -16,11 +19,12 @@ async def test_version_site_config_and_yaml_validation(client):
     site_config_response = await client.get("/api/site-config")
     assert site_config_response.status_code == 200
     assert "site_name" in site_config_response.json()
-    # Enabled by default (#99), on PostgreSQL with a supported LakeFS
+    # Enabled by default (#99), on PostgreSQL with a supported LakeFS; SQLite refuses all three
+    enabled = postgres_configured()
     assert site_config_response.json()["capabilities"]["repository_operations"] == {
-        "revert": True,
-        "reset": True,
-        "squash": True,
+        "revert": enabled,
+        "reset": enabled,
+        "squash": enabled,
     }
 
     valid_yaml_response = await client.post(
@@ -260,6 +264,7 @@ def test_reset_is_off_on_a_lakefs_too_old_for_it(monkeypatch):
     assert capabilities.get_repository_operation_capabilities()["reset"] is True
 
 
+@history_operations_need_postgres
 async def test_the_reset_endpoint_says_why_on_an_old_lakefs(client, monkeypatch):
     _with_lakefs(monkeypatch, "1.40.0")
 
@@ -274,6 +279,7 @@ async def test_the_reset_endpoint_says_why_on_an_old_lakefs(client, monkeypatch)
     assert "Reset is not verified on it" in response.json()["detail"]["message"]
 
 
+@history_operations_need_postgres
 async def test_the_reset_gate_learns_the_lakefs_version_first(client, monkeypatch):
     import importlib
 

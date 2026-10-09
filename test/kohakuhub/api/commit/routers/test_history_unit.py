@@ -1,8 +1,8 @@
-"""Unit tests for commit history routes."""
+"""Unit tests for commit history routes, on real repository, commit and file rows."""
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 import json
 from types import SimpleNamespace
 
@@ -10,38 +10,14 @@ from fastapi import HTTPException
 import pytest
 
 import kohakuhub.api.commit.routers.history as commit_history
+from test.kohakuhub.support.factories import make_commit, make_file, make_repo, make_user
 
-
-class _Expr:
-    def __init__(self, value):
-        self.value = value
-
-    def in_(self, other):
-        return _Expr(("in", self.value, tuple(other)))
-
-
-class _Field:
-    def __init__(self, name: str):
-        self.name = name
-
-    def in_(self, other):
-        return _Expr((self.name, "in", tuple(other)))
-
-
-class _Query:
-    def __init__(self, items=None):
-        self.items = list(items or [])
-        self.where_calls = []
-
-    def where(self, *args):
-        self.where_calls.append(args)
-        return self
-
-    def __iter__(self):
-        return iter(self.items)
+pytestmark = pytest.mark.usefixtures("db_scope")
 
 
 class _FakeClient:
+    """LakeFS is an environment service: it stays mocked, its database side is real rows."""
+
     def __init__(self):
         self.log_result = None
         self.log_error = None
@@ -82,32 +58,24 @@ class _FakeClient:
         return self.object_results[key]
 
 
-def _repo_with_backrefs(commits=None, files=None):
-    commit_model = SimpleNamespace(commit_id=_Field("commit_id"))
-    file_model = SimpleNamespace(path_in_repo=_Field("path_in_repo"))
-    return SimpleNamespace(
-        commits=SimpleNamespace(select=lambda: _Query(items=commits), model=commit_model),
-        files=SimpleNamespace(select=lambda: _Query(items=files), model=file_model),
-    )
+@pytest.fixture
+def alice():
+    return make_user("alice")
+
+
+@pytest.fixture
+def repo(alice):
+    return make_repo(alice, "demo")
 
 
 @pytest.mark.asyncio
 async def test_list_commits_covers_not_found_empty_parse_failure_and_server_error(
     monkeypatch,
+    alice,
+    repo,
 ):
     client = _FakeClient()
-    repo_row = _repo_with_backrefs(
-        commits=[
-            SimpleNamespace(
-                commit_id="good-1",
-                author=SimpleNamespace(username="alice"),
-            ),
-            SimpleNamespace(
-                commit_id="broken-2",
-                author=None,
-            ),
-        ]
-    )
+    make_commit(repo, "good-1", author=alice)
 
     monkeypatch.setattr(
         commit_history,
@@ -123,11 +91,9 @@ async def test_list_commits_covers_not_found_empty_parse_failure_and_server_erro
     monkeypatch.setattr(commit_history, "resolve_lakefs_repo", lambda repo: "model:owner/repo")
     monkeypatch.setattr(commit_history, "get_lakefs_rest_client", lambda: client)
 
-    monkeypatch.setattr(commit_history, "get_repository", lambda repo_type, namespace, name: None)
-    not_found = await commit_history.list_commits("model", "alice", "demo")
+    not_found = await commit_history.list_commits("model", "nobody", "demo")
     assert not_found.status_code == 404
 
-    monkeypatch.setattr(commit_history, "get_repository", lambda repo_type, namespace, name: repo_row)
     client.log_result = None
     empty = await commit_history.list_commits("model", "alice", "demo", branch="main")
     assert empty.status_code == 200
@@ -145,6 +111,8 @@ async def test_list_commits_covers_not_found_empty_parse_failure_and_server_erro
             {
                 "id": "broken-2",
                 "message": "broken commit",
+                # A null metadata cannot be read: LakeFS entry skipped, as before
+                "metadata": None,
             },
         ],
         "pagination": {"has_more": True, "next_offset": "cursor-2"},
@@ -167,16 +135,9 @@ async def test_list_commits_covers_not_found_empty_parse_failure_and_server_erro
 
 
 @pytest.mark.asyncio
-async def test_list_commits_sets_link_header_and_formatted_expand(monkeypatch):
+async def test_list_commits_sets_link_header_and_formatted_expand(monkeypatch, alice, repo):
     client = _FakeClient()
-    repo_row = _repo_with_backrefs(
-        commits=[
-            SimpleNamespace(
-                commit_id="good-1",
-                author=SimpleNamespace(username="alice"),
-            ),
-        ]
-    )
+    make_commit(repo, "good-1", author=alice)
 
     class _RequestURL:
         def __init__(self):
@@ -196,7 +157,6 @@ async def test_list_commits_sets_link_header_and_formatted_expand(monkeypatch):
     monkeypatch.setattr(commit_history, "check_repo_read_permission", lambda repo, user: None)
     monkeypatch.setattr(commit_history, "resolve_lakefs_repo", lambda repo: "model:owner/repo")
     monkeypatch.setattr(commit_history, "get_lakefs_rest_client", lambda: client)
-    monkeypatch.setattr(commit_history, "get_repository", lambda repo_type, namespace, name: repo_row)
 
     client.log_result = {
         "results": [
@@ -242,20 +202,14 @@ async def test_list_commits_sets_link_header_and_formatted_expand(monkeypatch):
 @pytest.mark.asyncio
 async def test_list_commits_skips_link_when_cursor_missing_and_propagates_read_errors(
     monkeypatch,
+    alice,
+    repo,
 ):
     client = _FakeClient()
-    repo_row = _repo_with_backrefs(
-        commits=[
-            SimpleNamespace(
-                commit_id="good-1",
-                author=SimpleNamespace(username="alice"),
-            ),
-        ]
-    )
+    make_commit(repo, "good-1", author=alice)
 
     monkeypatch.setattr(commit_history, "resolve_lakefs_repo", lambda repo: "model:owner/repo")
     monkeypatch.setattr(commit_history, "get_lakefs_rest_client", lambda: client)
-    monkeypatch.setattr(commit_history, "get_repository", lambda repo_type, namespace, name: repo_row)
 
     def _raise_forbidden(repo, user):
         raise HTTPException(status_code=403, detail="forbidden")
@@ -285,10 +239,11 @@ async def test_list_commits_skips_link_when_cursor_missing_and_propagates_read_e
 @pytest.mark.asyncio
 async def test_get_commit_detail_covers_not_found_fallback_author_and_server_error(
     monkeypatch,
+    alice,
+    repo,
 ):
     client = _FakeClient()
-    repo_row = _repo_with_backrefs()
-    now = datetime(2024, 1, 2, tzinfo=timezone.utc)
+    now = datetime(2024, 1, 2)  # naive, as the TIMESTAMP column returns it on Postgres
 
     monkeypatch.setattr(
         commit_history,
@@ -303,12 +258,10 @@ async def test_get_commit_detail_covers_not_found_fallback_author_and_server_err
     monkeypatch.setattr(commit_history, "check_repo_read_permission", lambda repo, user: None)
     monkeypatch.setattr(commit_history, "resolve_lakefs_repo", lambda repo: "model:owner/repo")
     monkeypatch.setattr(commit_history, "get_lakefs_rest_client", lambda: client)
-    monkeypatch.setattr(commit_history, "get_repository", lambda repo_type, namespace, name: None)
 
-    not_found = await commit_history.get_commit_detail("model", "alice", "demo", "abc")
+    not_found = await commit_history.get_commit_detail("model", "nobody", "demo", "abc")
     assert not_found.status_code == 404
 
-    monkeypatch.setattr(commit_history, "get_repository", lambda repo_type, namespace, name: repo_row)
     client.commit_result = {
         "id": "abc",
         "message": "commit message",
@@ -317,23 +270,17 @@ async def test_get_commit_detail_covers_not_found_fallback_author_and_server_err
         "metadata": {"email": "alice@example.com"},
         "committer": "fallback-user",
     }
-    monkeypatch.setattr(commit_history, "get_commit", lambda commit_id, repo: None)
+    # No commit row for abc: the author is what LakeFS recorded
     detail = await commit_history.get_commit_detail("model", "alice", "demo", "abc")
     assert detail["author"] == "fallback-user"
     assert detail["metadata"] == {"email": "alice@example.com"}
 
-    monkeypatch.setattr(
-        commit_history,
-        "get_commit",
-        lambda commit_id, repo: SimpleNamespace(
-            author=SimpleNamespace(username="alice", id=1),
-            description="desc",
-            created_at=now,
-        ),
-    )
+    make_commit(repo, "abc", author=alice, description="desc", created_at=now)
     detail_with_author = await commit_history.get_commit_detail("model", "alice", "demo", "abc")
     assert detail_with_author["author"] == "alice"
-    assert detail_with_author["user_id"] == 1
+    assert detail_with_author["user_id"] == alice.id
+    assert detail_with_author["description"] == "desc"
+    assert detail_with_author["committed_at"] == now.isoformat()
 
     client.commit_error = RuntimeError("commit boom")
     failure = await commit_history.get_commit_detail("model", "alice", "demo", "abc")
@@ -343,11 +290,10 @@ async def test_get_commit_detail_covers_not_found_fallback_author_and_server_err
 @pytest.mark.asyncio
 async def test_get_commit_diff_covers_parentless_diff_generation_skips_and_errors(
     monkeypatch,
+    repo,
 ):
     client = _FakeClient()
-    repo_row = _repo_with_backrefs(
-        files=[SimpleNamespace(path_in_repo="weights.bin", lfs=True)]
-    )
+    make_file(repo, "weights.bin", "weights", size=9, lfs=True)
 
     monkeypatch.setattr(
         commit_history,
@@ -367,12 +313,10 @@ async def test_get_commit_diff_covers_parentless_diff_generation_skips_and_error
         "should_use_lfs",
         lambda repo, path, size: path.endswith(".bin"),
     )
-    monkeypatch.setattr(commit_history, "get_repository", lambda repo_type, namespace, name: None)
 
-    not_found = await commit_history.get_commit_diff("model", "alice", "demo", "abc")
+    not_found = await commit_history.get_commit_diff("model", "nobody", "demo", "abc")
     assert not_found.status_code == 404
 
-    monkeypatch.setattr(commit_history, "get_repository", lambda repo_type, namespace, name: repo_row)
     client.commit_result = {"id": "abc", "parents": [], "message": "initial", "creation_date": 1}
     parentless = await commit_history.get_commit_diff("model", "alice", "demo", "abc")
     assert parentless == {"files": [], "parent_commit": None}
@@ -411,7 +355,6 @@ async def test_get_commit_diff_covers_parentless_diff_generation_skips_and_error
     client.object_errors = {
         ("abc", "broken.txt"): RuntimeError("object broken"),
     }
-    monkeypatch.setattr(commit_history, "get_commit", lambda commit_id, repo: None)
 
     diff = await commit_history.get_commit_diff("model", "alice", "demo", "abc")
     assert diff["parent_commit"] == "parent-1"
