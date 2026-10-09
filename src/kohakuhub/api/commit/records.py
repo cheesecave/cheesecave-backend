@@ -9,6 +9,7 @@ are left to garbage collection, which runs in the background.
 
 import asyncio
 from datetime import datetime, timezone
+from typing import NamedTuple
 
 import httpx
 from peewee import EXCLUDED
@@ -159,6 +160,46 @@ async def _regular_ids(client, lakefs_repo: str, ref: str, paths: list[str]) -> 
 
     await asyncio.gather(*(blob(path) for path in paths))
     return ids
+
+
+class FileIdentity(NamedTuple):
+    """What a file row holds for a path: the sha256 of an LFS object or the git
+    blob id of a regular file, and whether it is LFS."""
+
+    sha256: str
+    lfs: bool
+
+
+async def revision_identities(
+    client, lakefs_repo: str, repo: Repository, ref: str, entries: dict[str, dict]
+) -> dict[str, FileIdentity]:
+    """What ``record_commits`` records for each entry (path: LakeFS entry) of
+    ``ref``, read from LakeFS and computed on demand: an LFS object's sha256
+    from its address, else the git blob id of the content. Only the default
+    branch's rows are stored (#11), so this answers for every other revision.
+    An entry whose content cannot be read keeps its LakeFS checksum, as a
+    listing without a row does.
+
+    ponytail: no cache; commit ids are immutable, so one could be kept per commit.
+    """
+    lfs_now = {
+        path: oid for path, e in entries.items() if (oid := lfs_oid(e.get("physical_address")))
+    }
+    regular = [
+        path
+        for path, e in entries.items()
+        if path not in lfs_now and not should_use_lfs(repo, path, e.get("size_bytes", 0))
+    ]
+    blob_ids = await _regular_ids(client, lakefs_repo, ref, regular)
+    return {
+        path: FileIdentity(
+            sha256=lfs_now.get(path)
+            or blob_ids.get(path)
+            or e.get("checksum", "").split(":", 1)[-1],
+            lfs=path not in regular,
+        )
+        for path, e in entries.items()
+    }
 
 
 def _regular_bytes(entries: dict[str, dict | None]) -> int:

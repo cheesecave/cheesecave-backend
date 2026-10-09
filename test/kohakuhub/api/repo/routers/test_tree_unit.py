@@ -1668,3 +1668,136 @@ async def test_last_commit_cache_keeps_to_its_size(last_commit_log, monkeypatch)
 
     assert [key[-1] for key in tree_api._last_commits] == ["c", "b"]
     assert len(last_commit_log.calls) == 3
+
+
+# ----- a side branch's identities come from LakeFS, not from main's rows (#11) -----
+
+SIDE_OID = "d" * 64  # the LFS object the side branch links at weights.bin
+BLOB_HELLO = "b6fc4c620b67d95f953a5c1c1230aaab5db5a1b0"  # git blob of "hello"
+
+
+class _BranchLakeFS(_FakeLakeFSClient):
+    """LakeFS (a fake) that also serves the bytes of regular files."""
+
+    def __init__(self, *, contents=None, **kwargs):
+        super().__init__(**kwargs)
+        self.contents = dict(contents or {})
+
+    async def get_object(self, **kwargs):
+        content = self.contents.get(kwargs["path"])
+        if content is None:
+            raise RuntimeError("not readable")
+        return content
+
+
+def _branch_objects():
+    return [
+        {
+            "path_type": "object",
+            "path": "weights.bin",
+            "size_bytes": 10,
+            "checksum": f"sha256:{SIDE_OID}",
+            "physical_address": f"s3://hub-storage/lfs/dd/dd/{SIDE_OID}",
+        },
+        {
+            "path_type": "object",
+            "path": "README.md",
+            "size_bytes": 5,
+            "checksum": "md5-of-hello",
+            "physical_address": "s3://hub-storage/data/README.md",
+        },
+    ]
+
+
+def _main_rows_for_branch_paths():
+    """Main's rows describe another content for both paths."""
+    repo = _demo_repo()
+    make_file(repo, "weights.bin", sha256="main-oid", size=99, lfs=True)
+    make_file(repo, "README.md", sha256="main-blob", size=99)
+    return repo
+
+
+async def test_list_repo_tree_on_a_side_branch_reports_its_own_identities(monkeypatch):
+    _main_rows_for_branch_paths()
+    lake = _BranchLakeFS(
+        contents={"README.md": b"hello"},
+        list_responses=[{"results": _branch_objects(), "pagination": {"has_more": False}}],
+    )
+    monkeypatch.setattr(tree_api, "get_lakefs_client", lambda: lake)
+
+    async def _resolve_revision(client, lakefs_repo, revision, repo=None):
+        return ("commit-dev", "branch")
+
+    monkeypatch.setattr(tree_api, "resolve_revision", _resolve_revision)
+
+    response = await tree_api.list_repo_tree.__wrapped__(
+        "model",
+        "owner",
+        "demo",
+        _request("/api/models/owner/demo/tree/dev"),
+        revision="dev",
+        limit=None,
+    )
+    items = {item["path"]: item for item in _json_body(response)}
+    assert items["weights.bin"]["oid"] == SIDE_OID
+    assert items["weights.bin"]["lfs"]["oid"] == SIDE_OID
+    assert items["README.md"]["oid"] == BLOB_HELLO
+    assert "lfs" not in items["README.md"]
+
+
+async def test_list_repo_tree_on_a_side_branch_keeps_the_checksum_of_an_unreadable_file(
+    monkeypatch,
+):
+    _main_rows_for_branch_paths()
+    lake = _BranchLakeFS(
+        contents={},  # README.md cannot be read
+        list_responses=[{"results": _branch_objects()[1:], "pagination": {"has_more": False}}],
+    )
+    monkeypatch.setattr(tree_api, "get_lakefs_client", lambda: lake)
+
+    async def _resolve_revision(client, lakefs_repo, revision, repo=None):
+        return ("commit-dev", "branch")
+
+    monkeypatch.setattr(tree_api, "resolve_revision", _resolve_revision)
+
+    response = await tree_api.list_repo_tree.__wrapped__(
+        "model",
+        "owner",
+        "demo",
+        _request("/api/models/owner/demo/tree/dev"),
+        revision="dev",
+        limit=None,
+    )
+    [item] = _json_body(response)
+    assert item["oid"] == "md5-of-hello"
+
+
+async def test_get_paths_info_on_a_side_branch_reports_its_own_identities(monkeypatch):
+    _main_rows_for_branch_paths()
+    lake = _BranchLakeFS(
+        contents={"README.md": b"hello"},
+        stat_map={
+            "weights.bin": _branch_objects()[0],
+            "README.md": _branch_objects()[1],
+        },
+    )
+    monkeypatch.setattr(tree_api, "get_lakefs_client", lambda: lake)
+
+    async def _resolve_revision(client, lakefs_repo, revision, repo=None):
+        return ("commit-dev", "branch")
+
+    monkeypatch.setattr(tree_api, "resolve_revision", _resolve_revision)
+
+    entries = await tree_api.get_paths_info.__wrapped__(
+        "model",
+        "owner",
+        "demo",
+        "dev",
+        _request("/api/models/owner/demo/paths-info/dev"),
+        paths=["weights.bin", "README.md"],
+        expand=False,
+    )
+    by_path = {entry["path"]: entry for entry in entries}
+    assert by_path["weights.bin"]["oid"] == SIDE_OID
+    assert by_path["weights.bin"]["lfs"]["oid"] == SIDE_OID
+    assert by_path["README.md"]["oid"] == BLOB_HELLO
