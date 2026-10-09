@@ -11,6 +11,7 @@ from kohakuhub.config import cfg
 
 from kohakuhub.db import BackgroundTask, BackgroundTaskEvent, BackgroundTaskLog
 from kohakuhub.task_testing import RecordingContext, run_with_interruptions
+from test.kohakuhub.support import db as dbsupport
 
 WORKER = "worker-a"
 LEASE = 60
@@ -448,8 +449,19 @@ async def test_cleanup_task_survives_interruptions(registry, monkeypatch):
     assert points == 6  # three batches, two points per progress report
 
 
-def test_queue_lifecycle_on_sqlite(registry, db_fresh):
-    """SQLite has no SKIP LOCKED; the compare-and-set claim still works."""
+def test_queue_lifecycle_on_sqlite(registry, tmp_path):
+    """SQLite has no SKIP LOCKED; the compare-and-set claim still works.
+
+    Pinned to SQLite whatever KOHAKU_HUB_DB_BACKEND says, so a Postgres run still covers the
+    SQLite branches of the claim and lease checks.
+    """
+    database, schema = dbsupport.make_database(tmp_path, name="queue", backend="sqlite")
+    with dbsupport.fresh_database(database, dbsupport.MODELS, schema=schema):
+        _queue_lifecycle_on_sqlite(database)
+    database.close()
+
+
+def _queue_lifecycle_on_sqlite(database):
     _register("test.sqlite")
     _register("test.sqlite-periodic", every=timedelta(minutes=1))
     task_id = tasks.enqueue("test.sqlite", {"n": 1}, dedupe_key="k")
@@ -479,7 +491,7 @@ def test_queue_lifecycle_on_sqlite(registry, db_fresh):
         .where(BackgroundTaskEvent.task == task_id)
         .order_by(BackgroundTaskEvent.id)
     ][:2] == ["created", "claimed"]
-    db_fresh.execute_sql("DELETE FROM background_task")
+    database.execute_sql("DELETE FROM background_task")
     assert BackgroundTaskEvent.select().count() == 0  # cascades on SQLite too
 
 
