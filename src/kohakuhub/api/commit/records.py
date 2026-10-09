@@ -217,6 +217,55 @@ def _batches(items: list, size: int = ROW_BATCH):
         yield items[start : start + size]
 
 
+async def _record_files(client, lakefs_repo: str, repo: Repository, head: str, actual: dict, lfs_now: dict) -> None:
+    """The File rows of the paths a default branch's commits changed, as its
+    head holds them now (``actual``: the head's entry at each path)."""
+    present = {path: e for path, e in actual.items() if e is not None}
+    regular = [
+        path
+        for path, e in present.items()
+        if path not in lfs_now and not should_use_lfs(repo, path, e.get("size_bytes", 0))
+    ]
+    blob_ids = await _regular_ids(client, lakefs_repo, head, regular)
+    now = datetime.now(timezone.utc)
+    rows = []
+    for path, e in present.items():
+        if path in regular and path not in blob_ids:
+            continue  # unreadable: its row stays as it was
+        rows.append(
+            {
+                "repository": repo,
+                "path_in_repo": path,
+                "size": e.get("size_bytes", 0),
+                # LFS: the object; regular: the git blob; big files kept
+                # outside lfs/ (older resets): the recorded checksum
+                "sha256": lfs_now.get(path)
+                or blob_ids.get(path)
+                or e.get("checksum", "").split(":", 1)[-1],
+                "lfs": path not in regular,
+                "is_deleted": False,
+                "owner": repo.owner,
+            }
+        )
+    for batch in _batches(rows):
+        File.insert_many(batch).on_conflict(
+            conflict_target=(File.repository, File.path_in_repo),
+            update={
+                File.sha256: EXCLUDED.sha256,
+                File.size: EXCLUDED.size,
+                File.lfs: EXCLUDED.lfs,
+                File.is_deleted: False,
+                File.updated_at: now,
+            },
+        ).execute()
+        await asyncio.sleep(0)
+    for batch in _batches([path for path, e in actual.items() if e is None]):
+        File.update(is_deleted=True, updated_at=now).where(
+            (File.repository == repo) & File.path_in_repo.in_(batch)
+        ).execute()
+        await asyncio.sleep(0)
+
+
 async def record_commits(
     client,
     lakefs_repo: str,
@@ -233,7 +282,8 @@ async def record_commits(
     Recorded from what the branch holds now, so a concurrent commit's changes
     to the same paths are not overwritten: commit rows first (nothing else
     repairs one), head references (what garbage collection must keep), File
-    rows, then each round's LFS history. What the head no longer links, and
+    rows (default branch only: they describe main, #11), then each round's
+    LFS history. What the head no longer links, and
     versions pushed out of a keep window, become collection candidates;
     nothing waits for the collection. A failure is logged and queues a
     reconciliation.
@@ -274,50 +324,8 @@ async def record_commits(
             )
         record_head_change(repo, branch, {path: lfs_now.get(path) for path in changed}, [])
 
-        present = {path: e for path, e in actual.items() if e is not None}
-        regular = [
-            path
-            for path, e in present.items()
-            if path not in lfs_now and not should_use_lfs(repo, path, e.get("size_bytes", 0))
-        ]
-        blob_ids = await _regular_ids(client, lakefs_repo, head, regular)
-        now = datetime.now(timezone.utc)
-        rows = []
-        for path, e in present.items():
-            if path in regular and path not in blob_ids:
-                continue  # unreadable: its row stays as it was
-            rows.append(
-                {
-                    "repository": repo,
-                    "path_in_repo": path,
-                    "size": e.get("size_bytes", 0),
-                    # LFS: the object; regular: the git blob; big files kept
-                    # outside lfs/ (older resets): the recorded checksum
-                    "sha256": lfs_now.get(path)
-                    or blob_ids.get(path)
-                    or e.get("checksum", "").split(":", 1)[-1],
-                    "lfs": path not in regular,
-                    "is_deleted": False,
-                    "owner": repo.owner,
-                }
-            )
-        for batch in _batches(rows):
-            File.insert_many(batch).on_conflict(
-                conflict_target=(File.repository, File.path_in_repo),
-                update={
-                    File.sha256: EXCLUDED.sha256,
-                    File.size: EXCLUDED.size,
-                    File.lfs: EXCLUDED.lfs,
-                    File.is_deleted: False,
-                    File.updated_at: now,
-                },
-            ).execute()
-            await asyncio.sleep(0)
-        for batch in _batches([path for path, e in actual.items() if e is None]):
-            File.update(is_deleted=True, updated_at=now).where(
-                (File.repository == repo) & File.path_in_repo.in_(batch)
-            ).execute()
-            await asyncio.sleep(0)
+        if branch == usage.MAIN:  # the File rows describe the default branch (#11)
+            await _record_files(client, lakefs_repo, repo, head, actual, lfs_now)
 
         # Each round's LFS versions, attributed to the commit that brought them
         # and dated when it was made: a commit that landed after it stays newer
@@ -329,13 +337,14 @@ async def record_commits(
                 await path_commits.record(repo, branch, {**commit, "id": commit_id}, wanted)
             except Exception as e:
                 logger.warning(f"Could not record the last commits of {commit_id[:8]}: {e}")
-        file_ids = {}
-        for batch in _batches(list(lfs_now)):
-            file_ids.update(
-                File.select(File.path_in_repo, File.id)
-                .where((File.repository == repo) & File.path_in_repo.in_(batch))
-                .tuples()
-            )
+        file_ids = {}  # a side branch's history links no row: they describe main (#11)
+        if branch == usage.MAIN:
+            for batch in _batches(list(lfs_now)):
+                file_ids.update(
+                    File.select(File.path_in_repo, File.id)
+                    .where((File.repository == repo) & File.path_in_repo.in_(batch))
+                    .tuples()
+                )
         history = [
             {
                 "repository": repo,
