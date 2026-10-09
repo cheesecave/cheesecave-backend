@@ -333,6 +333,7 @@ class File(BaseModel):
         Repository, backref="files", on_delete="CASCADE", index=True
     )
     path_in_repo = TextField(index=True)
+    branch = CharField(default="main")  # the branch whose state this row records (#11)
     size = BigIntegerField(default=0)  # Changed from IntegerField to support files >2GB
     sha256 = CharField(index=True)
     lfs = BooleanField(default=False)
@@ -344,7 +345,12 @@ class File(BaseModel):
     updated_at = DateTimeField(default=partial(datetime.now, tz=timezone.utc))
 
     class Meta:
-        indexes = ((("repository", "path_in_repo"), True),)
+        # Expand state (#11): the old key stays until the contract migration
+        # (scripts/db_migrations/contract/033) drops it.
+        indexes = (
+            (("repository", "path_in_repo"), True),
+            (("repository", "branch", "path_in_repo"), True),
+        )
 
 
 class PathCommit(BaseModel):

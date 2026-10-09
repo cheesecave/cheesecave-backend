@@ -309,3 +309,31 @@ docker-compose up -d
    ```
 
 **Prevention:** Always run migrations before application starts (handled automatically in Docker)
+
+## Expand and contract: File branches (issue #11)
+
+Migration 032 is the EXPAND. It adds `file.branch` (default `main`) and the unique key
+`(repository_id, branch, path_in_repo)`, and keeps the old key `(repository_id, path_in_repo)`.
+It runs with the other migrations at startup. Old replicas keep working: they write `main`.
+While the old key exists, a non-main row for a path `main` already has is refused.
+
+The CONTRACT is `contract/033_file_branch_contract.py`. It drops the old key and enables
+non-main writes. It is NOT in this directory on purpose: the runner exits non-zero on any
+failed migration, so a closed gate would stop every container. Run it by hand, and only after
+every replica runs the code that writes `branch`:
+
+```sql
+-- the operator's marker, after every replica runs the new code
+INSERT INTO schema_rollout (name, set_at) VALUES ('file_branch_contract', CURRENT_TIMESTAMP);
+```
+
+```bash
+python scripts/db_migrations/contract/033_file_branch_contract.py
+```
+
+Without the marker the script refuses (`ContractGateClosed`) and changes nothing.
+
+Rollback is `rollback()` in `032_file_branch_expand.py`, run by hand with the application
+stopped. It refuses while any row has `branch <> 'main'`, because the pre-A schema cannot hold
+one. To roll back after non-main rows exist, delete them first: that is a data decision for
+the operator, not something the script does.
