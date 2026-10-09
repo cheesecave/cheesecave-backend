@@ -127,3 +127,65 @@ async def test_get_repository_stats_reports_the_row_counters_and_404s_unknown_re
 
     missing = await stats_api.get_repository_stats("model", "owner", "missing", user=None)
     assert missing.status_code == 404
+
+
+@pytest.fixture
+def statements(db_scope, monkeypatch):
+    """Record every SQL statement the route runs on the shared scope."""
+    recorded: list[str] = []
+    real_execute = db_scope.execute_sql
+
+    def recording_execute(sql, params=None, commit=None):
+        recorded.append(sql)
+        return real_execute(sql, params)
+
+    monkeypatch.setattr(db_scope, "execute_sql", recording_execute)
+    return recorded
+
+
+def _repository_reads(recorded):
+    return sum(1 for sql in recorded if 'FROM "repository" AS' in sql)
+
+
+@pytest.mark.asyncio
+async def test_trending_fetches_every_ranked_repository_in_one_query(statements):
+    owner = make_user("owner")
+    today = _today()
+    for name in ("one", "two", "three"):
+        make_daily_stats(make_repo(owner, name), today, download_sessions=5)
+    statements.clear()
+
+    response = await stats_api.get_trending_repositories(
+        repo_type="model", days=7, limit=10, user=None
+    )
+
+    assert len(response["trending"]) == 3
+    # One candidate read is not counted here: the aggregation is one query and the
+    # ranked repositories are fetched together, not once per row.
+    assert _repository_reads(statements) == 1
+
+
+@pytest.mark.asyncio
+async def test_trending_skips_ranked_rows_whose_repository_is_another_type(statements):
+    owner = make_user("owner")
+    today = _today()
+    dataset = make_repo(owner, "data", repo_type="dataset")
+    make_daily_stats(dataset, today, download_sessions=9)
+    make_daily_stats(make_repo(owner, "model"), today, download_sessions=1)
+
+    response = await stats_api.get_trending_repositories(
+        repo_type="model", days=7, limit=10, user=None
+    )
+
+    assert [item["id"] for item in response["trending"]] == ["owner/model"]
+
+
+@pytest.mark.asyncio
+async def test_trending_without_any_stats_returns_an_empty_list():
+    make_repo(make_user("owner"), "quiet")
+
+    response = await stats_api.get_trending_repositories(
+        repo_type="model", days=7, limit=10, user=None
+    )
+
+    assert response["trending"] == []
