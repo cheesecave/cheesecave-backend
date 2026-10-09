@@ -8,14 +8,14 @@ import pytest
 
 import kohakuhub.api.git.utils.lakefs_bridge as lakefs_bridge
 from kohakuhub.api.git.utils.objects import create_blob_object
+from kohakuhub.utils.lakefs import lakefs_repo_name, resolve_lakefs_repo
 from test.kohakuhub.support.factories import make_file, make_repo, make_user
 from test.kohakuhub.support.fakes import FakeLakeFSClient, FakeS3Service
 
 
 def _make_bridge(monkeypatch, client):
-    monkeypatch.setattr(lakefs_bridge, "lakefs_repo_name", lambda repo_type, repo_id: "m-owner-demo")
     monkeypatch.setattr(lakefs_bridge, "get_lakefs_client", lambda: client)
-    return lakefs_bridge.GitLakeFSBridge("model", "owner", "demo")
+    return lakefs_bridge.GitLakeFSBridge("model", "owner", "demo", lakefs_repo="m-owner-demo")
 
 
 def test_create_lfs_pointer_and_lfsconfig_use_hf_compatible_format():
@@ -191,3 +191,41 @@ async def test_build_commit_sha1_and_pack_file_cover_success_and_empty_paths(mon
     empty_bridge = _make_bridge(monkeypatch, EmptyClient())
     assert await empty_bridge._build_commit_sha1("main", "commit-1") is None
     assert (await empty_bridge.build_pack_file([], [], branch="main")).startswith(b"PACK")
+
+
+def test_bridge_requires_the_lakefs_repo_it_talks_to(monkeypatch):
+    monkeypatch.setattr(lakefs_bridge, "get_lakefs_client", lambda: None)
+
+    with pytest.raises(TypeError):
+        lakefs_bridge.GitLakeFSBridge("model", "owner", "demo")
+
+
+@pytest.mark.parametrize("value", [None, ""])
+def test_bridge_rejects_an_empty_lakefs_repo_instead_of_deriving_one(monkeypatch, value):
+    monkeypatch.setattr(lakefs_bridge, "get_lakefs_client", lambda: None)
+
+    with pytest.raises(ValueError):
+        lakefs_bridge.GitLakeFSBridge("model", "owner", "demo", lakefs_repo=value)
+
+
+def test_bridge_uses_the_stored_id_of_a_row_resolved_from_the_database(monkeypatch, db_scope):
+    monkeypatch.setattr(lakefs_bridge, "get_lakefs_client", lambda: None)
+    stored = make_repo(make_user("owner"), "demo", lakefs_repo="m-stored-demo-x7k2")
+
+    bridge = lakefs_bridge.GitLakeFSBridge(
+        "model", "owner", "demo", lakefs_repo=resolve_lakefs_repo(stored)
+    )
+
+    assert bridge.lakefs_repo == "m-stored-demo-x7k2"
+
+
+def test_bridge_derives_the_name_for_a_legacy_row_without_a_stored_id(monkeypatch, db_scope):
+    monkeypatch.setattr(lakefs_bridge, "get_lakefs_client", lambda: None)
+    legacy = make_repo(make_user("owner"), "demo")
+    assert legacy.lakefs_repo is None
+
+    bridge = lakefs_bridge.GitLakeFSBridge(
+        "model", "owner", "demo", lakefs_repo=resolve_lakefs_repo(legacy)
+    )
+
+    assert bridge.lakefs_repo == lakefs_repo_name("model", "owner/demo")
