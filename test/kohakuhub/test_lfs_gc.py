@@ -916,3 +916,31 @@ async def test_a_deleted_branch_releases_its_links_in_two_statements(m):
 
     # The branch-links task of a repository deleted since does nothing
     await m.cleanup.record_branch_links({"repo_id": -1, "branch": "x"}, RecordingContext())
+
+
+async def test_a_side_branch_keeps_its_lfs_object_through_collection(m, owner_client, monkeypatch):
+    """Main's File row does not keep a side branch's object (#11): the branch's
+    head link and its history do, and collection leaves it."""
+    monkeypatch.setattr(m.cfg.app, "lfs_auto_gc", True)
+    repo = _repo(m)
+    main_content, side_content = b"gc side main", b"gc side branch"
+    main_oid, side_oid = _put(m, main_content), _put(m, side_content)
+    assert (await _commit(owner_client, "demo-model", _lfs_op(main_content))).status_code == 200
+    await _branch(owner_client, "gc-side")
+    response = await owner_client.post(
+        "/api/models/owner/demo-model/commit/gc-side",
+        content=encode_ndjson(
+            [{"key": "header", "value": {"summary": "side", "description": ""}}, _lfs_op(side_content)]
+        ),
+        headers={"Content-Type": "application/x-ndjson"},
+    )
+    assert response.status_code == 200, response.text
+    F = m.db.File
+    assert F.get((F.repository == repo) & (F.path_in_repo == PATH)).sha256 == main_oid
+    assert ("gc-side", PATH, side_oid) in _refs(m, repo, "gc-side")
+
+    _age_recent(m)  # the uploads' grace period is over: only the links keep it
+    m.gc.mark_references_reconciled()
+    await m.cleanup.collect_lfs({}, RecordingContext())
+    assert _stored(m, side_oid) and _stored(m, main_oid)
+    assert m.gc.retention_reason(side_oid) == "head"
