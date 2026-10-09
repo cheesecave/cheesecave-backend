@@ -16,6 +16,7 @@ from test.kohakuhub.api.test_branch_reset import (
     collect,
     sha,
 )
+from test.kohakuhub.support.db import history_operations_need_postgres
 
 
 @pytest.fixture
@@ -53,6 +54,7 @@ def _refused(status, text):
     return httpx.HTTPStatusError(text, request=request, response=response)
 
 
+@history_operations_need_postgres
 async def test_a_revert_undoes_the_commit_and_is_recorded(m, owner_client):
     repo, (initial, c1, c2, c3, c4, c5) = await _linear(m, owner_client, "revert-basic")
     response = await _revert(repo, c3, message="Drop b.bin")
@@ -92,6 +94,7 @@ async def test_a_revert_undoes_the_commit_and_is_recorded(m, owner_client):
     assert commit["message"] == f"Revert commit {new[:8]}"
 
 
+@history_operations_need_postgres
 async def test_a_conflict_names_its_files(m, owner_client):
     repo, (initial, c1, c2, c3, c4, c5) = await _linear(m, owner_client, "revert-conflict")
     response = await _revert(repo, c2)  # a.bin changed again in c5
@@ -108,6 +111,7 @@ async def test_a_conflict_names_its_files(m, owner_client):
     assert response.json()["detail"]["conflicts"] == ["a.bin"]
 
 
+@history_operations_need_postgres
 async def test_a_revived_version_to_restore_alongside_a_conflict(m, owner_client):
     """The claim revives a tombstoned version uploaded again on a path the
     revert would undo; the other path's conflict then refuses it."""
@@ -122,6 +126,7 @@ async def test_a_revived_version_to_restore_alongside_a_conflict(m, owner_client
     assert m.gc.tombstone_state(sha(b"x old")) is None  # revived by the claim
 
 
+@history_operations_need_postgres
 async def test_a_version_no_longer_stored_refuses_it(m, owner_client):
     repo, (initial, c1, c2, c3, c4, c5) = await _linear(m, owner_client, "revert-missing")
     collect(m, sha(b"a v2"))
@@ -133,6 +138,7 @@ async def test_a_version_no_longer_stored_refuses_it(m, owner_client):
     assert await repo.head() == c5
 
 
+@history_operations_need_postgres
 async def test_an_object_uploaded_again_after_collection_is_revived(m, owner_client):
     repo, (initial, c1, c2, c3, c4, c5) = await _linear(m, owner_client, "revert-revived")
     m.db.LfsObjectTombstone.create(sha256=sha(b"a v2"), state=m.gc.DELETED)  # still stored
@@ -140,6 +146,7 @@ async def test_an_object_uploaded_again_after_collection_is_revived(m, owner_cli
     assert m.gc.tombstone_state(sha(b"a v2")) is None
 
 
+@history_operations_need_postgres
 async def test_nothing_to_revert_and_allow_empty(m, owner_client):
     repo, (initial, c1, c2, c3, c4, c5) = await _linear(m, owner_client, "revert-nothing")
     assert (await _revert(repo, c3)).status_code == 200
@@ -153,6 +160,7 @@ async def test_nothing_to_revert_and_allow_empty(m, owner_client):
     assert await _differs(m, repo, head, empty) == []
 
 
+@history_operations_need_postgres
 async def test_guardrails(m, owner_client, visitor_client):
     repo, (initial, c1, *_rest) = await _linear(m, owner_client, "revert-guards")
     response = await _revert(repo, initial)
@@ -165,6 +173,7 @@ async def test_guardrails(m, owner_client, visitor_client):
     assert (await _revert(repo, c1, client=visitor_client)).status_code in (403, 404)
 
 
+@history_operations_need_postgres
 async def test_a_merge_commit_reverts_against_the_chosen_parent(m, owner_client):
     repo, (initial, c1, c2, c3, c4, c5) = await _linear(m, owner_client, "revert-merge")
     response = await owner_client.post(
@@ -190,6 +199,7 @@ async def test_a_merge_commit_reverts_against_the_chosen_parent(m, owner_client)
     assert (await _revert(repo, merge_commit, parent_number=3)).status_code == 400
 
 
+@history_operations_need_postgres
 async def test_a_big_revert_records_every_path(m, owner_client, monkeypatch):
     repo = await Repo(m, owner_client, "revert-big").create()
     await repo.commit(_file("keep.txt", "k"))
@@ -210,6 +220,7 @@ async def test_a_big_revert_records_every_path(m, owner_client, monkeypatch):
     assert H.select().where(H.commit_id == new).count() == 150
 
 
+@history_operations_need_postgres
 async def test_the_new_commit_is_found_by_its_marker(m, owner_client, monkeypatch):
     """A commit landing right after the revert must not be taken for it."""
     repo, (initial, c1, c2, c3, c4, c5) = await _linear(m, owner_client, "revert-marker")
@@ -246,6 +257,7 @@ async def test_the_new_commit_is_found_by_its_marker(m, owner_client, monkeypatc
     assert response.status_code == 500 and queued == [1, 1]
 
 
+@history_operations_need_postgres
 async def test_the_branch_changing_after_the_check(m, owner_client, monkeypatch):
     repo, (initial, c1, c2, c3, c4, c5) = await _linear(m, owner_client, "revert-changed")
     revert_branch = m.rest.LakeFSRestClient.revert_branch
@@ -269,6 +281,7 @@ async def test_the_branch_changing_after_the_check(m, owner_client, monkeypatch)
     assert response.json()["detail"]["error"].startswith("Nothing to revert")
 
 
+@history_operations_need_postgres
 async def test_an_upload_in_flight_is_waited_for(m, owner_client, monkeypatch):
     repo, (initial, c1, c2, c3, c4, c5) = await _linear(m, owner_client, "revert-dirty")
     revert_branch = m.rest.LakeFSRestClient.revert_branch
@@ -299,6 +312,7 @@ async def test_an_upload_in_flight_is_waited_for(m, owner_client, monkeypatch):
     assert "uncommitted changes" in response.json()["detail"]["error"]
 
 
+@history_operations_need_postgres
 async def test_other_refusals_keep_their_status(m, owner_client, monkeypatch):
     repo, (initial, c1, c2, c3, *_rest) = await _linear(m, owner_client, "revert-refused")
 
@@ -338,6 +352,7 @@ async def test_other_refusals_keep_their_status(m, owner_client, monkeypatch):
     assert (await _revert(repo, c3)).status_code == 500
 
 
+@history_operations_need_postgres
 async def test_collection_racing_the_claim_refuses_it(m, owner_client, monkeypatch):
     repo, (initial, c1, c2, c3, c4, c5) = await _linear(m, owner_client, "revert-claim")
 
@@ -351,6 +366,7 @@ async def test_collection_racing_the_claim_refuses_it(m, owner_client, monkeypat
     assert await repo.head() == c5
 
 
+@history_operations_need_postgres
 async def test_a_revert_whose_changes_cannot_be_read_is_still_recorded(
     m, owner_client, monkeypatch
 ):

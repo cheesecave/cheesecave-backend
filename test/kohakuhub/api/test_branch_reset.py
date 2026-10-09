@@ -9,6 +9,10 @@ import httpx
 import pytest
 
 from test.kohakuhub.api.commit.test_availability import Repo, _delete, _file, _linear, _live, lfs
+from test.kohakuhub.support.db import history_operations_need_postgres
+
+
+pytestmark = history_operations_need_postgres
 
 
 @pytest.fixture

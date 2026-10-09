@@ -21,6 +21,7 @@ import uuid
 from contextlib import contextmanager
 from urllib.parse import unquote, urlparse
 
+import pytest
 from peewee import PostgresqlDatabase, SqliteDatabase
 
 from kohakuhub.db import BaseModel
@@ -36,6 +37,15 @@ class _Rollback(Exception):
 def postgres_configured():
     """True when ``KOHAKU_HUB_DATABASE_URL`` names a PostgreSQL server."""
     return os.environ.get("KOHAKU_HUB_DATABASE_URL", "").startswith("postgresql")
+
+
+# Revert, reset and squash rewrite history. The API enables them only on PostgreSQL and
+# refuses them on any other backend, by design (api/operation_capabilities.py), so the
+# tests that drive them run only when KOHAKU_HUB_DATABASE_URL is PostgreSQL.
+history_operations_need_postgres = pytest.mark.skipif(
+    not postgres_configured(),
+    reason="revert, reset and squash are enabled only on PostgreSQL; SQLite refuses them by design",
+)
 
 
 def make_database(tmp_path, name="unit", backend=None):

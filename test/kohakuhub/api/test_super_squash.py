@@ -19,6 +19,7 @@ from huggingface_hub.utils import HfHubHTTPError
 
 from test.kohakuhub.api.commit.test_availability import Repo, _delete, _file, _live, lfs
 from test.kohakuhub.api.helpers import encode_ndjson
+from test.kohakuhub.support.db import history_operations_need_postgres
 
 MIGRATION = (
     Path(__file__).resolve().parents[3]
@@ -181,6 +182,7 @@ async def test_the_commit_address_is_lakefs_own(s, owner_client):
         assert address == c["id"]
 
 
+@history_operations_need_postgres
 async def test_a_repository_squash_keeps_its_tree_in_one_commit(
     s, owner_client, monkeypatch
 ):
@@ -281,6 +283,7 @@ async def test_a_repository_squash_keeps_its_tree_in_one_commit(
 
 
 @pytest.mark.hf_client
+@history_operations_need_postgres
 async def test_huggingface_hub_squashes_one_branch(
     s, owner_client, live_server_url, hf_api_token
 ):
@@ -343,6 +346,7 @@ async def test_huggingface_hub_squashes_one_branch(
     assert (await _log(s, repo, "dev"))[0]["message"] == "Super-squash branch 'dev'"
 
 
+@history_operations_need_postgres
 async def test_writes_are_refused_while_a_squash_holds_the_repository(
     s, owner_client, admin_client
 ):
@@ -408,6 +412,7 @@ async def test_writes_are_refused_while_a_squash_holds_the_repository(
     ).execute()
 
 
+@history_operations_need_postgres
 async def test_a_commit_already_uploading_lands_after_the_squash(
     s, owner_client, monkeypatch
 ):
@@ -476,6 +481,7 @@ async def test_a_commit_already_uploading_lands_after_the_squash(
     s.lock.release(_row(s, repo.id).id, token)
 
 
+@history_operations_need_postgres
 async def test_a_head_moving_before_the_reset_is_squashed_too(
     s, owner_client, monkeypatch
 ):
@@ -536,6 +542,7 @@ async def test_a_head_moving_before_the_reset_is_squashed_too(
     assert s.lock.holder(_row(s, repo.id).id) is None
 
 
+@history_operations_need_postgres
 async def test_lakefs_refusing_changes_nothing(s, owner_client, monkeypatch):
     repo = await _new(s, owner_client, "squash-refused")
     await repo.commit(_file("a.txt", "a"))
@@ -562,6 +569,7 @@ async def test_lakefs_refusing_changes_nothing(s, owner_client, monkeypatch):
     assert s.db.Commit.select().where(s.db.Commit.repository == row).count() == 2
 
 
+@history_operations_need_postgres
 async def test_lakefs_failing_to_answer_is_a_server_error(s, owner_client, monkeypatch):
     repo = await _new(s, owner_client, "squash-lakefs-down")
 
@@ -601,6 +609,7 @@ async def test_the_commit_record_is_idempotent(s, owner_client):
     )["id"] == commit_id
 
 
+@history_operations_need_postgres
 async def test_an_admin_squash_and_small_repositories(s, owner_client, admin_client):
     """An admin squashes on the owner's behalf; a repository with no LFS file
     (or only its first commit) has nothing to forget."""
@@ -636,6 +645,7 @@ async def test_an_admin_squash_and_small_repositories(s, owner_client, admin_cli
     )
 
 
+@history_operations_need_postgres
 async def test_forgetting_pages_through_a_big_tree(s, owner_client, monkeypatch):
     repo = await _new(s, owner_client, "squash-pages")
     await repo.commit(*[lfs(f"f{i}.bin", f"page {i}\n".encode() * 9) for i in range(5)])
@@ -722,6 +732,7 @@ async def _squashed_with_history(s, owner_client, name):
     return repo, old, (await _log(s, repo))[0]["id"]
 
 
+@history_operations_need_postgres
 async def test_the_history_a_squash_removed_is_gone(
     s, owner_client, live_server_url, hf_api_token
 ):
@@ -796,6 +807,7 @@ async def test_the_history_a_squash_removed_is_gone(
         )
 
 
+@history_operations_need_postgres
 async def test_what_decides_the_history(s, owner_client, monkeypatch):
     repo, old, root = await _squashed_with_history(s, owner_client, "squash-decides")
     lakefs = _live("kohakuhub.utils.lakefs")
@@ -858,6 +870,7 @@ async def test_what_decides_the_history(s, owner_client, monkeypatch):
         )
 
 
+@history_operations_need_postgres
 async def test_a_squash_waits_for_writes_under_way(s, owner_client, monkeypatch):
     repo = await _new(s, owner_client, "squash-drain")
     await repo.commit(_file("a.txt", "a"))
@@ -887,6 +900,7 @@ async def test_a_squash_waits_for_writes_under_way(s, owner_client, monkeypatch)
     stuck.delete_instance()
 
 
+@history_operations_need_postgres
 async def test_the_lock_is_renewed_and_a_partial_squash_can_be_finished(
     s, owner_client, monkeypatch
 ):
@@ -939,6 +953,7 @@ async def test_the_lock_is_renewed_and_a_partial_squash_can_be_finished(
     assert not s.lock.renew(row.id, "squash:not-the-holder")
 
 
+@history_operations_need_postgres
 async def test_the_old_regular_objects_are_deleted(s, owner_client, monkeypatch):
     """Only what the old history had goes: what the squash commit, a branch
     made afterwards, a commit afterwards and a staged upload link stays."""
@@ -1020,6 +1035,7 @@ async def test_the_old_regular_objects_are_deleted(s, owner_client, monkeypatch)
     await s.cleanup.forget_squashed_history(payload)
 
 
+@history_operations_need_postgres
 async def test_writes_caught_by_a_squash_after_their_first_check_wait_or_retry(
     s, owner_client, monkeypatch
 ):
@@ -1062,6 +1078,7 @@ async def test_writes_caught_by_a_squash_after_their_first_check_wait_or_retry(
     assert await _refs(s, repo) == (["main", "x"], ["t"])  # nothing happened
 
 
+@history_operations_need_postgres
 async def test_a_branch_squashed_alone_cannot_be_merged_back(s, owner_client):
     repo = await _new(s, owner_client, "squash-unrelated")
     await repo.commit(_file("a.txt", "a"))
@@ -1083,6 +1100,7 @@ async def test_a_branch_squashed_alone_cannot_be_merged_back(s, owner_client):
     )
 
 
+@history_operations_need_postgres
 async def test_the_purge_keeps_whatever_the_history_left_links(
     s, owner_client, monkeypatch
 ):
@@ -1151,6 +1169,7 @@ async def test_the_purge_keeps_whatever_the_history_left_links(
     ).status_code in (200, 302, 307)
 
 
+@history_operations_need_postgres
 async def test_a_branch_squashed_alone_after_a_repository_squash_is_readable(
     s, owner_client, monkeypatch
 ):
@@ -1181,6 +1200,7 @@ async def test_a_branch_squashed_alone_after_a_repository_squash_is_readable(
     ).status_code == 404
 
 
+@history_operations_need_postgres
 async def test_a_write_waiting_for_a_squash_sees_the_history_it_left(
     s, owner_client, monkeypatch
 ):
@@ -1216,6 +1236,7 @@ async def test_a_write_waiting_for_a_squash_sees_the_history_it_left(
     assert await _refs(s, repo) == (["main"], [])
 
 
+@history_operations_need_postgres
 async def test_copying_out_of_removed_history_is_refused(s, owner_client):
     repo, old, root = await _squashed_with_history(s, owner_client, "squash-copy")
     lines = [
@@ -1273,6 +1294,7 @@ async def test_the_registration_lives_as_long_as_the_write(
     assert not W.select().where(W.repository == row.id).exists()
 
 
+@history_operations_need_postgres
 async def test_a_squash_that_loses_its_lock_stops(s, owner_client, monkeypatch):
     repo = await _new(s, owner_client, "squash-lost-lock")
     await repo.commit(_file("a.txt", "a"))

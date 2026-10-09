@@ -19,6 +19,7 @@ from peewee import fn
 
 from test.kohakuhub.api.helpers import encode_ndjson
 from test.kohakuhub.api.commit.test_availability import Repo, _delete, _file, _live, lfs
+from test.kohakuhub.support.db import history_operations_need_postgres
 
 MIGRATION = (
     Path(__file__).resolve().parents[2]
@@ -188,6 +189,7 @@ async def test_commits_keep_a_repository_usage_exact(u, owner_client):
     assert _kept(u, other.id) == (0, len(weights))
 
 
+@history_operations_need_postgres
 async def test_branch_operations_keep_it_exact(u, owner_client):
     repo = await _new(u, owner_client, "usage-branch-ops")
     first = await repo.commit(_file("a.txt", "a" * 100), lfs("a.bin", b"first " * 50))
