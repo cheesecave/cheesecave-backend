@@ -2,6 +2,7 @@
 
 import asyncio
 
+from kohakuhub import usage
 from kohakuhub.config import cfg
 from kohakuhub.db import File, LFSObjectHistory, Repository
 from kohakuhub.db_operations import (
@@ -23,6 +24,7 @@ def track_lfs_object(
     sha256: str,
     size: int,
     commit_id: str,
+    branch: str = usage.MAIN,
 ):
     """Track LFS object usage in a commit.
 
@@ -37,6 +39,8 @@ def track_lfs_object(
         sha256: LFS object SHA256 hash
         size: Object size in bytes
         commit_id: LakeFS commit ID
+        branch: the branch the commit is on; only the default branch's
+            commits link the File row (it describes the default branch)
     """
     logger.info(
         f"[TRACK_LFS_OBJECT_CALLED] repo={repo_type}/{namespace}/{name}, "
@@ -49,9 +53,12 @@ def track_lfs_object(
         logger.error(f"Repository not found: {repo_type}/{namespace}/{name}")
         return
 
-    # Try to find corresponding File record for FK link
-    file_fk = File.get_or_none(
-        (File.repository == repo) & (File.path_in_repo == path_in_repo)
+    # Try to find corresponding File record for FK link (#11: the File rows
+    # describe the default branch only)
+    file_fk = (
+        File.get_or_none((File.repository == repo) & (File.path_in_repo == path_in_repo))
+        if branch == usage.MAIN
+        else None
     )
 
     # Always create new LFS history entry with FK objects

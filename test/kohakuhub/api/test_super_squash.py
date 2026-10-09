@@ -1309,3 +1309,30 @@ async def test_a_squash_that_loses_its_lock_stops(s, owner_client, monkeypatch):
         response.status_code == 502 and "lapsed" in response.json()["detail"]["error"]
     )
     assert (await _refs(s, repo))[0] == ["b2", "main"]  # stopped after the first
+
+
+@history_operations_need_postgres
+async def test_a_super_squash_of_a_side_branch_writes_no_file_row(s, owner_client):
+    """The File rows describe main: squashing dev leaves them, write times
+    included (#11)."""
+    repo = await _new(s, owner_client, "squash-side-rows")
+    await repo.commit(_file("a.txt", "a"))
+    response = await owner_client.post(
+        f"/api/models/{repo.id}/branch", json={"branch": "side", "revision": "main"}
+    )
+    assert response.status_code == 200, response.text
+    await repo.commit(_file("a.txt", "side a"), branch="side")
+    await repo.commit(_file("b.txt", "side b"), branch="side")
+    F, row = s.db.File, _row(s, repo.id)
+
+    def rows():
+        return {
+            f.path_in_repo: (f.sha256, f.updated_at, f.is_deleted)
+            for f in F.select().where(F.repository == row)
+        }
+
+    before = rows()
+    response = await owner_client.post(f"/api/models/{repo.id}/super-squash/side", json={})
+    assert response.status_code == 200, response.text
+    assert rows() == before
+

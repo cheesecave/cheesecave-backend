@@ -11,6 +11,7 @@ from test.kohakuhub.api.test_branch_reset import (
     _differs,
     _files,
     _head_refs,
+    _rows,
     _tree,
     blob_sha1,
     collect,
@@ -422,3 +423,56 @@ async def test_a_merge_records_every_path(m, owner_client, monkeypatch):
     squashed = response.json()["result"]["reference"]
     assert H.select().where(H.commit_id == squashed).count() == 1
     assert ("feat/w000.bin", sha(b"feat changed")) in _head_refs(m, repo)
+
+
+@history_operations_need_postgres
+async def test_a_revert_on_a_side_branch_writes_no_file_row(m, owner_client):
+    repo, (initial, c1, c2, c3, c4, c5) = await _linear(m, owner_client, "revert-side-rows")
+    response = await owner_client.post(
+        f"/api/models/{repo.id}/branch", json={"branch": "dev", "revision": c5}
+    )
+    assert response.status_code == 200, response.text
+    await repo.commit(_file("r.txt", "dev r"), lfs("b.bin", b"b side"), branch="dev")
+    side = await repo.head("dev")
+    before = _rows(m, repo)
+    response = await _revert(repo, side, branch="dev")
+    assert response.status_code == 200, response.text
+    assert _rows(m, repo) == before
+
+
+@history_operations_need_postgres
+async def test_a_merge_into_a_side_branch_writes_no_file_row(m, owner_client):
+    repo, (initial, c1, c2, c3, c4, c5) = await _linear(m, owner_client, "merge-side-rows")
+    response = await owner_client.post(
+        f"/api/models/{repo.id}/branch", json={"branch": "dev", "revision": c1}
+    )
+    assert response.status_code == 200, response.text
+    await repo.commit(_file("dev.txt", "dev only"), branch="dev")
+    await repo.commit(lfs("main.bin", b"main side"))
+    before = _rows(m, repo)
+    response = await owner_client.post(
+        f"/api/models/{repo.id}/merge/main/into/dev", json={"message": "Merge main"}
+    )
+    assert response.status_code == 200, response.text
+    assert _rows(m, repo) == before
+    H = m.db.LFSObjectHistory
+    made = await repo.head("dev")
+    version = H.get((H.commit_id == made) & (H.path_in_repo == "main.bin"))
+    assert version.sha256 == sha(b"main side")
+    assert version.file is None
+
+
+@history_operations_need_postgres
+async def test_a_merge_into_main_records_the_file_rows_of_main(m, owner_client):
+    repo, (initial, c1, c2, c3, c4, c5) = await _linear(m, owner_client, "merge-main-rows")
+    response = await owner_client.post(
+        f"/api/models/{repo.id}/branch", json={"branch": "dev", "revision": c5}
+    )
+    assert response.status_code == 200, response.text
+    await repo.commit(_file("r.txt", "dev r"), branch="dev")
+    response = await owner_client.post(
+        f"/api/models/{repo.id}/merge/dev/into/main", json={"message": "Merge dev"}
+    )
+    assert response.status_code == 200, response.text
+    assert _files(m, repo)["r.txt"][0] == blob_sha1("dev r")
+

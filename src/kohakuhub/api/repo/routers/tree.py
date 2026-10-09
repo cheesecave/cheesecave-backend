@@ -11,7 +11,8 @@ from urllib.parse import urlencode
 from fastapi import APIRouter, Depends, Form, Query, Request
 from fastapi.responses import JSONResponse
 
-from kohakuhub import path_commits
+from kohakuhub import path_commits, usage
+from kohakuhub.api.commit.records import revision_identities
 from kohakuhub.config import cfg
 from kohakuhub.auth.dependencies import get_optional_user
 from kohakuhub.auth.permissions import check_repo_read_permission
@@ -343,7 +344,7 @@ async def _process_single_path(
     revision: str,
     repository: Repository,
     clean_path: str,
-    file_records: dict[str, File],
+    file_records: dict[str, File] | None,
     semaphore: asyncio.Semaphore,
     expand: bool,
 ) -> dict | None:
@@ -358,7 +359,13 @@ async def _process_single_path(
                 path=clean_path,
             )
 
-            file_record = file_records.get(clean_path)
+            if file_records is None:  # a side branch: its own identity, from LakeFS (#11)
+                identities = await revision_identities(
+                    client, lakefs_repo, repository, revision, {clean_path: obj_stats}
+                )
+                file_record = identities[clean_path]
+            else:
+                file_record = file_records.get(clean_path)
             checksum = (
                 file_record.sha256
                 if file_record and file_record.sha256
@@ -508,12 +515,17 @@ async def list_repo_tree(
     ):
         return hf_entry_not_found(repo_id, clean_path, revision)
 
-    file_paths = [
-        _normalize_repo_path(obj["path"])
+    file_objects = {
+        _normalize_repo_path(obj["path"]): obj
         for obj in page_results
         if obj.get("path_type") == "object"
-    ]
-    file_records = _build_file_record_map(repo_row, file_paths)
+    }
+    if revision == usage.MAIN:
+        file_records = _build_file_record_map(repo_row, list(file_objects))
+    else:  # a side branch: its own identities, from LakeFS (#11)
+        file_records = await revision_identities(
+            get_lakefs_client(), lakefs_repo, repo_row, resolved_revision, file_objects
+        )
 
     last_commit_map: dict[str, dict | None] = {}
     if expand and page_results:
@@ -597,7 +609,8 @@ async def get_paths_info(
     except Exception:
         return hf_revision_not_found(repo_id, revision)
 
-    file_records = _build_file_record_map(repo_row, normalized_paths)
+    # A side branch's identities are read per path, after its stat (#11)
+    file_records = _build_file_record_map(repo_row, normalized_paths) if revision == usage.MAIN else None
     semaphore = asyncio.Semaphore(PATHS_INFO_CONCURRENCY)
 
     try:

@@ -10,6 +10,8 @@ import pytest
 from fastapi import HTTPException
 
 import kohakuhub.api.files as files_api
+from kohakuhub.db import File
+from test.kohakuhub.support.factories import make_file, make_repo, make_user
 
 
 class _FakeClient:
@@ -644,3 +646,122 @@ async def test_metadata_and_resolve_routes_cover_storage_backend_fallback_and_xe
     )
     assert direct_redirect.status_code == 302
     assert direct_redirect.headers["location"] == "https://download.example.com/file"
+
+
+# ----- a side branch's identities come from LakeFS, not from main's rows (#11) -----
+
+SIDE_OID = "d" * 64  # the LFS object the side branch links at weights.bin
+BLOB_HELLO = "b6fc4c620b67d95f953a5c1c1230aaab5db5a1b0"  # git blob of "hello"
+
+
+class _BranchClient(_FakeClient):
+    """LakeFS (a fake): what each path's stat says and what its bytes are."""
+
+    def __init__(self, stats, contents):
+        super().__init__()
+        self.stats = stats
+        self.contents = contents
+        self.branch_result = {"commit_id": "commit-dev"}
+
+    async def stat_object(self, **kwargs):
+        return self.stats[kwargs["path"]]
+
+    async def get_object(self, **kwargs):
+        return self.contents[kwargs["path"]]
+
+
+@pytest.fixture
+def side_branch_download(monkeypatch):
+    repo = make_repo(make_user("owner"), "demo")
+    make_file(repo, "weights.bin", sha256="main-oid", size=99, lfs=True)  # main's row
+    make_file(repo, "README.md", sha256="main-blob", size=99)
+    client = _BranchClient(
+        stats={
+            "weights.bin": {
+                "physical_address": f"s3://bucket/lfs/dd/dd/{SIDE_OID}",
+                "size_bytes": 10,
+                "checksum": f"sha256:{SIDE_OID}",
+                "content_type": "application/octet-stream",
+                "mtime": 1,
+            },
+            "README.md": {
+                "physical_address": "s3://bucket/data/README.md",
+                "size_bytes": 5,
+                "checksum": "md5-of-hello",
+                "content_type": "text/plain",
+                "mtime": 1,
+            },
+        },
+        contents={"README.md": b"hello"},
+    )
+    monkeypatch.setattr(files_api, "get_repository", lambda repo_type, namespace, name: repo)
+    monkeypatch.setattr(files_api, "check_repo_read_permission", lambda repo_row, user: None)
+    monkeypatch.setattr(files_api, "resolve_lakefs_repo", lambda repo_row: "lake")
+    monkeypatch.setattr(files_api, "get_lakefs_client", lambda: client)
+    monkeypatch.setattr(files_api, "parse_s3_uri", lambda uri: ("bucket", "key"))
+    monkeypatch.setattr(
+        files_api, "generate_download_presigned_url", _async_return("https://download.example.com/file")
+    )
+    monkeypatch.setattr(files_api, "XET_ENABLE", True)
+    monkeypatch.setattr(files_api.cfg.app, "base_url", "https://hub.example.com")
+    return repo
+
+
+@pytest.mark.usefixtures("db_scope")
+async def test_download_on_a_side_branch_sends_the_etag_of_that_branch(side_branch_download):
+    _, weights = await files_api._get_file_metadata(
+        "model", "owner", "demo", "dev", "weights.bin", None
+    )
+    assert weights["ETag"] == SIDE_OID
+    assert weights["X-Linked-Etag"] == SIDE_OID
+    assert weights["X-Xet-hash"] == SIDE_OID
+
+    _, readme = await files_api._get_file_metadata("model", "owner", "demo", "dev", "README.md", None)
+    assert readme["ETag"] == BLOB_HELLO
+    assert "X-Xet-hash" not in readme
+
+
+@pytest.mark.usefixtures("db_scope")
+async def test_download_on_main_still_sends_the_row_etag(side_branch_download):
+    _, weights = await files_api._get_file_metadata(
+        "model", "owner", "demo", "main", "weights.bin", None
+    )
+    assert weights["ETag"] == "main-oid"
+
+
+@pytest.mark.usefixtures("db_scope")
+async def test_preupload_on_a_side_branch_never_skips_on_main_rows(monkeypatch):
+    repo = make_repo(make_user("owner"), "demo")
+    make_file(repo, "weights.bin", sha256=SIDE_OID, size=10, lfs=True)
+    monkeypatch.setattr(files_api, "get_repository", lambda repo_type, namespace, name: repo)
+    monkeypatch.setattr(files_api, "check_repo_write_permission", lambda repo_row, user: None)
+    monkeypatch.setattr(files_api, "check_quota", lambda namespace, total, private, is_org: (True, None))
+    monkeypatch.setattr(files_api, "get_organization", lambda namespace: None)
+    monkeypatch.setattr(files_api, "resolve_lakefs_repo", lambda repo_row: "lake")
+    body = {"files": [{"path": "weights.bin", "size": 10, "sha256": SIDE_OID}]}
+
+    on_branch = await files_api.preupload(
+        files_api.RepoType.model, "owner", "demo", "dev", _FakeRequest(body), user=repo.owner
+    )
+    assert on_branch["files"][0]["shouldIgnore"] is False
+
+    on_main = await files_api.preupload(
+        files_api.RepoType.model, "owner", "demo", "main", _FakeRequest(body), user=repo.owner
+    )
+    assert on_main["files"][0]["shouldIgnore"] is True
+
+
+
+@pytest.mark.usefixtures("db_scope")
+async def test_preupload_without_a_batch_checks_the_default_branch_row(monkeypatch):
+    repo = make_repo(make_user("owner"), "demo")
+    make_file(repo, "weights.bin", sha256=SIDE_OID, size=10, lfs=True)
+    monkeypatch.setattr(files_api, "should_use_lfs", lambda repo_row, path, size: True)
+
+    same = await files_api.process_preupload_file(
+        {"path": "weights.bin", "size": 10, "sha256": SIDE_OID}, repo, "owner/demo", "lake", "main", 1024
+    )
+    other = await files_api.process_preupload_file(
+        {"path": "weights.bin", "size": 10, "sha256": BLOB_HELLO}, repo, "owner/demo", "lake", "main", 1024
+    )
+    assert (same["shouldIgnore"], other["shouldIgnore"]) == (True, False)

@@ -45,6 +45,19 @@ def test_track_lfs_object_without_a_file_row_keeps_history_unlinked():
     assert row.file_id is None
 
 
+def test_track_lfs_object_on_a_side_branch_links_no_file_row():
+    repo = make_repo(make_user("owner"), "repo")
+    _file(repo, "weights/model.bin", "a" * 64)  # main's row describes main's object
+
+    gc_utils.track_lfs_object(
+        "model", "owner", "repo", "weights/model.bin", "b" * 64, 2, "commit-4", branch="dev"
+    )
+
+    row = LFSObjectHistory.get(LFSObjectHistory.commit_id == "commit-4")
+    assert row.sha256 == "b" * 64
+    assert row.file_id is None
+
+
 def test_track_lfs_object_ignores_an_unknown_repository():
     gc_utils.track_lfs_object("model", "owner", "missing", "x", "c" * 64, 1, "commit-3")
 

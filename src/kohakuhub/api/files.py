@@ -12,6 +12,8 @@ from urllib.parse import quote
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import RedirectResponse, Response
 
+from kohakuhub import usage
+from kohakuhub.api.commit.records import revision_identities
 from kohakuhub.config import cfg
 from kohakuhub.db import File, Repository, User
 from kohakuhub.db_operations import (
@@ -177,8 +179,11 @@ async def process_preupload_file(
 
     # Check for existing file with same content
     if sha256:
-        # If sha256 provided, use it for comparison (most reliable)
-        if existing_files is None:
+        # If sha256 provided, use it for comparison (most reliable). The File rows
+        # describe the default branch, so a side branch always uploads (#11)
+        if revision != usage.MAIN:
+            should_ignore = False
+        elif existing_files is None:
             should_ignore = await check_file_by_sha256(repo, path, sha256, size)
         else:
             existing = existing_files.get(path)
@@ -282,7 +287,10 @@ async def preupload(
         for file_info in files
         if file_info.get("sha256")
     }
-    existing_files = get_repo_file_metadata_map(repo_row, sha_paths) if sha_paths else {}
+    # The File rows describe the default branch: a side branch loads none (#11)
+    existing_files = (
+        get_repo_file_metadata_map(repo_row, sha_paths) if sha_paths and revision == usage.MAIN else {}
+    )
 
     # Process all files in parallel
     result_files = await asyncio.gather(
@@ -480,9 +488,14 @@ async def _get_file_metadata(
     # Prepare headers required by HuggingFace client
     file_size = obj_stat["size_bytes"]
 
-    # Get correct checksum from database
-    # sha256 column stores: git blob SHA1 for non-LFS, SHA256 for LFS
-    file_record = get_file(repo_row, path) if repo_row else None
+    # The checksum a File row holds is the default branch's; another revision's
+    # is read from LakeFS (#11). sha256 column: git blob SHA1 for non-LFS, SHA256 for LFS
+    if revision == usage.MAIN:
+        file_record = get_file(repo_row, path)
+    else:
+        file_record = (
+            await revision_identities(client, lakefs_repo, repo_row, commit_hash, {path: obj_stat})
+        )[path]
 
     # HuggingFace expects plain SHA256 hex (64 characters, unquoted)
     # For non-LFS: use git blob SHA1, for LFS: use SHA256
