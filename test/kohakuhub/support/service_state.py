@@ -63,6 +63,10 @@ def _lakefs_credentials_valid(endpoint: str, credentials_file: Path) -> bool:
     return response.status_code == 200
 
 
+def _is_sqlite_url(database_url: str) -> bool:
+    return database_url.startswith("sqlite:///")
+
+
 def _postgres_admin_url(database_url: str) -> str:
     parsed = urlparse(database_url)
     db_name = parsed.path.lstrip("/")
@@ -125,10 +129,11 @@ def _ensure_services_ready(
             progress_callback(message)
 
     cfg = get_service_test_config()
-    report("waiting for PostgreSQL")
-    _wait_for_postgres(cfg.database_url)
-    report("ensuring the test database exists")
-    _ensure_database_exists(cfg.database_url)
+    if not _is_sqlite_url(cfg.database_url):
+        report("waiting for PostgreSQL")
+        _wait_for_postgres(cfg.database_url)
+        report("ensuring the test database exists")
+        _ensure_database_exists(cfg.database_url)
     report("waiting for MinIO")
     # At the server's root, also when the endpoint's path names the bucket
     s3 = urlparse(cfg.s3_endpoint)
@@ -189,7 +194,15 @@ class ServiceTestState:
 
     def _reset_database(self) -> None:
         self._close_db()
-        conn = psycopg2.connect(self.modules.config_module.cfg.app.database_url)
+        database_url = self.modules.config_module.cfg.app.database_url
+        if _is_sqlite_url(database_url):
+            # ":memory:" has nothing on disk; a file is deleted with its journal.
+            path = database_url.replace("sqlite:///", "")
+            if path != ":memory:":
+                for suffix in ("", "-journal", "-wal", "-shm"):
+                    Path(path + suffix).unlink(missing_ok=True)
+            return
+        conn = psycopg2.connect(database_url)
         conn.autocommit = True
         try:
             with conn.cursor() as cursor:
@@ -298,7 +311,7 @@ class ServiceTestState:
         await self._clear_lakefs()
         report("clearing the object storage bucket")
         self._clear_bucket()
-        report("resetting the PostgreSQL schema")
+        report("resetting the database")
         self._reset_database()
         report("rebuilding the database schema")
         self.modules.db_module.init_db()
