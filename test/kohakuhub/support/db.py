@@ -33,9 +33,19 @@ class _Rollback(Exception):
     """Raised inside the scope to undo the transaction."""
 
 
-def make_database(tmp_path, name="unit"):
-    """Return ``(database, schema)``. ``schema`` is None for SQLite."""
-    if os.environ.get("KOHAKU_HUB_DB_BACKEND", "").lower() == "postgres":
+def postgres_configured():
+    """True when ``KOHAKU_HUB_DATABASE_URL`` names a PostgreSQL server."""
+    return os.environ.get("KOHAKU_HUB_DATABASE_URL", "").startswith("postgresql")
+
+
+def make_database(tmp_path, name="unit", backend=None):
+    """Return ``(database, schema)``. ``schema`` is None for SQLite.
+
+    ``backend`` is ``"sqlite"`` or ``"postgres"``; None reads ``KOHAKU_HUB_DB_BACKEND``.
+    """
+    if backend is None:
+        backend = os.environ.get("KOHAKU_HUB_DB_BACKEND", "")
+    if backend.lower() == "postgres":
         url = urlparse(os.environ["KOHAKU_HUB_DATABASE_URL"])
         # One schema per scope: a scope that drops its tables must not remove another scope's.
         schema = f"t_{name}_{uuid.uuid4().hex[:12]}"

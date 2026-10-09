@@ -42,9 +42,10 @@ in `NOTICE.md`, `LICENSE` and `provenance/` intact when editing inherited code.
 - **Use the shared fixtures.** They live in `test/conftest.py` and `test/kohakuhub/support/db.py`:
   `db_fresh` for code that commits over HTTP, migrations and DDL (a new file-backed database per
   test); `db_committed` for rows that must be really committed but may be emptied per test;
-  `db_scope` (rolled back after each test, same thread only) for query-shaped tests. Use
-  `table_missing(database, Model)` for a real database failure. Seed rows with
-  `test/kohakuhub/support/factories.py`. Do not construct `SqliteDatabase` or `PostgresqlDatabase`
+  `db_scope` (rolled back after each test, same thread only) for query-shaped tests; `db_dual`
+  (a fresh database per test, requested with the `db_backend` parametrization) when the test must
+  run on both SQLite and PostgreSQL. Use `table_missing(database, Model)` for a real database
+  failure. Seed rows with `test/kohakuhub/support/factories.py`. Do not construct `SqliteDatabase` or `PostgresqlDatabase`
   in a test file; only `support/db.py` does.
 - **Keep the mocks that belong to the environment.** External services (LakeFS, S3, Hugging
   Face HTTP, SMTP) stay mocked; their database side uses real rows. Pure logic that never reads

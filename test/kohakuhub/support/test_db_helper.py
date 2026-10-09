@@ -30,6 +30,15 @@ def test_sqlite_database_is_used_when_the_backend_is_not_postgres(tmp_path, monk
     database.close()
 
 
+def test_explicit_backend_overrides_the_environment(tmp_path, monkeypatch):
+    # db_dual asks for each engine in turn, whatever KOHAKU_HUB_DB_BACKEND says.
+    monkeypatch.setenv("KOHAKU_HUB_DB_BACKEND", "postgres")
+    database, schema = dbsupport.make_database(tmp_path, name="explicit", backend="sqlite")
+    assert isinstance(database, SqliteDatabase)
+    assert schema is None
+    database.close()
+
+
 def test_postgres_database_gets_a_schema_per_scope(tmp_path, monkeypatch):
     monkeypatch.setenv("KOHAKU_HUB_DB_BACKEND", "postgres")
     monkeypatch.setenv("KOHAKU_HUB_DATABASE_URL", "postgresql://hub:pw@127.0.0.1:55432/protodb")

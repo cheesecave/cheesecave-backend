@@ -273,3 +273,23 @@ def db_fresh(tmp_path):
     with _db.fresh_database(database, _db.MODELS, schema=schema) as scoped:
         yield scoped
     database.close()
+
+
+# Parametrized engines. Only a test that requests db_backend (directly or through db_dual)
+# is doubled; the other fixtures above follow KOHAKU_HUB_DB_BACKEND and are not parametrized,
+# so ~2000 tests keep one case each.
+@pytest.fixture(params=["sqlite", pytest.param("postgres", marks=pytest.mark.integration)])
+def db_backend(request):
+    """Each engine in turn. Postgres skips unless KOHAKU_HUB_DATABASE_URL is a PostgreSQL URL."""
+    if request.param == "postgres" and not _db.postgres_configured():
+        pytest.skip("no Postgres configured in KOHAKU_HUB_DATABASE_URL")
+    return request.param
+
+
+@pytest.fixture
+def db_dual(db_backend, tmp_path):
+    """A new database on the engine ``db_backend`` names: the test runs on SQLite and PostgreSQL."""
+    database, schema = _db.make_database(tmp_path, name="dual", backend=db_backend)
+    with _db.fresh_database(database, _db.MODELS, schema=schema) as scoped:
+        yield scoped
+    database.close()
