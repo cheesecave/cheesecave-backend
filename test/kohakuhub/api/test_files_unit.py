@@ -66,7 +66,7 @@ async def test_hash_and_sample_helpers_cover_match_failures_and_decode_errors(mo
     monkeypatch.setattr(
         files_api,
         "get_file",
-        lambda repo_row, path: SimpleNamespace(sha256="same", size=3),
+        lambda repo_row, path, branch="main": SimpleNamespace(sha256="same", size=3),
     )
     assert await files_api.check_file_by_sha256(repo, "file.txt", "same", 3) is True
     assert await files_api.check_file_by_sha256(repo, "file.txt", "same", 4) is False
@@ -176,7 +176,7 @@ async def test_preupload_batch_load_is_limited_to_sha256_paths(monkeypatch):
     monkeypatch.setattr(files_api, "resolve_lakefs_repo", lambda _repo: "lakefs-repo")
     monkeypatch.setattr(files_api, "get_effective_lfs_threshold", lambda _repo: 1024)
 
-    def _batch_map(_repo, paths):
+    def _batch_map(_repo, paths, branch="main"):
         captured.append(set(paths))
         return {"same.bin": ("sha", 4)}
 

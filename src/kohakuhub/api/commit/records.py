@@ -258,9 +258,12 @@ def _batches(items: list, size: int = ROW_BATCH):
         yield items[start : start + size]
 
 
-async def _record_files(client, lakefs_repo: str, repo: Repository, head: str, actual: dict, lfs_now: dict) -> None:
-    """The File rows of the paths a default branch's commits changed, as its
-    head holds them now (``actual``: the head's entry at each path)."""
+async def _record_files(
+    client, lakefs_repo: str, repo: Repository, branch: str, head: str, actual: dict, lfs_now: dict
+) -> None:
+    """The File rows of ``branch`` for the paths its commits changed, as its
+    head holds them now (``actual``: the head's entry at each path). Each
+    branch keeps its own rows (#11)."""
     present = {path: e for path, e in actual.items() if e is not None}
     regular = [
         path
@@ -286,11 +289,12 @@ async def _record_files(client, lakefs_repo: str, repo: Repository, head: str, a
                 "lfs": path not in regular,
                 "is_deleted": False,
                 "owner": repo.owner,
+                "branch": branch,
             }
         )
     for batch in _batches(rows):
         File.insert_many(batch).on_conflict(
-            conflict_target=(File.repository, File.path_in_repo),
+            conflict_target=(File.repository, File.branch, File.path_in_repo),
             update={
                 File.sha256: EXCLUDED.sha256,
                 File.size: EXCLUDED.size,
@@ -302,7 +306,7 @@ async def _record_files(client, lakefs_repo: str, repo: Repository, head: str, a
         await asyncio.sleep(0)
     for batch in _batches([path for path, e in actual.items() if e is None]):
         File.update(is_deleted=True, updated_at=now).where(
-            (File.repository == repo) & File.path_in_repo.in_(batch)
+            (File.repository == repo) & (File.branch == branch) & File.path_in_repo.in_(batch)
         ).execute()
         await asyncio.sleep(0)
 
@@ -365,8 +369,7 @@ async def record_commits(
             )
         record_head_change(repo, branch, {path: lfs_now.get(path) for path in changed}, [])
 
-        if branch == usage.MAIN:  # the File rows describe the default branch (#11)
-            await _record_files(client, lakefs_repo, repo, head, actual, lfs_now)
+        await _record_files(client, lakefs_repo, repo, branch, head, actual, lfs_now)
 
         # Each round's LFS versions, attributed to the commit that brought them
         # and dated when it was made: a commit that landed after it stays newer
@@ -378,14 +381,18 @@ async def record_commits(
                 await path_commits.record(repo, branch, {**commit, "id": commit_id}, wanted)
             except Exception as e:
                 logger.warning(f"Could not record the last commits of {commit_id[:8]}: {e}")
-        file_ids = {}  # a side branch's history links no row: they describe main (#11)
-        if branch == usage.MAIN:
-            for batch in _batches(list(lfs_now)):
-                file_ids.update(
-                    File.select(File.path_in_repo, File.id)
-                    .where((File.repository == repo) & File.path_in_repo.in_(batch))
-                    .tuples()
+        # Each history row links the branch's own File row (#11)
+        file_ids = {}
+        for batch in _batches(list(lfs_now)):
+            file_ids.update(
+                File.select(File.path_in_repo, File.id)
+                .where(
+                    (File.repository == repo)
+                    & (File.branch == branch)
+                    & File.path_in_repo.in_(batch)
                 )
+                .tuples()
+            )
         history = [
             {
                 "repository": repo,

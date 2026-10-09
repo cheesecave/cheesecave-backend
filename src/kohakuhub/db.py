@@ -345,12 +345,10 @@ class File(BaseModel):
     updated_at = DateTimeField(default=partial(datetime.now, tz=timezone.utc))
 
     class Meta:
-        # Expand state (#11): the old key stays until the contract migration
-        # (scripts/db_migrations/contract/033) drops it.
-        indexes = (
-            (("repository", "path_in_repo"), True),
-            (("repository", "branch", "path_in_repo"), True),
-        )
+        # The key of issue #11. Upgraded databases keep the pre-A key
+        # (repository, path_in_repo) until the gated contract
+        # (scripts/db_migrations/contract/033) drops it; a new database never has it.
+        indexes = ((("repository", "branch", "path_in_repo"), True),)
 
 
 class PathCommit(BaseModel):

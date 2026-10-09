@@ -468,17 +468,18 @@ def list_organization_members(org: User) -> list[UserOrganization]:
 # ===== File operations =====
 
 
-def get_file(repo: Repository, path_in_repo: str) -> File | None:
-    """Get file by repository FK and path (only active files)."""
+def get_file(repo: Repository, path_in_repo: str, branch: str = "main") -> File | None:
+    """The active file row of ``path_in_repo`` on ``branch`` (#11)."""
     return File.get_or_none(
         (File.repository == repo)
+        & (File.branch == branch)
         & (File.path_in_repo == path_in_repo)
         & (File.is_deleted == False)
     )
 
 
 def get_repo_file_metadata_map(
-    repo: Repository, paths: Iterable[str] | None = None
+    repo: Repository, paths: Iterable[str] | None = None, branch: str = "main"
 ) -> dict[str, tuple[str, int]]:
     """Map active file paths to the fields needed by batch callers.
 
@@ -487,7 +488,7 @@ def get_repo_file_metadata_map(
     When ``paths`` is provided, only those paths are selected so a small
     preupload batch does not scan the whole repository.
     """
-    query = (File.repository == repo) & (File.is_deleted == False)
+    query = (File.repository == repo) & (File.branch == branch) & (File.is_deleted == False)
     if paths is not None:
         query &= File.path_in_repo.in_(list(paths))
 

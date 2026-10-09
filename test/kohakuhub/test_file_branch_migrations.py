@@ -151,10 +151,11 @@ def contract(expanded, monkeypatch):
 # --- fresh databases --------------------------------------------------------------
 
 
-def test_fresh_database_has_the_branch_column_and_both_keys(db_dual):
-    """A database built from the models is already in the expanded shape."""
+def test_fresh_database_has_the_branch_column_and_only_the_new_key(db_dual):
+    """A database built from the models has the final shape: no pre-A key (S2 change)."""
     assert "branch" in _columns(db_dual)
-    assert {NEW_INDEX, OLD_INDEX} <= _index_names(db_dual)
+    assert NEW_INDEX in _index_names(db_dual)
+    assert OLD_INDEX not in _index_names(db_dual)
 
 
 def test_fresh_rows_default_to_main(db_dual):

@@ -71,7 +71,7 @@ class RepoType(str, Enum):
 
 
 async def check_file_by_sha256(
-    repo: Repository, path: str, sha256: str, size: int
+    repo: Repository, path: str, sha256: str, size: int, branch: str = "main"
 ) -> bool:
     """Check if file with same SHA256 and size already exists.
 
@@ -84,7 +84,7 @@ async def check_file_by_sha256(
     Returns:
         True if file should be ignored (already exists), False otherwise
     """
-    existing = get_file(repo, path)
+    existing = get_file(repo, path, branch=branch)
     if existing and existing.sha256 == sha256 and existing.size == size:
         return True
     return False
@@ -179,12 +179,10 @@ async def process_preupload_file(
 
     # Check for existing file with same content
     if sha256:
-        # If sha256 provided, use it for comparison (most reliable). The File rows
-        # describe the default branch, so a side branch always uploads (#11)
-        if revision != usage.MAIN:
-            should_ignore = False
-        elif existing_files is None:
-            should_ignore = await check_file_by_sha256(repo, path, sha256, size)
+        # If sha256 provided, use it for comparison (most reliable): the rows of
+        # this revision's branch (#11)
+        if existing_files is None:
+            should_ignore = await check_file_by_sha256(repo, path, sha256, size, branch=revision)
         else:
             existing = existing_files.get(path)
             should_ignore = bool(
@@ -287,9 +285,9 @@ async def preupload(
         for file_info in files
         if file_info.get("sha256")
     }
-    # The File rows describe the default branch: a side branch loads none (#11)
+    # The rows of this revision's branch (#11)
     existing_files = (
-        get_repo_file_metadata_map(repo_row, sha_paths) if sha_paths and revision == usage.MAIN else {}
+        get_repo_file_metadata_map(repo_row, sha_paths, branch=revision) if sha_paths else {}
     )
 
     # Process all files in parallel
