@@ -95,6 +95,26 @@ async def test_get_trending_repositories_shows_private_repos_to_their_owner():
 
 
 @pytest.mark.asyncio
+async def test_get_trending_repositories_skips_stats_of_repositories_of_another_type():
+    # The stats aggregate is not filtered by repo type, so a model's stats row
+    # reaches the Repository lookup for "dataset", finds no row, and is skipped.
+    owner = make_user("owner")
+    model = make_repo(owner, "model-demo")
+    dataset = make_repo(owner, "data-demo", repo_type="dataset")
+    make_daily_stats(model, _today(), download_sessions=9)
+    make_daily_stats(dataset, _today(), download_sessions=2)
+
+    response = await stats_api.get_trending_repositories(
+        repo_type="dataset",
+        days=7,
+        limit=10,
+        user=None,
+    )
+
+    assert [item["id"] for item in response["trending"]] == ["owner/data-demo"]
+
+
+@pytest.mark.asyncio
 async def test_get_repository_stats_reports_the_row_counters_and_404s_unknown_repos():
     owner = make_user("owner")
     repo = make_repo(owner, "demo")
