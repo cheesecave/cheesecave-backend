@@ -750,3 +750,18 @@ async def test_preupload_on_a_side_branch_never_skips_on_main_rows(monkeypatch):
     )
     assert on_main["files"][0]["shouldIgnore"] is True
 
+
+
+@pytest.mark.usefixtures("db_scope")
+async def test_preupload_without_a_batch_checks_the_default_branch_row(monkeypatch):
+    repo = make_repo(make_user("owner"), "demo")
+    make_file(repo, "weights.bin", sha256=SIDE_OID, size=10, lfs=True)
+    monkeypatch.setattr(files_api, "should_use_lfs", lambda repo_row, path, size: True)
+
+    same = await files_api.process_preupload_file(
+        {"path": "weights.bin", "size": 10, "sha256": SIDE_OID}, repo, "owner/demo", "lake", "main", 1024
+    )
+    other = await files_api.process_preupload_file(
+        {"path": "weights.bin", "size": 10, "sha256": BLOB_HELLO}, repo, "owner/demo", "lake", "main", 1024
+    )
+    assert (same["shouldIgnore"], other["shouldIgnore"]) == (True, False)
