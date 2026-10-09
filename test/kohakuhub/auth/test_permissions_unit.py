@@ -6,6 +6,7 @@ import pytest
 from fastapi import HTTPException
 
 import kohakuhub.auth.permissions as permissions
+from kohakuhub.db import Repository
 from test.kohakuhub.support.factories import make_org, make_repo, make_user
 
 pytestmark = pytest.mark.usefixtures("db_scope")
@@ -74,3 +75,21 @@ def test_repo_write_and_delete_permission_cover_admin_owner_and_org_admin():
 
     # Admin membership of the organization (a real UserOrganization row) allows delete.
     assert permissions.check_repo_delete_permission(repo, owner) is True
+
+
+def test_filter_readable_repositories_narrows_to_the_requested_author_namespace():
+    owner = make_user("owner")
+    other = make_user("other")
+    make_repo(owner, "mine")
+    make_repo(other, "theirs")
+    make_repo(other, "hidden", private=True)
+
+    # Anonymous readers see only public rows, and ``author`` keeps only that namespace.
+    by_owner = permissions.filter_readable_repositories(Repository.select(), None, author="owner")
+    assert {repo.full_id for repo in by_owner} == {"owner/mine"}
+
+    by_other = permissions.filter_readable_repositories(Repository.select(), None, author="other")
+    assert {repo.full_id for repo in by_other} == {"other/theirs"}
+
+    unfiltered = permissions.filter_readable_repositories(Repository.select(), None)
+    assert {repo.full_id for repo in unfiltered} == {"owner/mine", "other/theirs"}
