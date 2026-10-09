@@ -14,7 +14,7 @@ from kohakuhub.constants import (
 from kohakuhub.db import File
 from kohakuhub.db_operations import get_repository, should_use_lfs
 from kohakuhub.logger import get_logger
-from kohakuhub.utils.lakefs import get_lakefs_client, lakefs_repo_name
+from kohakuhub.utils.lakefs import get_lakefs_client
 from kohakuhub.api.git.utils.objects import (
     build_nested_trees,
     create_blob_object,
@@ -52,16 +52,18 @@ class GitLakeFSBridge:
         repo_type: str,
         namespace: str,
         name: str,
-        lakefs_repo: str | None = None,
+        lakefs_repo: str,
     ):
+        # Pass the id resolved from the Repository row (`resolve_lakefs_repo`). Deriving
+        # it here would address the generation-0 repository, which is wrong for any row
+        # allocated later, so an empty id is refused rather than replaced.
+        if not lakefs_repo:
+            raise ValueError("lakefs_repo is required; resolve it with resolve_lakefs_repo")
         self.repo_type = repo_type
         self.namespace = namespace
         self.name = name
         self.repo_id = f"{namespace}/{name}"
-        # Callers that hold the Repository row should pass its resolved LakeFS id
-        # (`resolve_lakefs_repo`); deriving it only works for repositories still
-        # on generation 0.
-        self.lakefs_repo = lakefs_repo or lakefs_repo_name(repo_type, self.repo_id)
+        self.lakefs_repo = lakefs_repo
         self.lakefs_client = get_lakefs_client()
 
     async def get_refs(self, branch: str = "main") -> dict[str, str]:
