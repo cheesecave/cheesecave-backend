@@ -132,8 +132,9 @@ async def process_regular_file(
     # Calculate git blob SHA1 for non-LFS files (HuggingFace format)
     git_blob_sha1 = calculate_git_blob_sha1(data)
 
-    # Check if file unchanged (deduplication)
-    existing = get_file(repo, path)
+    # Check if file unchanged (deduplication). The File rows describe the default
+    # branch only (#11): a side branch always uploads
+    existing = get_file(repo, path) if revision == usage.MAIN else None
     # ``get_file`` only returns active rows, so an unchanged match is always skipped
     if existing and existing.sha256 == git_blob_sha1 and existing.size == len(data):
         logger.info(f"Skipping unchanged file: {path}")
@@ -153,25 +154,26 @@ async def process_regular_file(
     except Exception as e:
         raise HTTPException(500, detail={"error": f"Failed to upload {path}: {e}"})
 
-    # Update database - store git blob SHA1 in sha256 column for non-LFS files
-    File.insert(
-        repository=repo,
-        path_in_repo=path,
-        size=len(data),
-        sha256=git_blob_sha1,
-        lfs=False,
-        is_deleted=False,
-        owner=repo.owner,
-    ).on_conflict(
-        conflict_target=(File.repository, File.path_in_repo),
-        update={
-            File.sha256: git_blob_sha1,
-            File.size: len(data),
-            File.lfs: False,  # Explicitly set to False
-            File.is_deleted: False,  # File is active (un-delete if previously deleted)
-            File.updated_at: datetime.now(timezone.utc),
-        },
-    ).execute()
+    if revision == usage.MAIN:  # the File rows describe the default branch (#11)
+        # Update database - store git blob SHA1 in sha256 column for non-LFS files
+        File.insert(
+            repository=repo,
+            path_in_repo=path,
+            size=len(data),
+            sha256=git_blob_sha1,
+            lfs=False,
+            is_deleted=False,
+            owner=repo.owner,
+        ).on_conflict(
+            conflict_target=(File.repository, File.path_in_repo),
+            update={
+                File.sha256: git_blob_sha1,
+                File.size: len(data),
+                File.lfs: False,  # Explicitly set to False
+                File.is_deleted: False,  # File is active (un-delete if previously deleted)
+                File.updated_at: datetime.now(timezone.utc),
+            },
+        ).execute()
 
     return True
 
@@ -227,8 +229,13 @@ async def process_lfs_file(
     if not oid:
         raise HTTPException(400, detail={"error": f"Missing OID for LFS file {path}"})
 
-    # Check for existing file (including deleted files to detect re-upload)
-    existing = File.get_or_none((File.repository == repo) & (File.path_in_repo == path))
+    # Check for existing file (including deleted files to detect re-upload); the
+    # File rows describe the default branch only, so a side branch has none (#11)
+    existing = (
+        File.get_or_none((File.repository == repo) & (File.path_in_repo == path))
+        if revision == usage.MAIN
+        else None
+    )
 
     # Track old LFS object for potential deletion
     old_lfs_oid = None
@@ -409,27 +416,28 @@ async def process_lfs_file(
             detail={"error": f"Failed to link LFS file {path} in LakeFS: {str(e)}"},
         )
 
-    # Update database
-    File.insert(
-        repository=repo,
-        path_in_repo=path,
-        size=size,
-        sha256=oid,
-        lfs=True,
-        is_deleted=False,
-        owner=repo.owner,
-    ).on_conflict(
-        conflict_target=(File.repository, File.path_in_repo),
-        update={
-            File.sha256: oid,
-            File.size: size,
-            File.lfs: True,
-            File.is_deleted: False,  # File is active (un-delete if previously deleted)
-            File.updated_at: datetime.now(timezone.utc),
-        },
-    ).execute()
+    if revision == usage.MAIN:  # the File rows describe the default branch (#11)
+        # Update database
+        File.insert(
+            repository=repo,
+            path_in_repo=path,
+            size=size,
+            sha256=oid,
+            lfs=True,
+            is_deleted=False,
+            owner=repo.owner,
+        ).on_conflict(
+            conflict_target=(File.repository, File.path_in_repo),
+            update={
+                File.sha256: oid,
+                File.size: size,
+                File.lfs: True,
+                File.is_deleted: False,  # File is active (un-delete if previously deleted)
+                File.updated_at: datetime.now(timezone.utc),
+            },
+        ).execute()
 
-    logger.success(f"Updated database record for LFS file: {path}")
+        logger.success(f"Updated database record for LFS file: {path}")
 
     # Return tracking info for GC
     tracking_info = {
@@ -474,17 +482,19 @@ async def process_deleted_file(
         # File might not exist, log warning but continue
         logger.warning(f"Failed to delete {path} from LakeFS: {e}")
 
-    # Mark as deleted in database (soft delete)
-    updated_count = (
-        File.update(is_deleted=True, updated_at=datetime.now(timezone.utc))
-        .where((File.repository == repo) & (File.path_in_repo == path))
-        .execute()
-    )
+    # Mark as deleted in database (soft delete); the File rows describe the default
+    # branch only, so a side branch's deletion leaves them (#11)
+    if revision == usage.MAIN:
+        updated_count = (
+            File.update(is_deleted=True, updated_at=datetime.now(timezone.utc))
+            .where((File.repository == repo) & (File.path_in_repo == path))
+            .execute()
+        )
 
-    if updated_count > 0:
-        logger.success(f"Marked {path} as deleted in database (soft delete)")
-    else:
-        logger.info(f"File {path} was not in database")
+        if updated_count > 0:
+            logger.success(f"Marked {path} as deleted in database (soft delete)")
+        else:
+            logger.info(f"File {path} was not in database")
 
     return True
 
@@ -557,7 +567,7 @@ async def process_deleted_folder(
         # Mark as deleted in database (soft delete). startswith is ILIKE, so
         # narrow in SQL and match the prefix case-sensitively like LakeFS did:
         # deleting data/ must not mark Data/ deleted.
-        if deleted_files:
+        if deleted_files and revision == usage.MAIN:  # the File rows: default branch (#11)
             ids = [
                 row.id
                 for row in File.select(File.id, File.path_in_repo).where(
@@ -628,8 +638,10 @@ async def process_copy_file(
         oid = lfs_oid(src_obj["physical_address"])
         if oid:
             await _claim_lfs_object(oid, f"lfs/{oid[:2]}/{oid[2:4]}/{oid}")
-        previous = File.get_or_none(
-            (File.repository == repo) & (File.path_in_repo == dest_path)
+        previous = (
+            File.get_or_none((File.repository == repo) & (File.path_in_repo == dest_path))
+            if revision == usage.MAIN
+            else None
         )
 
         # Use LakeFS staging API to link the physical address
@@ -652,69 +664,71 @@ async def process_copy_file(
             f"Successfully linked {dest_path} to same physical address as {src_path}"
         )
 
-        # Update database - copy file metadata
-        src_file = get_file(repo, src_path)
+        # Update database - copy file metadata. The File rows describe the default
+        # branch, and a source's row only when the source is on it (#11)
+        if revision == usage.MAIN:
+            src_file = get_file(repo, src_path) if src_revision == usage.MAIN else None
+            if oid:
+                File.insert(
+                    repository=repo,
+                    path_in_repo=dest_path,
+                    size=src_obj["size_bytes"],
+                    sha256=oid,
+                    lfs=True,
+                    is_deleted=False,
+                    owner=repo.owner,
+                ).on_conflict(
+                    conflict_target=(File.repository, File.path_in_repo),
+                    update={
+                        File.sha256: oid,
+                        File.size: src_obj["size_bytes"],
+                        File.lfs: True,
+                        File.is_deleted: False,
+                        File.updated_at: datetime.now(timezone.utc),
+                    },
+                ).execute()
+            elif src_file:
+                File.insert(
+                    repository=repo,
+                    path_in_repo=dest_path,
+                    size=src_file.size,
+                    sha256=src_file.sha256,
+                    lfs=src_file.lfs,
+                    is_deleted=False,
+                    owner=repo.owner,
+                ).on_conflict(
+                    conflict_target=(File.repository, File.path_in_repo),
+                    update={
+                        File.sha256: src_file.sha256,
+                        File.size: src_file.size,
+                        File.lfs: src_file.lfs,
+                        File.is_deleted: False,  # File is active
+                        File.updated_at: datetime.now(timezone.utc),
+                    },
+                ).execute()
+            else:
+                # If not in database, create entry based on LakeFS info
+                # Use repo-specific LFS settings
+                is_lfs = should_use_lfs(repo, dest_path, src_obj["size_bytes"])
+                File.insert(
+                    repository=repo,
+                    path_in_repo=dest_path,
+                    size=src_obj["size_bytes"],
+                    sha256=src_obj["checksum"],
+                    lfs=is_lfs,
+                    is_deleted=False,
+                    owner=repo.owner,
+                ).on_conflict(
+                    conflict_target=(File.repository, File.path_in_repo),
+                    update={
+                        File.sha256: src_obj["checksum"],
+                        File.size: src_obj["size_bytes"],
+                        File.lfs: is_lfs,
+                        File.is_deleted: False,  # File is active
+                        File.updated_at: datetime.now(timezone.utc),
+                    },
+                ).execute()
 
-        if oid:
-            File.insert(
-                repository=repo,
-                path_in_repo=dest_path,
-                size=src_obj["size_bytes"],
-                sha256=oid,
-                lfs=True,
-                is_deleted=False,
-                owner=repo.owner,
-            ).on_conflict(
-                conflict_target=(File.repository, File.path_in_repo),
-                update={
-                    File.sha256: oid,
-                    File.size: src_obj["size_bytes"],
-                    File.lfs: True,
-                    File.is_deleted: False,
-                    File.updated_at: datetime.now(timezone.utc),
-                },
-            ).execute()
-        elif src_file:
-            File.insert(
-                repository=repo,
-                path_in_repo=dest_path,
-                size=src_file.size,
-                sha256=src_file.sha256,
-                lfs=src_file.lfs,
-                is_deleted=False,
-                owner=repo.owner,
-            ).on_conflict(
-                conflict_target=(File.repository, File.path_in_repo),
-                update={
-                    File.sha256: src_file.sha256,
-                    File.size: src_file.size,
-                    File.lfs: src_file.lfs,
-                    File.is_deleted: False,  # File is active
-                    File.updated_at: datetime.now(timezone.utc),
-                },
-            ).execute()
-        else:
-            # If not in database, create entry based on LakeFS info
-            # Use repo-specific LFS settings
-            is_lfs = should_use_lfs(repo, dest_path, src_obj["size_bytes"])
-            File.insert(
-                repository=repo,
-                path_in_repo=dest_path,
-                size=src_obj["size_bytes"],
-                sha256=src_obj["checksum"],
-                lfs=is_lfs,
-                is_deleted=False,
-                owner=repo.owner,
-            ).on_conflict(
-                conflict_target=(File.repository, File.path_in_repo),
-                update={
-                    File.sha256: src_obj["checksum"],
-                    File.size: src_obj["size_bytes"],
-                    File.lfs: is_lfs,
-                    File.is_deleted: False,  # File is active
-                    File.updated_at: datetime.now(timezone.utc),
-                },
-            ).execute()
 
         logger.success(f"Successfully copied {src_path} to {dest_path}")
 
@@ -790,21 +804,23 @@ async def _undo(
     branch: str,
     repo: Repository,
     touched: tuple[list[str], list[str]],
-    before: dict[int, dict],
+    before: dict[int, dict] | None,
 ) -> None:
     """Leave the branch and the File rows as they were before a commit that
     failed: what it staged would otherwise go into the next commit on the
     branch, whoever makes it. Best effort: a failure here is logged and the
-    first failure is what the client sees."""
-    try:
-        with db.atomic():  # no await inside: no other request's statements
-            for row_id, row in _file_rows(repo, touched).items():
-                if row_id not in before:
-                    File.delete().where(File.id == row_id).execute()
-                elif row != before[row_id]:
-                    File.update(**before[row_id]).where(File.id == row_id).execute()
-    except Exception as e:
-        logger.warning(f"Could not restore the File rows of {repo.full_id}: {e}")
+    first failure is what the client sees. ``before`` is ``None`` off the
+    default branch, whose commits never touch the File rows (#11)."""
+    if before is not None:
+        try:
+            with db.atomic():  # no await inside: no other request's statements
+                for row_id, row in _file_rows(repo, touched).items():
+                    if row_id not in before:
+                        File.delete().where(File.id == row_id).execute()
+                    elif row != before[row_id]:
+                        File.update(**before[row_id]).where(File.id == row_id).execute()
+        except Exception as e:
+            logger.warning(f"Could not restore the File rows of {repo.full_id}: {e}")
     paths, folders = touched
     for path, prefix in [(p, False) for p in paths] + [(f, True) for f in folders]:
         try:
@@ -1011,7 +1027,7 @@ async def commit(
             raise _path_too_long(op["value"]["path"])
 
     touched = _touched(operations)
-    before = _file_rows(repo_row, touched)
+    before = _file_rows(repo_row, touched) if revision == usage.MAIN else None
     try:
         files_changed, pending_lfs_tracking = await _stage_operations(
             operations, repo_row, lakefs_repo, revision
@@ -1145,6 +1161,7 @@ async def commit(
                 sha256=lfs_info["sha256"],
                 size=lfs_info["size"],
                 commit_id=commit_result["id"],
+                branch=revision,
             )
 
         # Versions this commit pushed out of a path's keep window become
