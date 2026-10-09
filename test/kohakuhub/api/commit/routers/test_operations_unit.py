@@ -491,3 +491,216 @@ async def test_commit_route_covers_parse_dispatch_noop_and_success_paths(monkeyp
     success_without_lfs = await commit_ops.commit(commit_ops.RepoType.model, "owner", "repo", "main", _FakeRequest(success_payload), user=user)
     assert success_without_lfs["commitOid"] == "commit-created"
     assert any("No LFS files to track" in message for message in warnings)
+
+
+def _ndjson(*records):
+    return "\n".join(json.dumps(record) for record in records).encode("utf-8")
+
+
+async def _commit(repo, body, revision="main"):
+    return await commit_ops.commit(
+        commit_ops.RepoType.model,
+        repo.namespace,
+        repo.name,
+        revision,
+        _FakeRequest(body),
+        user=repo.owner,
+    )
+
+
+_HEADER = {"key": "header", "value": {"summary": "noop"}}
+_README = {"key": "file", "value": {"path": "README.md", "content": "aGVsbG8=", "encoding": "base64"}}
+
+
+@pytest.fixture
+def instant_sleep(monkeypatch):
+    """Commit polling waits 0.5 s per attempt: the waits are recorded, not slept."""
+    waits = []
+
+    async def record(seconds):
+        waits.append(seconds)
+
+    monkeypatch.setattr(commit_ops.asyncio, "sleep", record)
+    return waits
+
+
+@pytest.mark.asyncio
+async def test_restore_refused_by_lakefs_keeps_the_file_deleted(monkeypatch, repo):
+    client = _FakeLakeFSClient()
+    monkeypatch.setattr(commit_ops, "get_lakefs_client", lambda: client)
+    monkeypatch.setattr(commit_ops.cfg.s3, "bucket", "hub-storage")
+    monkeypatch.setattr(commit_ops, "object_exists", lambda bucket, key: _async_return(True))
+    monkeypatch.setattr(commit_ops, "claim_for_commit", lambda oid, exists: False)
+    weights = make_file(repo, "weights.bin", "sameoid", size=10, lfs=True, is_deleted=True)
+    client.raise_on["link_physical_address"] = RuntimeError("link refused")
+
+    with pytest.raises(HTTPException) as refused:
+        await commit_ops.process_lfs_file("weights.bin", "sameoid", 10, "sha256", repo, "lakefs", "main")
+
+    assert refused.value.status_code == 500
+    assert "link refused" in refused.value.detail["error"]
+    assert File.get_by_id(weights.id).is_deleted is True  # the row is not touched
+
+
+@pytest.mark.asyncio
+async def test_lfs_object_check_that_s3_cannot_answer_is_a_server_error(monkeypatch, repo):
+    client = _FakeLakeFSClient()
+    monkeypatch.setattr(commit_ops, "get_lakefs_client", lambda: client)
+
+    async def unreachable(bucket, key):
+        raise RuntimeError("S3 endpoint unreachable")
+
+    monkeypatch.setattr(commit_ops, "object_exists", unreachable)
+
+    with pytest.raises(HTTPException) as broken:
+        await commit_ops.process_lfs_file("weights.bin", "newoid", 11, "sha256", repo, "lakefs", "main")
+
+    assert broken.value.status_code == 500
+    assert "Failed to verify LFS object in S3" in broken.value.detail["error"]
+    assert not File.select().where((File.repository == repo) & (File.path_in_repo == "weights.bin")).exists()
+    assert client.calls == []
+
+
+@pytest.mark.asyncio
+async def test_folder_delete_follows_every_listing_page(monkeypatch, repo):
+    client = _FakeLakeFSClient()
+    monkeypatch.setattr(commit_ops, "get_lakefs_client", lambda: client)
+    first = make_file(repo, "pages/a.txt", "a", size=1)
+    second = make_file(repo, "pages/b.txt", "b", size=1)
+    pages = {
+        "": {
+            "results": [{"path_type": "object", "path": "pages/a.txt"}],
+            "pagination": {"has_more": True, "next_offset": "pages/a.txt"},
+        },
+        "pages/a.txt": {
+            "results": [{"path_type": "object", "path": "pages/b.txt"}],
+            "pagination": {"has_more": False},
+        },
+    }
+    listed_after = []
+
+    async def list_objects(**kwargs):
+        listed_after.append(kwargs["after"])
+        return pages[kwargs["after"]]
+
+    monkeypatch.setattr(client, "list_objects", list_objects)
+
+    assert await commit_ops.process_deleted_folder("pages", repo, "lakefs", "main") is True
+    assert listed_after == ["", "pages/a.txt"]
+    assert [File.get_by_id(row.id).is_deleted for row in (first, second)] == [True, True]
+
+
+@pytest.mark.asyncio
+async def test_folder_whose_objects_all_refuse_deletion_keeps_its_rows(monkeypatch, repo):
+    client = _FakeLakeFSClient()
+    monkeypatch.setattr(commit_ops, "get_lakefs_client", lambda: client)
+    kept = make_file(repo, "stuck/a.txt", "a", size=1)
+    client.list_payload = {"results": [{"path_type": "object", "path": "stuck/a.txt"}]}
+    client.raise_on["delete_object"] = RuntimeError("LakeFS refuses")
+
+    assert await commit_ops.process_deleted_folder("stuck", repo, "lakefs", "main") is True
+    assert File.get_by_id(kept.id).is_deleted is False
+
+
+@pytest.mark.asyncio
+async def test_debug_payload_logging_writes_each_line(monkeypatch, repo):
+    client = _FakeLakeFSClient()
+    monkeypatch.setattr(commit_ops, "get_lakefs_client", lambda: client)
+    monkeypatch.setattr(commit_ops.cfg.app, "debug_log_payloads", True)
+    logged = []
+    monkeypatch.setattr(commit_ops.logger, "debug", lambda message: logged.append(message))
+    header_line = json.dumps(_HEADER)
+
+    response = await _commit(repo, _ndjson(_HEADER))
+
+    assert response["commitOid"] == "head-commit"
+    assert header_line in logged
+
+
+@pytest.mark.asyncio
+async def test_blank_lines_and_unknown_operations_are_skipped(monkeypatch, repo):
+    client = _FakeLakeFSClient()
+    monkeypatch.setattr(commit_ops, "get_lakefs_client", lambda: client)
+    body = _ndjson(_HEADER) + b"\n\n" + _ndjson({"key": "mystery", "value": {"path": "ghost.txt"}})
+
+    response = await _commit(repo, body)
+
+    assert response["commitOid"] == "head-commit"  # nothing changed: the head is reported
+    assert not File.select().where((File.repository == repo) & (File.path_in_repo == "ghost.txt")).exists()
+    assert [call[0] for call in client.calls] == ["get_branch"]
+
+
+@pytest.mark.asyncio
+async def test_no_change_commit_reports_no_changes_when_the_branch_is_unreadable(monkeypatch, repo):
+    client = _FakeLakeFSClient()
+    monkeypatch.setattr(commit_ops, "get_lakefs_client", lambda: client)
+    client.raise_on["get_branch"] = RuntimeError("branch unreadable")
+
+    response = await _commit(repo, _ndjson(_HEADER))
+
+    assert response["commitOid"] == "no-changes"
+    assert response["commitUrl"] == "models/owner/repo/commit/no-changes"
+
+
+@pytest.mark.asyncio
+async def test_commit_polls_until_lakefs_serves_the_commit(monkeypatch, repo, instant_sleep):
+    client = _FakeLakeFSClient()
+    monkeypatch.setattr(commit_ops, "get_lakefs_client", lambda: client)
+    lookups = []
+
+    async def get_commit(**kwargs):
+        lookups.append(kwargs["commit_id"])
+        if len(lookups) <= 2:
+            raise RuntimeError("commit not ready")
+        return {"id": kwargs["commit_id"]}
+
+    monkeypatch.setattr(client, "get_commit", get_commit)
+
+    # Not main: the main-branch usage count also reads the commit from LakeFS
+    response = await _commit(repo, _ndjson(_HEADER, _README), revision="dev")
+
+    assert response["commitOid"] == "commit-created"
+    assert len(lookups) == 3
+    assert instant_sleep == [0.5, 0.5]
+
+
+@pytest.mark.asyncio
+async def test_commit_stops_polling_after_120_attempts_and_continues(monkeypatch, repo, instant_sleep):
+    client = _FakeLakeFSClient()
+    monkeypatch.setattr(commit_ops, "get_lakefs_client", lambda: client)
+    warnings = []
+    monkeypatch.setattr(commit_ops.logger, "warning", lambda message: warnings.append(message))
+    lookups = []
+
+    async def never_ready(**kwargs):
+        lookups.append(kwargs["commit_id"])
+        raise RuntimeError("commit not ready")
+
+    monkeypatch.setattr(client, "get_commit", never_ready)
+
+    response = await _commit(repo, _ndjson(_HEADER, _README), revision="dev")
+
+    assert response["commitOid"] == "commit-created"  # the commit stands
+    assert len(lookups) == 120
+    assert instant_sleep == [0.5] * 119
+    assert any("not accessible after 120 attempts" in message for message in warnings)
+
+
+@pytest.mark.asyncio
+async def test_commit_lands_when_its_database_record_fails(monkeypatch, repo):
+    client = _FakeLakeFSClient()
+    monkeypatch.setattr(commit_ops, "get_lakefs_client", lambda: client)
+    warnings = []
+    monkeypatch.setattr(commit_ops.logger, "warning", lambda message: warnings.append(message))
+
+    # Deliberate database failure, kept as a targeted mock: a real missing table
+    # (table_missing) aborts the whole Postgres transaction, so the route's later
+    # writes fail too and the test would check the abort rather than this path.
+    def failing_record(**kwargs):
+        raise RuntimeError("commit table write refused")
+
+    monkeypatch.setattr(commit_ops, "create_commit", failing_record)
+    response = await _commit(repo, _ndjson(_HEADER, _README), revision="dev")
+
+    assert response["commitOid"] == "commit-created"
+    assert any("Failed to record commit in database" in message for message in warnings)
