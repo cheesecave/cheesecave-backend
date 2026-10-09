@@ -472,7 +472,6 @@ jobs:
     env:
       KOHAKU_HUB_DB_BACKEND: sqlite
       # A file, not ":memory:": the live-server tests reach the database from another thread.
-      KOHAKU_HUB_DATABASE_URL: sqlite:///${{ runner.temp }}/kohakuhub-test.db
       KOHAKU_HUB_S3_ENDPOINT: http://127.0.0.1:29001
       KOHAKU_HUB_S3_PUBLIC_ENDPOINT: http://127.0.0.1:29001
       KOHAKU_HUB_S3_ACCESS_KEY: minioadmin
@@ -547,6 +546,9 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -e ".[dev]"
           python -m pip install --upgrade huggingface_hub
+
+      - name: Point the test database at a file in the runner temp directory
+        run: echo "KOHAKU_HUB_DATABASE_URL=sqlite:///${RUNNER_TEMP}/kohakuhub-test.db" >> "$GITHUB_ENV"
 
       - name: Run the full backend suite on SQLite
         run: |
