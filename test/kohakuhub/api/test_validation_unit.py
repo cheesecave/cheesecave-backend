@@ -93,3 +93,19 @@ async def test_check_name_availability_covers_repository_normalized_conflict_and
     )
     assert available.available is True
     assert available.message == "Repository name is available"
+
+
+@pytest.mark.asyncio
+async def test_check_name_availability_covers_organization_conflict_on_stored_normalized_name():
+    # The organization lookup trusts the stored normalized_name column. The name
+    # normalizes to "acmeteam" and no username normalizes to it, so only this row conflicts.
+    make_org("acme", normalized_name="acmeteam")
+
+    response = await validation_api.check_name_availability(
+        validation_api.CheckNameRequest(name="acme-team")
+    )
+
+    assert response.available is False
+    assert response.normalized_name == "acmeteam"
+    assert response.conflict_with == "acme"
+    assert "organization" in response.message
