@@ -4,7 +4,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from peewee import fn
 
 from kohakuhub.db import Commit, File, Repository
-from kohakuhub.db_operations import get_file
+from kohakuhub.api.commit.records import revision_branch
+from kohakuhub.db_operations import get_file, repository_lfs_totals
 from kohakuhub.logger import get_logger
 from kohakuhub.api.admin.utils import verify_admin_token
 from kohakuhub.api.quota.util import get_repo_storage_info
@@ -128,10 +129,10 @@ async def get_repository_admin(
     # Get owner (using FK)
     owner = repo.owner
 
-    # Count active files only (using FK)
+    # Count active files only (using FK): the default branch's, as usage counts them
     file_count = (
         File.select()
-        .where((File.repository == repo) & (File.is_deleted == False))
+        .where((File.repository == repo) & (File.branch == "main") & (File.is_deleted == False))
         .count()
     )
 
@@ -141,7 +142,7 @@ async def get_repository_admin(
     # Get total file size for active files only (using FK)
     total_size = (
         File.select(fn.SUM(File.size).alias("total"))
-        .where((File.repository == repo) & (File.is_deleted == False))
+        .where((File.repository == repo) & (File.branch == "main") & (File.is_deleted == False))
         .scalar()
         or 0
     )
@@ -209,6 +210,7 @@ async def get_repository_files_admin(
     # Get file tree from LakeFS
     lakefs_repo = resolve_lakefs_repo(repo)
     client = get_lakefs_client()
+    branch = await revision_branch(client, lakefs_repo, ref) or "main"
 
     try:
         response = await client.list_objects(
@@ -219,13 +221,18 @@ async def get_repository_files_admin(
 
         files = []
         for obj in response.get("results", []):
-            # Get file metadata from DB
-            file_record = get_file(repo, obj["path"])
+            # The ref's branch rows; a commit id has none, so the default branch's
+            # answer stands in for it (ponytail: admin view only, approximate)
+            file_record = get_file(repo, obj["path"], branch=branch)
 
-            # Count versions for this path
+            # Versions of this path on the branch: at most one row per path
             version_count = (
                 File.select()
-                .where((File.repository == repo) & (File.path_in_repo == obj["path"]))
+                .where(
+                    (File.repository == repo)
+                    & (File.branch == branch)
+                    & (File.path_in_repo == obj["path"])
+                )
                 .count()
             )
 
@@ -284,36 +291,23 @@ async def get_repository_storage_breakdown(
     regular_size = (
         File.select(fn.SUM(File.size))
         .where(
-            (File.repository == repo) & (File.is_deleted == False) & (File.lfs == False)
+            (File.repository == repo)
+            & (File.branch == "main")
+            & (File.is_deleted == False)
+            & (File.lfs == False)
         )
         .scalar()
         or 0
     )
 
-    lfs_size = (
-        File.select(fn.SUM(File.size))
-        .where(
-            (File.repository == repo) & (File.is_deleted == False) & (File.lfs == True)
-        )
-        .scalar()
-        or 0
-    )
+    # LFS objects are counted over every branch's rows, each object once (#11)
+    lfs_size, unique_lfs = repository_lfs_totals(repo)
 
     lfs_object_count = (
         File.select()
         .where(
             (File.repository == repo) & (File.is_deleted == False) & (File.lfs == True)
         )
-        .count()
-    )
-
-    # Count unique LFS objects
-    unique_lfs = (
-        File.select(File.sha256)
-        .where(
-            (File.repository == repo) & (File.is_deleted == False) & (File.lfs == True)
-        )
-        .distinct()
         .count()
     )
 

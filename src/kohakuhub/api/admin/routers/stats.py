@@ -252,10 +252,10 @@ async def get_top_repositories(
             )
 
     else:  # by size
-        # Top repos by total file size (active files only, using FK)
+        # Top repos by total file size (active files of the default branch, using FK)
         top_repos = (
             File.select(File.repository, fn.SUM(File.size).alias("total_size"))
-            .where(File.is_deleted == False)
+            .where((File.branch == "main") & (File.is_deleted == False))
             .group_by(File.repository)
             .order_by(fn.SUM(File.size).desc())
             .limit(limit)

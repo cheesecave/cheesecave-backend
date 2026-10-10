@@ -309,3 +309,42 @@ docker-compose up -d
    ```
 
 **Prevention:** Always run migrations before application starts (handled automatically in Docker)
+
+## Expand and contract: File branches (issue #11)
+
+Migration 032 is the EXPAND. It adds `file.branch` (default `main`) and the unique key
+`(repository_id, branch, path_in_repo)`, and keeps the old key `(repository_id, path_in_repo)`.
+It runs with the other migrations at startup. Old replicas keep working: they write `main`.
+While the old key exists, a non-main row for a path `main` already has is refused.
+
+The CONTRACT is `contract/033_file_branch_contract.py`. It drops the old key and enables
+non-main writes. It is NOT in this directory on purpose: the runner exits non-zero on any
+failed migration, so a closed gate would stop every container. Run it by hand, and only after
+every replica runs the code that writes `branch`:
+
+```sql
+-- the operator's marker, after every replica runs the new code
+INSERT INTO schema_rollout (name, set_at) VALUES ('file_branch_contract', CURRENT_TIMESTAMP);
+```
+
+```bash
+python scripts/db_migrations/contract/033_file_branch_contract.py
+```
+
+Without the marker the script refuses (`ContractGateClosed`) and changes nothing.
+
+Rollout order, which is the whole procedure:
+
+1. Start the expand (032) before any new code starts. It runs with the other migrations.
+2. Roll out the code that writes `branch` to every replica. Between this step and step 4,
+   a commit to a side branch that touches a path `main` has fails (the pre-A key refuses
+   the row). Keep side-branch writes paused for that window, or shorten it.
+3. Verify every replica runs the new version, then insert the marker row.
+4. Run the contract (033) by hand.
+5. Branches made before the rows existed have none: their first read (or write) reads
+   their identities from LakeFS once and records them. Nothing else needs a backfill.
+
+Rollback is `rollback()` in `032_file_branch_expand.py`, run by hand with the application
+stopped. It refuses while any row has `branch <> 'main'`, because the pre-A schema cannot hold
+one. To roll back after non-main rows exist, delete them first: that is a data decision for
+the operator, not something the script does.

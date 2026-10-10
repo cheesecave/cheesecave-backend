@@ -310,7 +310,7 @@ def reconcile_references(
     restored = [
         row.id
         for row in File.select(File.id, File.path_in_repo).where(
-            (File.repository == repo) & (File.is_deleted == True)
+            (File.repository == repo) & (File.branch == "main") & (File.is_deleted == True)
         )
         if row.path_in_repo in default_paths and row.path_in_repo not in default_head
     ]
@@ -319,6 +319,7 @@ def reconcile_references(
         for start in range(0, len(default_head), CANDIDATE_BATCH)
         for row in File.select().where(
             (File.repository == repo)
+            & (File.branch == "main")
             & File.path_in_repo.in_(sorted(default_head)[start : start + CANDIDATE_BATCH])
         )
     }
@@ -331,6 +332,7 @@ def reconcile_references(
             if row is None:
                 File.create(
                     repository=repo,
+                    branch="main",
                     path_in_repo=path,
                     sha256=sha,
                     size=size,

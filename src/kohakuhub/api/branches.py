@@ -113,6 +113,10 @@ async def create_branch(
                 name=payload.branch,
                 source=source_commit,
             )
+            # Same content as the source branch: it starts with that branch's rows (#11)
+            source_branch = await records.revision_branch(client, lakefs_repo, source_ref)
+            if source_branch is not None:
+                records.copy_branch_rows(repo_row, source_branch, payload.branch)
     except HTTPException:
         raise  # refused while an operation holds the repository
     except ValueError as e:

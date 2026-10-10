@@ -53,12 +53,9 @@ def track_lfs_object(
         logger.error(f"Repository not found: {repo_type}/{namespace}/{name}")
         return
 
-    # Try to find corresponding File record for FK link (#11: the File rows
-    # describe the default branch only)
-    file_fk = (
-        File.get_or_none((File.repository == repo) & (File.path_in_repo == path_in_repo))
-        if branch == usage.MAIN
-        else None
+    # The File row of the branch the commit landed on, for the FK link (#11)
+    file_fk = File.get_or_none(
+        (File.repository == repo) & (File.branch == branch) & (File.path_in_repo == path_in_repo)
     )
 
     # Always create new LFS history entry with FK objects

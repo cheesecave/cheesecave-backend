@@ -460,8 +460,17 @@ async def record_branch_links(payload: dict[str, Any], ctx: tasks.TaskContext) -
     enqueue_lfs_collection()
 
 
+def drop_branch_rows(repo: Repository, branch: str) -> int:
+    """Forget the File rows of a branch that no longer exists (deleted, or
+    removed by a squash): the one place a branch's rows leave the table (#11).
+    Returns how many rows went. The default branch's rows are never dropped
+    by a caller; the squash and the branch delete refuse it."""
+    return File.delete().where((File.repository == repo) & (File.branch == branch)).execute()
+
+
 def forget_branch(repo: Repository, branch: str) -> None:
-    """A deleted branch links nothing any more."""
+    """A deleted branch has no rows and links nothing any more."""
+    drop_branch_rows(repo, branch)
     try:
         if lfs_gc.drop_head_refs(repo, branch):
             enqueue_lfs_collection()
@@ -625,9 +634,10 @@ async def forget_squashed_history(payload: dict[str, Any]) -> None:
     - history rows (``id <= through``) for an LFS version the squash commit
       does not link are deleted, and their objects become collection
       candidates;
-    - file rows for a path neither the squash commit nor main has now are
-      marked deleted (rows are per repository, not per branch, so the
-      dropped branches' files were still there);
+    - file rows of the squashed branch for a path its squash commit does not
+      hold are marked deleted. The other branches' rows were dropped with
+      their branches, and a branch the squash keeps has its own rows, which
+      this does not touch;
     - regular file objects under the repository's ``data/`` prefix that the
       history the squash left does not link (``_linked_since``) are deleted:
       only the old history had them, and nothing may read it any more.
@@ -642,18 +652,27 @@ async def forget_squashed_history(payload: dict[str, Any]) -> None:
     client = get_lakefs_client()
     lakefs_repo = resolve_lakefs_repo(repo)
     at = datetime.fromisoformat(payload["at"])
+    branch = payload.get("branch", "main")  # tasks queued before the branch was recorded
     squashed = await _tree(client, lakefs_repo, payload["commit"])
     linked = {
         (o["path"], oid) for o in squashed if (oid := lfs_gc.lfs_oid(o.get("physical_address")))
     }
-    main = await _tree(client, lakefs_repo, "main")
-    paths = {o["path"] for o in squashed} | {o["path"] for o in main}
+    # What the branch holds now: a commit can land on it after the squash
+    head = await _tree(client, lakefs_repo, branch)
+    paths = {o["path"] for o in squashed} | {o["path"] for o in head}
 
     H = LFSObjectHistory
+    # The history of the branch's rows (a history row with no file link is kept
+    # under the same rule): other branches' versions are not this squash's to drop
+    branch_files = File.select(File.id).where((File.repository == repo) & (File.branch == branch))
     gone, shas = [], set()
     for row_id, path, sha in (
         H.select(H.id, H.path_in_repo, H.sha256)
-        .where((H.repository == repo) & (H.id <= payload["through"]))
+        .where(
+            (H.repository == repo)
+            & (H.id <= payload["through"])
+            & (H.file.is_null() | H.file.in_(branch_files))
+        )
         .tuples()
     ):
         if (path, sha) not in linked:
@@ -662,7 +681,12 @@ async def forget_squashed_history(payload: dict[str, Any]) -> None:
     stale = [
         file_id
         for file_id, path in File.select(File.id, File.path_in_repo)
-        .where((File.repository == repo) & (File.is_deleted == False) & (File.updated_at <= at))
+        .where(
+            (File.repository == repo)
+            & (File.branch == branch)
+            & (File.is_deleted == False)
+            & (File.updated_at <= at)
+        )
         .tuples()
         if path not in paths
     ]

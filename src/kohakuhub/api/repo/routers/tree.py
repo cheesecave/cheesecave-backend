@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, Form, Query, Request
 from fastapi.responses import JSONResponse
 
 from kohakuhub import path_commits, usage
-from kohakuhub.api.commit.records import revision_identities
+from kohakuhub.api.commit.records import read_branch, revision_identities
 from kohakuhub.config import cfg
 from kohakuhub.auth.dependencies import get_optional_user
 from kohakuhub.auth.permissions import check_repo_read_permission
@@ -148,14 +148,15 @@ def _build_public_link(
 
 
 def _build_file_record_map(
-    repository: Repository, paths: list[str]
+    repository: Repository, paths: list[str], branch: str = usage.MAIN
 ) -> dict[str, File]:
-    """Fetch file records in one query for the provided paths."""
+    """Fetch the file records of ``branch`` in one query for the provided paths."""
     if not paths:
         return {}
 
     query = File.select().where(
         (File.repository == repository)
+        & (File.branch == branch)
         & (File.path_in_repo.in_(paths))
         & (File.is_deleted == False)
     )
@@ -520,9 +521,10 @@ async def list_repo_tree(
         for obj in page_results
         if obj.get("path_type") == "object"
     }
-    if revision == usage.MAIN:
-        file_records = _build_file_record_map(repo_row, list(file_objects))
-    else:  # a side branch: its own identities, from LakeFS (#11)
+    branch = await read_branch(get_lakefs_client(), lakefs_repo, repo_row, revision)
+    if branch is not None:
+        file_records = _build_file_record_map(repo_row, list(file_objects), branch)
+    else:  # a commit id or a tag: its identities are computed (#11)
         file_records = await revision_identities(
             get_lakefs_client(), lakefs_repo, repo_row, resolved_revision, file_objects
         )
@@ -609,8 +611,11 @@ async def get_paths_info(
     except Exception:
         return hf_revision_not_found(repo_id, revision)
 
-    # A side branch's identities are read per path, after its stat (#11)
-    file_records = _build_file_record_map(repo_row, normalized_paths) if revision == usage.MAIN else None
+    branch = await read_branch(get_lakefs_client(), lakefs_repo, repo_row, revision)
+    # A commit id's identities are computed per path, after its stat (#11)
+    file_records = (
+        _build_file_record_map(repo_row, normalized_paths, branch) if branch is not None else None
+    )
     semaphore = asyncio.Semaphore(PATHS_INFO_CONCURRENCY)
 
     try:
