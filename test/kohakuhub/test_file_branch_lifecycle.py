@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from kohakuhub import storage_cleanup
+from kohakuhub.api.commit.routers.operations import calculate_git_blob_sha1 as _blob
 from kohakuhub.db import File, LFSObjectHistory, Repository
 from kohakuhub.db_operations import delete_repository, repository_lfs_totals
 from kohakuhub.lfs_gc import reconcile_references, retention_reason
@@ -188,3 +189,102 @@ async def test_top_repositories_by_size_count_the_default_branch_only():
     [top] = [r for r in listing["top_repositories"] if r["repo_full_id"] == "owner/repo"]
     assert top["total_size"] == 10  # main's a.bin only, not the 500 bytes on dev
 
+
+
+class _Lake:
+    """LakeFS (a fake): branches, pages of a listing, and the bytes of regular files."""
+
+    def __init__(self, pages=None, branches=None, contents=None):
+        self.pages = list(pages or [])
+        self.branches = dict(branches or {})
+        self.contents = dict(contents or {})
+        self.listed = 0
+
+    async def get_branch(self, repository, branch):
+        if isinstance(self.branches.get(branch), Exception):
+            raise self.branches[branch]
+        if branch not in self.branches:
+            raise RuntimeError("404 not found: branch")
+        return {"commit_id": self.branches[branch]}
+
+    async def list_objects(self, **kwargs):
+        self.listed += 1
+        return self.pages.pop(0)
+
+    async def get_object(self, repository, ref, path):
+        return self.contents[path]
+
+
+def _entry(path, content):
+    return {
+        "path": path,
+        "path_type": "object",
+        "size_bytes": len(content),
+        "checksum": "sha256:x",
+        "physical_address": f"s3://bucket/data/{path}",
+    }
+
+
+@pytest.mark.usefixtures("db_scope")
+async def test_seeding_a_branch_reads_every_page_of_its_listing():
+    from kohakuhub.api.commit import records
+
+    repo = make_repo(make_user("owner"), "repo")
+    lake = _Lake(
+        pages=[
+            {"results": [_entry("a.md", b"aa")], "pagination": {"has_more": True, "next_offset": "a.md"}},
+            {"results": [_entry("b.md", b"bb")], "pagination": {"has_more": False}},
+        ],
+        contents={"a.md": b"aa", "b.md": b"bb"},
+    )
+
+    await records._seed_rows(lake, "lake", repo, "dev", "c1")
+
+    assert lake.listed == 2
+    assert _paths(repo, "dev") == {"a.md", "b.md"}
+    assert File.get(
+        (File.repository == repo) & (File.branch == "dev") & (File.path_in_repo == "b.md")
+    ).sha256 == _blob(b"bb")
+
+
+@pytest.mark.usefixtures("db_scope")
+async def test_a_lakefs_error_that_is_not_a_missing_branch_is_raised():
+    from kohakuhub.api.commit import records
+
+    lake = _Lake(branches={"dev": RuntimeError("connection reset")})
+    with pytest.raises(RuntimeError, match="connection reset"):
+        await records.revision_branch(lake, "lake", "dev")
+    assert await records.revision_branch(lake, "lake", "absent") is None
+
+
+@pytest.mark.usefixtures("db_scope")
+async def test_a_branch_whose_rows_appear_while_it_waits_is_not_read_again(monkeypatch):
+    from kohakuhub.api.commit import records
+
+    repo = make_repo(make_user("owner"), "repo")
+    lake = _Lake(branches={"dev": "c1"})
+    answers = iter([False, True])  # no rows when looked at first, then another operation's
+    monkeypatch.setattr(records, "_has_rows", lambda repo, branch: next(answers))
+
+    assert await records.read_branch(lake, "lake", repo, "dev") == "dev"
+    assert lake.listed == 0
+
+
+@pytest.mark.usefixtures("db_scope")
+async def test_admin_file_listing_shows_the_branch_its_ref_names(monkeypatch):
+    from kohakuhub.api.admin.routers import repositories as admin
+
+    repo = make_repo(make_user("owner"), "repo")
+    make_file(repo, "w.bin", SHA_M, size=10, lfs=True, branch="main")
+    make_file(repo, "w.bin", SHA_D, size=10, lfs=True, branch="dev")
+    lake = _Lake(
+        branches={"dev": "c1"},
+        pages=[{"results": [{"path": "w.bin", "size_bytes": 10, "checksum": "x"}]}],
+    )
+    monkeypatch.setattr(admin, "get_lakefs_client", lambda: lake)
+    monkeypatch.setattr(admin, "resolve_lakefs_repo", lambda repo: "lake")
+
+    listing = await admin.get_repository_files_admin("model", "owner", "repo", "dev", _admin=True)
+
+    [entry] = listing["files"]
+    assert (entry["sha256"], entry["version_count"]) == (SHA_D, 1)
