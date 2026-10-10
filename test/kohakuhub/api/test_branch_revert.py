@@ -441,7 +441,9 @@ async def test_a_revert_on_a_side_branch_writes_no_file_row(m, owner_client):
 
 
 @history_operations_need_postgres
-async def test_a_merge_into_a_side_branch_writes_no_file_row(m, owner_client):
+async def test_a_merge_into_a_side_branch_writes_its_own_rows_and_leaves_main(m, owner_client):
+    """A merge into dev writes dev's File rows; main's are untouched, and the LFS
+    version it links is dev's row (#11)."""
     repo, (initial, c1, c2, c3, c4, c5) = await _linear(m, owner_client, "merge-side-rows")
     response = await owner_client.post(
         f"/api/models/{repo.id}/branch", json={"branch": "dev", "revision": c1}
@@ -459,7 +461,8 @@ async def test_a_merge_into_a_side_branch_writes_no_file_row(m, owner_client):
     made = await repo.head("dev")
     version = H.get((H.commit_id == made) & (H.path_in_repo == "main.bin"))
     assert version.sha256 == sha(b"main side")
-    assert version.file is None
+    assert version.file.branch == "dev"
+    assert version.file.sha256 == sha(b"main side")
 
 
 @history_operations_need_postgres
