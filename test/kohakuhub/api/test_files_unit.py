@@ -468,7 +468,7 @@ async def test_metadata_and_resolve_routes_cover_storage_backend_fallback_and_xe
     monkeypatch.setattr(
         files_api,
         "get_file",
-        lambda repo_row, path: SimpleNamespace(sha256="sha256-value", lfs=True),
+        lambda repo_row, path, branch="main": SimpleNamespace(sha256="sha256-value", lfs=True),
     )
     monkeypatch.setattr(files_api, "XET_ENABLE", True)
     monkeypatch.setattr(files_api.cfg.app, "base_url", "https://hub.example.com")
@@ -675,6 +675,9 @@ def side_branch_download(monkeypatch):
     repo = make_repo(make_user("owner"), "demo")
     make_file(repo, "weights.bin", sha256="main-oid", size=99, lfs=True)  # main's row
     make_file(repo, "README.md", sha256="main-blob", size=99)
+    # dev's own rows (#11): a side branch's identities are read from them
+    make_file(repo, "weights.bin", sha256=SIDE_OID, size=10, lfs=True, branch="dev")
+    make_file(repo, "README.md", sha256=BLOB_HELLO, size=5, branch="dev")
     client = _BranchClient(
         stats={
             "weights.bin": {

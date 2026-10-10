@@ -359,7 +359,9 @@ async def test_concurrent_blob_requests_share_one_build(lister, monkeypatch):
     loads = []
     real_blob_ids = hf_utils._regular_blob_ids
     # Counts the File reads while they run for real
-    monkeypatch.setattr(hf_utils, "_regular_blob_ids", lambda repo: loads.append(1) or real_blob_ids(repo))
+    monkeypatch.setattr(
+        hf_utils, "_regular_blob_ids", lambda repo, branch: loads.append(1) or real_blob_ids(repo, branch)
+    )
     repo = _demo_repo()
 
     blobs = await asyncio.gather(
@@ -398,7 +400,7 @@ def test_regular_blob_ids_reads_live_regular_rows():
     make_file(repo, "deleted.txt", sha256="cc", is_deleted=True)
     make_file(repo, "model.bin", sha256="dd", lfs=True)
 
-    assert hf_utils._regular_blob_ids(repo) == {"a": "aa", "b": "bb"}
+    assert hf_utils._regular_blob_ids(repo, "main") == {"a": "aa", "b": "bb"}
 
 
 @pytest.mark.parametrize("repo_type, prop", [("model", "safetensors"), ("dataset", "citation"), ("space", "sdk")])

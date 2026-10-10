@@ -546,10 +546,13 @@ async def list_repo_objects(lakefs_repo: str, ref: str) -> list[tuple[str, int, 
 _GIT_BLOB_ID = re.compile(r"^[0-9a-f]{40}$")
 
 
-def _regular_blob_ids(repo_row) -> dict[str, str]:
-    """Git blob ids of the repository's live regular files (``File.sha256``)."""
+def _regular_blob_ids(repo_row, branch: str) -> dict[str, str]:
+    """Git blob ids of the live regular files of ``branch`` (``File.sha256``)."""
     rows = File.select(File.path_in_repo, File.sha256).where(
-        (File.repository == repo_row.id) & (File.lfs == False) & (File.is_deleted == False)  # noqa: E712
+        (File.repository == repo_row.id)
+        & (File.branch == branch)
+        & (File.lfs == False)  # noqa: E712
+        & (File.is_deleted == False)  # noqa: E712
     )
     return {row.path_in_repo: row.sha256 for row in rows}
 
@@ -596,7 +599,8 @@ async def _build(repo_row, key: tuple[str, str, bool]) -> str:
     objects = await list_repo_objects(lakefs_repo, commit)
     if with_metadata:
         try:
-            blob_ids = _regular_blob_ids(repo_row)
+            # The manifest is the default branch's: repository info is repo-level (#11)
+            blob_ids = _regular_blob_ids(repo_row, "main")
         except PeeweeException as e:
             logger.warning(f"Could not load File rows for {repo_row.full_id}; regular files get no blobId: {e}")
             blob_ids = {}

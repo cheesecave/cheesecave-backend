@@ -705,22 +705,28 @@ async def process_copy_file(
                 },
             ).execute()
         else:
-            # If not in database, create entry based on LakeFS info
-            # Use repo-specific LFS settings
+            # No row for the source (a commit id, or a path it has no row for):
+            # the identity is read from the content, as commits record it
             is_lfs = should_use_lfs(repo, dest_path, src_obj["size_bytes"])
+            checksum = src_obj["checksum"]
+            if not is_lfs:
+                content = await client.get_object(
+                    repository=lakefs_repo, ref=src_revision, path=src_path
+                )
+                checksum = calculate_git_blob_sha1(content)
             File.insert(
                 repository=repo,
                 branch=revision,
                 path_in_repo=dest_path,
                 size=src_obj["size_bytes"],
-                sha256=src_obj["checksum"],
+                sha256=checksum,
                 lfs=is_lfs,
                 is_deleted=False,
                 owner=repo.owner,
             ).on_conflict(
                 conflict_target=(File.repository, File.branch, File.path_in_repo),
                 update={
-                    File.sha256: src_obj["checksum"],
+                    File.sha256: checksum,
                     File.size: src_obj["size_bytes"],
                     File.lfs: is_lfs,
                     File.is_deleted: False,  # File is active

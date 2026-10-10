@@ -12,8 +12,7 @@ from urllib.parse import quote
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import RedirectResponse, Response
 
-from kohakuhub import usage
-from kohakuhub.api.commit.records import revision_identities
+from kohakuhub.api.commit.records import read_branch, revision_identities
 from kohakuhub.config import cfg
 from kohakuhub.db import File, Repository, User
 from kohakuhub.db_operations import (
@@ -486,10 +485,11 @@ async def _get_file_metadata(
     # Prepare headers required by HuggingFace client
     file_size = obj_stat["size_bytes"]
 
-    # The checksum a File row holds is the default branch's; another revision's
-    # is read from LakeFS (#11). sha256 column: git blob SHA1 for non-LFS, SHA256 for LFS
-    if revision == usage.MAIN:
-        file_record = get_file(repo_row, path)
+    # The checksum a File row holds is its branch's (#11); a commit id's is
+    # computed from LakeFS. sha256 column: git blob SHA1 for non-LFS, SHA256 for LFS
+    branch = await read_branch(client, lakefs_repo, repo_row, revision)
+    if branch is not None:
+        file_record = get_file(repo_row, path, branch=branch)
     else:
         file_record = (
             await revision_identities(client, lakefs_repo, repo_row, commit_hash, {path: obj_stat})

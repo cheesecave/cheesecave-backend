@@ -309,3 +309,50 @@ async def test_preupload_dedupe_uses_the_branch_rows(db_fresh):
     make_file(repo, "a.txt", "3" * 40, size=5, branch="main")
     assert await check_file_by_sha256(repo, "a.txt", "3" * 40, 5, branch="main") is True
     assert await check_file_by_sha256(repo, "a.txt", "3" * 40, 5, branch="dev") is False
+
+
+# --- stage 3: reads take their branch's rows ---------------------------------------
+
+
+def test_tree_map_reads_the_named_branch_only():
+    from test.kohakuhub.support.factories import make_file
+
+    repo = make_repo(make_user("owner"), "repo")
+    make_file(repo, "README.md", "1" * 40, branch="main")
+    make_file(repo, "README.md", "2" * 40, branch="dev")
+
+    assert _build_file_record_map(repo, ["README.md"], "dev")["README.md"].sha256 == "2" * 40
+    assert _build_file_record_map(repo, ["README.md"])["README.md"].sha256 == "1" * 40
+
+
+@pytest.mark.asyncio
+async def test_copy_from_a_commit_records_the_git_blob_id(monkeypatch):
+    """A regular file copied from a commit (no row of its own) gets the git blob id
+    as its checksum, as the tree and the blobs manifest expect (#11, stage 3)."""
+
+    class _Content(_LakeFS):
+        async def get_object(self, **kwargs):
+            return b"hello"
+
+    client, repo = _setup(monkeypatch, _Content())
+
+    async def no_history(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(commit_ops, "ensure_revision_in_history", no_history)
+    await commit_ops.process_copy_file(
+        "copied.md", "README.md", "commit-id", repo, "lakefs-repo", "main"
+    )
+    assert _row(repo, "main", "copied.md").sha256 == _blob(b"hello")
+
+
+def test_blobs_manifest_reads_the_main_rows_only():
+    from kohakuhub.api.repo.utils.hf import _regular_blob_ids
+    from test.kohakuhub.support.factories import make_file
+
+    repo = make_repo(make_user("owner"), "repo")
+    make_file(repo, "README.md", "1" * 40, branch="main")
+    make_file(repo, "README.md", "2" * 40, branch="dev")
+
+    assert _regular_blob_ids(repo, "main") == {"README.md": "1" * 40}
+    assert _regular_blob_ids(repo, "dev") == {"README.md": "2" * 40}
