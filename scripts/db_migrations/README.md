@@ -333,6 +333,17 @@ python scripts/db_migrations/contract/033_file_branch_contract.py
 
 Without the marker the script refuses (`ContractGateClosed`) and changes nothing.
 
+Rollout order, which is the whole procedure:
+
+1. Start the expand (032) before any new code starts. It runs with the other migrations.
+2. Roll out the code that writes `branch` to every replica. Between this step and step 4,
+   a commit to a side branch that touches a path `main` has fails (the pre-A key refuses
+   the row). Keep side-branch writes paused for that window, or shorten it.
+3. Verify every replica runs the new version, then insert the marker row.
+4. Run the contract (033) by hand.
+5. Branches made before the rows existed have none: their first read (or write) reads
+   their identities from LakeFS once and records them. Nothing else needs a backfill.
+
 Rollback is `rollback()` in `032_file_branch_expand.py`, run by hand with the application
 stopped. It refuses while any row has `branch <> 'main'`, because the pre-A schema cannot hold
 one. To roll back after non-main rows exist, delete them first: that is a data decision for
