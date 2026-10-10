@@ -1103,7 +1103,7 @@ Admin operations run synchronous queries with `db.atomic()`:
 - User listings: `O(n)` where n = total users
 - Repository stats: Aggregation queries with indexes
 - Commit history: Indexed by repository_id and username
-- Storage calculations: Aggregation over File table
+- Storage calculations: Aggregation over File table. File counts and regular sizes are the default branch's rows; each LFS object is counted once per repository across every branch
 
 **Optimization:**
 - Limit page size (default: 100, max: 1000)

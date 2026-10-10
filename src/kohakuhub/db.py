@@ -454,7 +454,14 @@ class LFSObjectHistory(BaseModel):
     sha256 = CharField(index=True)  # LFS object hash
     size = BigIntegerField()  # Changed from IntegerField to support files >2GB
     commit_id = CharField(index=True)  # LakeFS commit ID
-    # Optional link to File record for faster lookups
+    # The File row this version was recorded under: the row of the branch the
+    # commit landed on, for that path (#11). Set when the row exists and the
+    # commit records it; NULL for a version with no row (older history, or a
+    # path the branch has no row for). A branch's row being dropped (branch
+    # delete, squash) sets it to NULL: the history row stays, so quota and
+    # collection still see the version. Retention reads (repository,
+    # path_in_repo, sha256), not this link; the squash's history pass reads it
+    # to keep the other branches' versions.
     # IMPORTANT: on_delete=DB_ON_DELETE_SET_NULL prevents CASCADE deletion when File is deleted
     # LFSObjectHistory must persist for quota tracking even after file deletion
     file = ForeignKeyField(

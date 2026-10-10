@@ -664,7 +664,9 @@ async def test_branch_head_listing_surfaces_lakefs_errors(m, monkeypatch):
 async def test_the_reconciliation_converges_however_it_is_interrupted(m, owner_client):
     repo = _repo(m)
     F, R = m.db.File, m.db.LfsHeadRef
-    live = F.get((F.repository == repo) & (F.path_in_repo == "weights/model.safetensors"))
+    live = F.get(
+        (F.repository == repo) & (F.branch == "main") & (F.path_in_repo == "weights/model.safetensors")
+    )
     ghost = m.db.Repository.create(
         repo_type="model",
         namespace="owner",
@@ -765,7 +767,9 @@ async def test_copying_an_older_version_records_what_is_linked(m, owner_client):
 
     oid = hashlib.sha256(old).hexdigest()
     F, H = m.db.File, m.db.LFSObjectHistory
-    row = F.get((F.repository == _repo(m)) & (F.path_in_repo == "gc-test/copy.bin"))
+    row = F.get(
+        (F.repository == _repo(m)) & (F.branch == "main") & (F.path_in_repo == "gc-test/copy.bin")
+    )
     assert (row.sha256, row.lfs) == (oid, True)  # not the source's current version
     assert H.select().where((H.path_in_repo == "gc-test/copy.bin") & (H.sha256 == oid)).exists()
     assert m.gc.retention_reason(oid) == "recent"  # claimed like a linked upload
@@ -936,7 +940,8 @@ async def test_a_side_branch_keeps_its_lfs_object_through_collection(m, owner_cl
     )
     assert response.status_code == 200, response.text
     F = m.db.File
-    assert F.get((F.repository == repo) & (F.path_in_repo == PATH)).sha256 == main_oid
+    main_row = F.get((F.repository == repo) & (F.branch == "main") & (F.path_in_repo == PATH))
+    assert main_row.sha256 == main_oid
     assert ("gc-side", PATH, side_oid) in _refs(m, repo, "gc-side")
 
     _age_recent(m)  # the uploads' grace period is over: only the links keep it
