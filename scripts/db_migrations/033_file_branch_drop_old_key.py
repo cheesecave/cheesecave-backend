@@ -33,23 +33,24 @@ from _migration_utils import check_column_exists, should_skip_due_to_future_migr
 MIGRATION_NUMBER = 33
 OLD_INDEX = "file_repository_id_path_in_repo"
 OLD_COLUMNS = ["repository_id", "path_in_repo"]
+NEW_COLUMNS = ["repository_id", "branch", "path_in_repo"]
 LOCK_TIMEOUT_MS = 2000  # per attempt; writers queue behind our lock request for at most this
 STATEMENT_TIMEOUT_MS = 60000  # the empty guard still scans the table once
 BACKOFF_SECONDS = (1, 2, 4, 5, 5)  # between attempts: len + 1 attempts, about 30 s in all
 
-_PG_OLD_KEYS = """
+_PG_UNIQUE_KEYS = """
 SELECT ic.relname, con.conname
 FROM pg_index i
 JOIN pg_class ic ON ic.oid = i.indexrelid
 LEFT JOIN pg_constraint con
   ON con.conindid = i.indexrelid AND con.conrelid = i.indrelid AND con.contype = 'u'
-WHERE i.indrelid = to_regclass('file') AND i.indisunique
+WHERE i.indrelid = to_regclass('file') AND i.indisunique AND (i.indisvalid OR NOT %s)
   AND ARRAY(
         SELECT a.attname::text
         FROM unnest(i.indkey) WITH ORDINALITY AS k(num, ord)
         JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = k.num
         ORDER BY k.ord
-      ) = ARRAY['repository_id', 'path_in_repo']
+      ) = %s::text[]
 """
 
 
@@ -57,17 +58,21 @@ class FileLockTimeout(RuntimeError):
     """The lock on ``file`` was not free in any attempt."""
 
 
-def _old_keys(database, config) -> list[tuple[str, str | None]]:
-    """Unique indexes on exactly (repository_id, path_in_repo): ``(index, owning constraint or None)``."""
+def _unique_keys(database, config, columns, valid_only=False) -> list[tuple[str, str | None]]:
+    """Unique indexes on exactly ``columns``: ``(index, owning constraint or None)``."""
     if config.app.db_backend == "postgres":
-        return database.execute_sql(_PG_OLD_KEYS).fetchall()
+        return database.execute_sql(_PG_UNIQUE_KEYS, (valid_only, columns)).fetchall()
     keys = []
     for row in database.execute_sql('PRAGMA index_list("file")').fetchall():
         name, unique = row[1], row[2]
-        columns = [c[2] for c in database.execute_sql(f'PRAGMA index_info("{name}")').fetchall()]
-        if unique and columns == OLD_COLUMNS:
+        found = [c[2] for c in database.execute_sql(f'PRAGMA index_info("{name}")').fetchall()]
+        if unique and found == columns:
             keys.append((name, None))
     return keys
+
+
+def _old_keys(database, config):
+    return _unique_keys(database, config, OLD_COLUMNS)
 
 
 def is_applied(database, config) -> bool:
@@ -97,6 +102,12 @@ def drop_old_key(database, config) -> bool:
         keys = _old_keys(database, config)  # under the lock: another run may have finished
         if not keys:
             return False
+        if not _unique_keys(database, config, NEW_COLUMNS, valid_only=True):
+            # Never leave the table without a unique key. The runner goes on after a failed migration.
+            raise RuntimeError(
+                "the per-branch unique key (repository_id, branch, path_in_repo) from migration 032 "
+                "is missing or invalid: 033 does not drop the old key without it"
+            )
         for index, constraint in keys:
             if constraint:
                 database.execute_sql(f'ALTER TABLE "file" DROP CONSTRAINT "{constraint}"')
@@ -118,13 +129,15 @@ def run() -> bool:
             print(f"Migration {MIGRATION_NUMBER}: Already applied")
             return True
         print(f"Migration {MIGRATION_NUMBER}: the old File key (repository, path) stops being unique")
-        for delay in (*BACKOFF_SECONDS, None):
+        delays = iter(BACKOFF_SECONDS)
+        while True:
             try:
                 dropped = drop_old_key(db, cfg)
                 break
             except Exception as exc:
                 if not _is_lock_timeout(exc):
                     raise
+                delay = next(delays, None)
                 if delay is None:
                     raise FileLockTimeout(
                         f"the lock on table file was not free in {len(BACKOFF_SECONDS) + 1} attempts "

@@ -11,7 +11,7 @@ import pytest
 
 from test.kohakuhub.api.commit.test_availability import Repo, _delete, _file, _live
 from test.kohakuhub.api.helpers import encode_ndjson
-from test.kohakuhub.support.db import history_operations_need_postgres
+from test.kohakuhub.support.db import history_operations_need_postgres, put_the_old_file_key_back
 
 MIGRATION = (
     Path(__file__).resolve().parents[3] / "scripts" / "db_migrations" / "026_path_commits.py"
@@ -379,6 +379,7 @@ def test_the_migration_adds_the_records(m):
     D = m.db
     assert migration.is_applied(D.db, m.cfg)
     with D.db.atomic() as transaction:
+        put_the_old_file_key_back(D.db)
         D.db.execute_sql('ALTER TABLE "repository" DROP COLUMN "last_commits_recorded"')
         D.db.execute_sql('DROP TABLE "path_commit"')
         assert not migration.is_applied(D.db, m.cfg)
@@ -389,12 +390,14 @@ def test_the_migration_adds_the_records(m):
         assert migration.run() is True  # applied: nothing again
         transaction.rollback()
     with D.db.atomic() as transaction:  # the table made by init_db, the column missing
+        put_the_old_file_key_back(D.db)
         D.db.execute_sql('ALTER TABLE "repository" DROP COLUMN "last_commits_recorded"')
         assert not migration.is_applied(D.db, m.cfg)
         assert migration.run() is True
         assert migration.is_applied(D.db, m.cfg)
         transaction.rollback()
     with D.db.atomic() as transaction:  # the column there, the table missing
+        put_the_old_file_key_back(D.db)
         D.db.execute_sql('DROP TABLE "path_commit"')
         assert not migration.is_applied(D.db, m.cfg)
         assert migration.run() is True

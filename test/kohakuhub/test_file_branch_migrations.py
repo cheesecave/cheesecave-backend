@@ -444,6 +444,88 @@ def test_033_reports_an_error_that_is_not_a_lock_timeout_without_retrying(drop, 
     assert sleeps == []
 
 
+# --- 033 never leaves the table without a unique key -------------------------------------
+
+
+def test_033_refuses_on_a_database_without_032(pre_a, monkeypatch, capsys):
+    """The runner goes on after a failed migration: 033 must not drop the only unique key."""
+    _expand, database, _repo = pre_a
+    module = _bind(monkeypatch, database, _load("file_branch_drop_old_key", DROP_PATH))
+    assert module.run() is False
+    assert "per-branch unique key" in capsys.readouterr().err
+    assert len(_unique_old_key(database)) == 1
+    assert not _guard(database)
+
+
+def test_033_refuses_when_the_per_branch_key_is_missing(drop, capsys):
+    module, database, _repo = drop
+    if _postgres(database):
+        database.execute_sql(f'ALTER TABLE "file" DROP CONSTRAINT "{NEW_INDEX}"')
+    else:
+        database.execute_sql(f'DROP INDEX "{NEW_INDEX}"')
+    assert module.run() is False
+    assert "missing or invalid" in capsys.readouterr().err
+    assert len(_unique_old_key(database)) == 1
+
+
+def test_033_refuses_when_the_per_branch_key_is_invalid(drop, capsys):
+    """Made invalid for real in the catalog (superuser), as a crashed CONCURRENTLY build leaves it."""
+    module, database, _repo = drop
+    if not _postgres(database):
+        pytest.skip("index validity is PostgreSQL's")
+    if not database.execute_sql("SELECT rolsuper FROM pg_roles WHERE rolname = current_user").fetchone()[0]:
+        pytest.skip("marking an index invalid needs superuser")
+    database.execute_sql(
+        "UPDATE pg_index SET indisvalid = FALSE WHERE indexrelid = "
+        f"(SELECT oid FROM pg_class WHERE relname = '{NEW_INDEX}' "
+        "AND relnamespace = to_regnamespace(current_schema()))"
+    )
+    assert module.run() is False
+    assert "missing or invalid" in capsys.readouterr().err
+    assert len(_unique_old_key(database)) == 1
+
+
+# --- 033: every starting point ends in the same schema ------------------------------------
+
+
+def _file_shape(database):
+    """The ``file`` table as the application sees it: columns, and each unique key's columns."""
+    return (
+        sorted(_columns(database)),
+        sorted(tuple(index.columns) for index in database.get_indexes("file") if index.unique),
+    )
+
+
+def test_pre_a_032_only_and_fresh_databases_end_in_the_same_file_schema(
+    db_backend, tmp_path, monkeypatch
+):
+    """A pre-A database through 032 and 033 in one run, a 032-only database (production's
+    state) through 033, and a database built by init_db all end with the same ``file`` columns
+    and the same unique keys. The old name is taken by the guard on the first two only."""
+    from test.kohakuhub.support import db as support
+
+    shapes = {}
+    guards = {}
+    for name in ("one_run", "expanded_first", "fresh"):
+        database, schema = support.make_database(tmp_path, name=name, backend=db_backend)
+        with support.fresh_database(database, support.MODELS, schema=schema):
+            if name != "fresh":
+                _old_file_table(database)
+                expand = _bind(monkeypatch, database, _load("file_branch_expand", EXPAND_PATH))
+                drop = _bind(monkeypatch, database, _load("file_branch_drop_old_key", DROP_PATH))
+                assert expand.run() is True
+                if name == "expanded_first":
+                    assert len(_unique_old_key(database)) == 1  # production's state
+                assert drop.run() is True
+            shapes[name] = _file_shape(database)
+            guards[name] = bool(_guard(database))
+        database.close()
+    assert shapes["one_run"] == shapes["expanded_first"] == shapes["fresh"]
+    assert ("repository_id", "branch", "path_in_repo") in shapes["fresh"][1]
+    assert ("repository_id", "path_in_repo") not in shapes["fresh"][1]
+    assert guards == {"one_run": True, "expanded_first": True, "fresh": False}
+
+
 # --- 033: locks ---------------------------------------------------------------------
 
 

@@ -113,6 +113,24 @@ Database uses `db.atomic()` for safety.
 docker exec postgres pg_dump -U hub kohakuhub | gzip > backup.sql.gz
 ```
 
-Migration 033 (per-branch File rows, issue #11) is an operator step, not a startup migration. Follow its runbook: [File branch contract](file-branch-contract.md).
+## Rollback of the File key migration
+
+Migration 033 (issue #11) makes the old unique key on `file (repository_id, path_in_repo)` non-unique, so
+side branches can hold rows for paths `main` has. It runs at container start with the other
+migrations, so a deploy applies it with no manual step. Expect the api to be down for the
+container restart (measured at about 9 s, of which the migrations take about 2 s); the gateway
+answers 502 meanwhile. If 033 fails, the api container exits and stays down until restarted (restart
+policy `no`): read its log, fix the cause (most often a long transaction holding `file`) and
+restart.
+
+Rolling back:
+
+- The image can go back to any image that already writes the new key: `d3140a2` or later.
+  Nothing in the database needs to change.
+- It cannot go back to a pre-full-A image (`2f3f687` or earlier) after any branch has been
+  created without restoring a database backup: those images need the old unique key, and the
+  rows of other branches break it. Take a dump before deploying
+  (`docker exec postgres pg_dump -U hub kohakuhub | gzip > before-033.sql.gz`) and restore it to go back.
+@@ROLLBACKCMD@@
 
 See [Security](./security.md) for hardening guide.
