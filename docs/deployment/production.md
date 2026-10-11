@@ -117,9 +117,10 @@ docker exec postgres pg_dump -U hub kohakuhub | gzip > backup.sql.gz
 
 Migration 033 (issue #11) makes the old unique key on `file (repository_id, path_in_repo)` non-unique, so
 side branches can hold rows for paths `main` has. It runs at container start with the other
-migrations, so a deploy applies it with no manual step. Expect the api to be down for the
-container restart (measured at about 9 s, of which the migrations take about 2 s); the gateway
-answers 502 meanwhile. If 033 fails, the api container exits and stays down until restarted (restart
+migrations, so a deploy applies it with no manual step. The api is down while its container is replaced
+(production last measured about 9 s from container start to serving; in a rehearsal on a production-sized
+database, 813k file rows, all migrations including 033 took about 1 s and the lock 033 holds 0.06 s); the
+gateway answers 502 meanwhile. If 033 fails, the api container exits and stays down until restarted (restart
 policy `no`): read its log, fix the cause (most often a long transaction holding `file`) and
 restart.
 
