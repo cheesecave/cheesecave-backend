@@ -540,3 +540,35 @@ def test_new_code_boots_and_writes_side_branches_after_contract(contract):
         owner_id=repo.owner_id,
     )
     assert File.select().where(File.branch == "dev").count() == 1
+
+
+# --- the operator's rollback command (032 --rollback) -------------------------------
+
+
+def test_rollback_command_refuses_while_a_non_main_row_exists(expanded, capsys):
+    module, database, repo = expanded
+    File.create(
+        repository=repo,
+        branch="dev",
+        path_in_repo="dev-only.txt",
+        size=1,
+        sha256="9" * 64,
+        owner_id=repo.owner_id,
+    )
+    assert module.main(["--rollback"], database, module.cfg) == 1
+    assert "1 file row(s) on a non-main branch" in capsys.readouterr().err
+    assert "branch" in _columns(database)  # nothing changed
+
+
+def test_rollback_command_restores_the_pre_a_schema_when_only_main_rows_exist(expanded, capsys):
+    module, database, _repo = expanded
+    assert module.main(["--rollback"], database, module.cfg) == 0
+    assert "rolled back to the pre-A schema" in capsys.readouterr().out
+    assert "branch" not in _columns(database)
+    assert OLD_INDEX in _index_names(database)
+
+
+def test_main_without_arguments_runs_the_expand(pre_a):
+    module, database, _repo = pre_a
+    assert module.main([]) == 0
+    assert module.is_applied(database, module.cfg)
