@@ -18,6 +18,7 @@ import sys
 import os
 from pathlib import Path
 import importlib.util
+from urllib.parse import urlsplit, urlunsplit
 
 # Add src to path
 SCRIPT_DIR = Path(__file__).parent
@@ -26,6 +27,33 @@ sys.path.insert(0, str(SCRIPT_DIR.parent / "src"))
 # Import after path setup
 from kohakuhub.db import db, init_db
 from kohakuhub.config import cfg
+
+
+def redact_url(url: str) -> str:
+    """``url`` with its password replaced: the runner's output goes to operators' logs."""
+    parts = urlsplit(url)
+    if not parts.password:
+        return url
+    netloc = parts.netloc.replace(f":{parts.password}@", ":***@", 1)
+    return urlunsplit(parts._replace(netloc=netloc))
+
+
+class _RedactingStream:
+    """A text stream that masks the secrets in whatever is written to it. The runner
+    prints the URL in its header and migration modules print their own lines; a
+    password in an exception text would reach the log the same way."""
+
+    def __init__(self, stream, secrets):
+        self._stream = stream
+        self._secrets = secrets
+
+    def write(self, text):
+        for secret in self._secrets:
+            text = text.replace(secret, "***")
+        return self._stream.write(text)
+
+    def __getattr__(self, name):
+        return getattr(self._stream, name)
 
 
 def discover_migrations():
@@ -107,7 +135,7 @@ def run_migrations():
     print("KohakuHub Database Migrations")
     print("=" * 70)
     print(f"Database backend: {cfg.app.db_backend}")
-    print(f"Database URL: {cfg.app.database_url}")
+    print(f"Database URL: {redact_url(cfg.app.database_url)}")
     print()
 
     # Check if database is completely uninitialized
@@ -192,6 +220,9 @@ def run_migrations():
 
 
 def main():
+    secrets = [p for p in [urlsplit(cfg.app.database_url).password] if p]
+    sys.stdout = _RedactingStream(sys.stdout, secrets)
+    sys.stderr = _RedactingStream(sys.stderr, secrets)
     try:
         success = run_migrations()
         return 0 if success else 1
