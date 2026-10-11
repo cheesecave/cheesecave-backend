@@ -310,49 +310,30 @@ docker-compose up -d
 
 **Prevention:** Always run migrations before application starts (handled automatically in Docker)
 
-## Expand and contract: File branches (issue #11)
+## File branches (issue #11): 032 and 033
 
-Migration 032 is the EXPAND. It adds `file.branch` (default `main`) and the unique key
-`(repository_id, branch, path_in_repo)`, and keeps the old key `(repository_id, path_in_repo)`.
-It runs with the other migrations at startup. Old replicas keep working: they write `main`.
-While the old key exists, a non-main row for a path `main` already has is refused.
+Both run with the other migrations at container start, in this order.
 
-The CONTRACT is `contract/033_file_branch_contract.py`. It drops the old key and enables
-non-main writes. It keeps the old key's name taken by an empty, non-unique index (`WHERE FALSE`):
-an old replica re-creates its declared index at every boot, and this stops that from restoring
-the refusal. An old replica's writes then fail instead of landing. It is NOT in this directory
-on purpose: the runner exits non-zero on any failed migration, so a closed gate would stop every
-container. Run it by hand, and only after every replica runs the code that writes `branch`:
+- **032** adds `file.branch` (default `main`) and the unique key
+  `(repository_id, branch, path_in_repo)`. It keeps the old key `(repository_id, path_in_repo)`
+  and creates the `schema_rollout` table. Nothing reads that table any more; it is left in place.
+- **033** (`033_file_branch_drop_old_key.py`) makes the old key stop being unique, so a side
+  branch can hold a row for a path `main` also has. Rows are not touched. The old index name stays
+  taken by an empty non-unique index (`WHERE FALSE`): a pre-A image's `init_db()` would otherwise
+  re-create the unique key with `CREATE UNIQUE INDEX IF NOT EXISTS`.
+  It is applied when no unique index exists on `(repository_id, path_in_repo)`; a database built
+  by `init_db()` never had one, so 033 is a no-op there.
 
-```sql
--- the operator's marker, after every replica runs the new code
-INSERT INTO schema_rollout (name, set_at) VALUES ('file_branch_contract', CURRENT_TIMESTAMP);
-```
+033 cannot hang or queue: the DDL needs a brief exclusive lock on `file`, taken with a 2 s
+`lock_timeout`. If a long transaction holds the table, it retries up to 6 times with backoff
+(about 30 s) and then fails with `the lock on table file was not free in 6 attempts ...`;
+the container stops and nothing has changed. End the transaction, restart the container, and
+it completes. Two containers starting together are safe: the check is repeated under the lock,
+so one drops the key and the other does nothing. It also refuses (and drops nothing) unless 032's
+per-branch key exists and is valid, so the table never has no unique key; the runner goes on after a
+failed migration, which is why this is checked. Until 033 has run, a side-branch commit that
+touches a path `main` has answers 409 `BranchPathConflict` ("run the pending database
+migrations").
 
-```bash
-python scripts/db_migrations/contract/033_file_branch_contract.py
-```
-
-Without the marker the script refuses (`ContractGateClosed`) and changes nothing.
-
-Rollout order, which is the whole procedure:
-
-1. Expand (032) runs with the other migrations at startup. Old replicas keep serving: they
-   write `main` and the pre-A key is still there.
-2. Deploy the code that writes `branch` to every replica, next to the old ones. Until step 4,
-   a commit to a side branch that touches a path `main` has is refused with HTTP 409
-   (`BranchPathConflict`, the body names the branch and the path). A new path on a side
-   branch commits normally. A branch made from a populated `main` is created (200) without
-   rows: its rows are read from LakeFS as they are needed.
-3. Verify every replica runs the new version, then drain the old replicas (stop routing to
-   them, let in-flight requests finish, stop them), then insert the marker row.
-4. Run the contract (033) by hand. It refuses without the marker and changes nothing.
-5. Old images must never run again after the contract. Their boot is not refused (their code
-   is fixed), but their writes fail, which is the enforcement.
-6. Branches made before the rows existed have none: their first read (or write) reads
-   their identities from LakeFS once and records them. Nothing else needs a backfill.
-
-Rollback is `rollback()` in `032_file_branch_expand.py`, run by hand with the application
-stopped. It refuses while any row has `branch <> 'main'`, because the pre-A schema cannot hold
-one. To roll back after non-main rows exist, delete them first: that is a data decision for
-the operator, not something the script does.
+Rollback facts and the command are in
+[docs/deployment/production.md](../../docs/deployment/production.md#rollback-of-the-file-key-migration).

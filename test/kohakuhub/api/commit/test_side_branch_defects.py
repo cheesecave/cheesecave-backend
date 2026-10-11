@@ -2,8 +2,8 @@
 
 The database and LakeFS are the real ones. The pre-A key
 ``file_repository_id_path_in_repo`` is put back for the test, because a fresh
-schema no longer has it: that is the state of an expanded database before the
-contract (migration 033).
+schema no longer has it: that is the state of an expanded database before
+migration 033 (the old key is dropped by an ordinary migration now).
 """
 
 import hashlib
@@ -125,7 +125,7 @@ async def test_d2_side_commit_refused_by_pre_a_key_is_409(m, owner_client):
         assert response.status_code == 409, response.text
         error = response.json()["detail"]["error"]
         assert "'dev'" in error and "'README.md'" in error
-        assert "contract" in error and "new path" in error
+        assert "migrations" in error and "restart the service" in error and "new path" in error
         assert "duplicate key" not in response.text.lower()
         assert response.headers["X-Error-Code"] == "BranchPathConflict"
         assert _rows(repo_row, "dev") == {}
@@ -159,7 +159,7 @@ async def test_d3_branch_from_populated_main_copies_exactly_the_source_rows(m, o
 
 
 async def test_d3_branch_from_populated_main_during_the_window_is_200_without_an_orphan(m, owner_client):
-    """Before the contract the old key refuses the copy of paths main has. The branch
+    """Until migration 033 has run the old key refuses the copy of paths main has. The branch
     is still created (200): it has no rows and reads them from LakeFS."""
     repo = await Repo(m, owner_client, "d3-window").create()
     await repo.commit(_file("README.md", "hello"), lfs("w.bin", b"w main"))
@@ -269,7 +269,7 @@ async def test_d4_a_row_less_side_branch_path_reports_the_git_blob_id(m, owner_c
 
 async def test_an_integrity_error_on_main_is_not_the_contract_refusal(m, owner_client):
     """Only a side branch's refusal is the old key's: a database error on main is not
-    reported as a 409 to wait for the contract (PostgreSQL only: a trigger raises it)."""
+    reported as a 409 about the pending migration (PostgreSQL only: a trigger raises it)."""
     if m.cfg.app.db_backend != "postgres":
         pytest.skip("the unique violation is a PL/pgSQL trigger")
     repo = await Repo(m, owner_client, "d2-main-error").create()

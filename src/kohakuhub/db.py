@@ -346,8 +346,8 @@ class File(BaseModel):
 
     class Meta:
         # The key of issue #11. Upgraded databases keep the pre-A key
-        # (repository, path_in_repo) until the gated contract
-        # (scripts/db_migrations/contract/033) drops it; a new database never has it.
+        # (repository, path_in_repo) until migration 033 makes it non-unique
+        # (scripts/db_migrations/033_file_branch_drop_old_key.py); a new database never has it.
         indexes = ((("repository", "branch", "path_in_repo"), True),)
 
 

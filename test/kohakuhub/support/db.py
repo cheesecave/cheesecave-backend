@@ -30,6 +30,20 @@ from kohakuhub.db import BaseModel
 MODELS = [model for model in BaseModel.__subclasses__()]
 
 
+def put_the_old_file_key_back(database):
+    """The schema before migration 033: the unique key on file (repository_id, path_in_repo).
+
+    A database from ``init_db()`` has no such key, so 033 counts as applied and every earlier
+    migration skips itself as superseded. A test that runs an earlier migration for real
+    calls this first, inside a transaction it rolls back (the non-main rows other tests
+    leave behind cannot sit under that key, so they go inside the same transaction).
+    """
+    database.execute_sql("DELETE FROM \"file\" WHERE \"branch\" <> 'main'")
+    database.execute_sql(
+        'CREATE UNIQUE INDEX "file_repository_id_path_in_repo" ON "file" ("repository_id", "path_in_repo")'
+    )
+
+
 class _Rollback(Exception):
     """Raised inside the scope to undo the transaction."""
 

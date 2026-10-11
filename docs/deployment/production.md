@@ -113,4 +113,36 @@ Database uses `db.atomic()` for safety.
 docker exec postgres pg_dump -U hub kohakuhub | gzip > backup.sql.gz
 ```
 
+## Rollback of the File key migration
+
+Migration 033 (issue #11) makes the old unique key on `file (repository_id, path_in_repo)` non-unique, so
+side branches can hold rows for paths `main` has. It runs at container start with the other
+migrations, so a deploy applies it with no manual step. The api is down while its container is replaced
+(production last measured about 9 s from container start to serving; in a rehearsal on a production-sized
+database, 813k file rows, all migrations including 033 took about 1 s and the lock 033 holds 0.06 s); the
+gateway answers 502 meanwhile. If 033 fails, the api container exits and stays down until restarted (restart
+policy `no`): read its log, fix the cause (most often a long transaction holding `file`) and
+restart.
+
+Rolling back:
+
+- The image can go back to any image that already writes the new key: `d3140a2` or later.
+  Nothing in the database needs to change.
+- It cannot go back to a pre-full-A image (`2f3f687` or earlier) after any branch has been
+  created without restoring a database backup: those images need the old unique key, and the
+  rows of other branches break it. Take a dump before deploying
+  (`docker exec postgres pg_dump -U hub kohakuhub | gzip > before-033.sql.gz`) and restore it to go back.
+
+To go back to `2f3f687` or earlier while no row of another branch exists (a branch made from a populated
+`main` has rows), stop the api and the worker and run, in a container of the current image:
+
+```bash
+python scripts/db_migrations/032_file_branch_expand.py --rollback
+```
+
+It restores the old unique key and drops `file.branch`. With rows of other branches it refuses and
+changes nothing; then restore the dump. Without either, such an image boots and reads, but every
+commit to `main` fails (`no unique or exclusion constraint matching the ON CONFLICT specification`).
+The `schema_rollout` table that 032 created is unused now; it is left in place.
+
 See [Security](./security.md) for hardening guide.

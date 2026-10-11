@@ -19,7 +19,7 @@ from huggingface_hub.utils import HfHubHTTPError
 
 from test.kohakuhub.api.commit.test_availability import Repo, _delete, _file, _live, lfs
 from test.kohakuhub.api.helpers import encode_ndjson
-from test.kohakuhub.support.db import history_operations_need_postgres
+from test.kohakuhub.support.db import history_operations_need_postgres, put_the_old_file_key_back
 
 MIGRATION = (
     Path(__file__).resolve().parents[3]
@@ -679,6 +679,7 @@ def test_the_migration_adds_the_lock(s):
     D = s.db
     assert migration.is_applied(D.db, s.cfg)
     with D.db.atomic() as transaction:
+        put_the_old_file_key_back(D.db)
         for column in ("operation", "operation_until", "history_root"):
             D.db.execute_sql(f'ALTER TABLE "repository" DROP COLUMN "{column}"')
         D.db.execute_sql('DROP TABLE "repository_write"')
@@ -689,6 +690,7 @@ def test_the_migration_adds_the_lock(s):
         transaction.rollback()
     # A database with some of it already gets the rest
     with D.db.atomic() as transaction:
+        put_the_old_file_key_back(D.db)
         D.db.execute_sql('ALTER TABLE "repository" DROP COLUMN "history_root"')
         D.db.execute_sql('DROP TABLE "repository_write"')
         assert not migration.is_applied(D.db, s.cfg)

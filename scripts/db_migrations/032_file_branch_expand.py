@@ -8,12 +8,12 @@ and attached as a constraint. The old key ``(repository_id, path_in_repo)``
 is KEPT: old replicas still run ``ON CONFLICT (repository_id, path_in_repo)``
 and write no branch column, so their rows land on ``main``. While the old
 key exists, a non-main row for a path that main already has is refused. That
-is the guard: nothing rewrites main's rows until the contract (contract/033,
-gated) drops the old key.
+is the guard: nothing rewrites main's rows until migration 033 drops the old key
+(it runs right after this one).
 
-Rollback is ``rollback()`` below. It is not run by the migration runner. It
-refuses while any non-main row exists, because the pre-A schema cannot hold
-one. Operators run it by hand with the application stopped.
+Rollback is ``rollback()`` below (``--rollback``). It is not run by the migration
+runner. It refuses while any non-main row exists, because the pre-A schema cannot
+hold one. Operators run it by hand with the application stopped.
 
 Plain SQL, not the models: this must keep meaning what it means today.
 """
@@ -145,7 +145,7 @@ def expand(database, config) -> None:
 
 
 def _create_rollout_table(database) -> None:
-    """The operator's marker table; the contract reads it (see contract/033)."""
+    """Created by this migration since 032 shipped. Nothing reads it any more; it stays."""
     database.execute_sql(
         f'CREATE TABLE IF NOT EXISTS "{ROLLOUT_TABLE}" '
         '("name" VARCHAR(255) NOT NULL PRIMARY KEY, "set_at" TIMESTAMP NOT NULL)'
@@ -156,7 +156,7 @@ def rollback(database=None, config=None) -> None:
     """Back to the pre-A schema. Refused while any non-main row exists.
 
     The application must be stopped first: a writer racing the check would
-    make the refusal stale. Restores the old key if the contract dropped it.
+    make the refusal stale. Restores the old key if 033 dropped it.
     """
     database = database or db
     config = config or cfg
@@ -169,9 +169,9 @@ def rollback(database=None, config=None) -> None:
     if count:
         raise RuntimeError(
             f"refusing to roll back issue #11: {count} file row(s) on a non-main branch "
-            "cannot exist in the pre-A schema; delete them first (see the PR rollout notes)"
+            "cannot exist in the pre-A schema; delete them first (see docs/deployment/production.md, \"Rollback of the File key migration\")"
         )
-    # The contract leaves the old name taken by its guard (an empty index): it goes,
+    # 033 leaves the old name taken by its guard (an empty index): it goes,
     # and the unique key is built in its place.
     if config.app.db_backend == "postgres":
         if _constraint_exists(database, NEW_INDEX):
@@ -191,5 +191,19 @@ def rollback(database=None, config=None) -> None:
     database.execute_sql(f'DROP TABLE IF EXISTS "{ROLLOUT_TABLE}"')
 
 
+def main(argv=None, database=None, config=None) -> int:
+    """``--rollback`` is the operator's command for ``rollback()``; no argument runs the expand."""
+    args = sys.argv[1:] if argv is None else argv
+    if args == ["--rollback"]:
+        try:
+            rollback(database, config)
+        except Exception as exc:
+            print(f"Migration {MIGRATION_NUMBER} rollback refused or failed: {exc}", file=sys.stderr)
+            return 1
+        print(f"Migration {MIGRATION_NUMBER}: rolled back to the pre-A schema")
+        return 0
+    return 0 if run() else 1
+
+
 if __name__ == "__main__":  # pragma: no cover - operator entry point
-    sys.exit(0 if run() else 1)
+    sys.exit(main())
