@@ -285,9 +285,11 @@ def test_rollback_restores_the_old_key_the_contract_dropped(contract):
     expand_module = module._expand_module()
     _open_gate(database)
     assert module.run() is True
-    assert OLD_INDEX not in _index_names(database)
+    # The contract keeps the name for its guard; the unique key is what it drops
+    assert _unique_pre_a_key(database) == []
     expand_module.rollback(database, expand_module.cfg)
     assert OLD_INDEX in _index_names(database)
+    assert len(_unique_pre_a_key(database)) == 1
 
 
 # --- contract gate -----------------------------------------------------------------
@@ -320,7 +322,7 @@ def test_contract_with_the_marker_drops_the_old_key_and_allows_branch_copies(con
     module, database, repo = contract
     _open_gate(database)
     assert module.run() is True
-    assert OLD_INDEX not in _index_names(database)
+    assert _unique_pre_a_key(database) == []  # the guard keeps the name, not the key
     assert NEW_INDEX in _index_names(database)
     File.create(
         repository=repo,
@@ -465,3 +467,76 @@ def test_the_contract_loads_the_real_expand_module(db_dual, monkeypatch):
     module = _bind(monkeypatch, db_dual, _load("file_branch_contract", CONTRACT_PATH))
     expand_module = module._expand_module()
     assert hasattr(expand_module, "is_applied") and hasattr(expand_module, "rollback")
+
+
+# --- D1: an old replica's boot after the contract --------------------------------------
+
+
+def _pre_a_file_model(database):
+    """The File model as the code before issue #11 declared it: a unique key on
+    (repository, path_in_repo) and nothing else. Its ``create_tables`` is what
+    an old replica runs at boot (``crud.py`` calls ``init_db()``)."""
+    from peewee import IntegerField, Model, TextField
+
+    class File(Model):  # the class name names the index: file_repository_id_path_in_repo
+        repository = IntegerField(column_name="repository_id")
+        path_in_repo = TextField()
+
+        class Meta:
+            table_name = "file"
+            indexes = ((("repository", "path_in_repo"), True),)
+
+    File._meta.set_database(database)
+    return File
+
+
+def _unique_pre_a_key(database):
+    return [
+        index
+        for index in database.get_indexes("file")
+        if index.unique and list(index.columns) == ["repository_id", "path_in_repo"]
+    ]
+
+
+def test_old_boot_after_contract_does_not_rebuild_the_unique_key(contract):
+    """D1: the old model's index declaration recreates the pre-A key on every boot
+    (peewee's ``CREATE UNIQUE INDEX IF NOT EXISTS``). After the contract that restores
+    the refusal of side-branch rows. It must not."""
+    module, database, repo = contract
+    _open_gate(database)
+    assert module.run() is True
+    assert _unique_pre_a_key(database) == []
+
+    database.create_tables([_pre_a_file_model(database)], safe=True)
+
+    assert _unique_pre_a_key(database) == []
+
+
+def test_old_writer_after_contract_fails_loudly_instead_of_writing(contract):
+    """An old replica boots (its declared index is created if missing), then writes: the
+    write fails, it does not land on main or on a branch after the contract."""
+    module, database, repo = contract
+    _open_gate(database)
+    assert module.run() is True
+    database.create_tables([_pre_a_file_model(database)], safe=True)  # the old boot
+    with pytest.raises(Exception):
+        _old_code_upsert(database, repo, "kept.txt", "7" * 64)
+    assert database.execute_sql('SELECT COUNT(*) FROM "file"').fetchone()[0] == 1
+
+
+def test_new_code_boots_and_writes_side_branches_after_contract(contract):
+    """The new code's own schema creation and side-branch writes keep working after
+    the contract, with the old name occupied by the guard."""
+    module, database, repo = contract
+    _open_gate(database)
+    assert module.run() is True
+    database.create_tables([File], safe=True)
+    File.create(
+        repository=repo,
+        branch="dev",
+        path_in_repo="kept.txt",
+        size=1,
+        sha256="8" * 64,
+        owner_id=repo.owner_id,
+    )
+    assert File.select().where(File.branch == "dev").count() == 1
