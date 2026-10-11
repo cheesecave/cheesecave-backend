@@ -103,12 +103,12 @@ def _files(m, repo):
     }
 
 
-def _rows(m, repo):
-    """Every File row as stored, its write time included."""
+def _rows(m, repo, branch="main"):
+    """The File rows of ``branch`` as stored, their write time included."""
     F = m.db.File
     return {
         f.path_in_repo: (f.sha256, f.size, f.lfs, f.is_deleted, f.updated_at)
-        for f in F.select().where(F.repository == _row(m, repo))
+        for f in F.select().where((F.repository == _row(m, repo)) & (F.branch == branch))
     }
 
 
@@ -789,9 +789,9 @@ async def test_the_commits_are_recorded_even_if_reading_the_branch_fails(
 
 
 @history_operations_need_postgres
-async def test_a_reset_of_a_side_branch_writes_no_file_row(m, owner_client):
-    """The File rows describe main: a reset of dev leaves them and links its
-    LFS version to no row (#11)."""
+async def test_a_reset_of_a_side_branch_writes_its_own_rows_and_leaves_main(m, owner_client):
+    """A reset of dev writes dev's File rows; main's rows are untouched, and the
+    LFS version it links is dev's row (#11)."""
     repo, (initial, c1, c2, c3, c4, c5) = await _linear(m, owner_client, "reset-side-rows")
     response = await owner_client.post(
         f"/api/models/{repo.id}/branch", json={"branch": "dev", "revision": c5}
@@ -802,9 +802,11 @@ async def test_a_reset_of_a_side_branch_writes_no_file_row(m, owner_client):
     response = await _reset(repo, c1, branch="dev")
     assert response.status_code == 200, response.text
     assert _rows(m, repo) == before
+    assert _rows(m, repo, "dev")["a.bin"][0] == sha(b"a v1")
     H = m.db.LFSObjectHistory
     made = await repo.head("dev")
     version = H.get((H.commit_id == made) & (H.path_in_repo == "a.bin"))
     assert version.sha256 == sha(b"a v1")
-    assert version.file is None
+    assert version.file.branch == "dev"
+    assert version.file.sha256 == sha(b"a v1")
 

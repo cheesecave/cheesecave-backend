@@ -25,7 +25,11 @@ from kohakuhub.api.commit.records import OperationRefused
 from kohakuhub.db import Repository
 from kohakuhub.lfs_gc import drop_head_refs
 from kohakuhub.logger import get_logger
-from kohakuhub.storage_cleanup import SCRATCH_BRANCH_PREFIX, enqueue_lfs_reconciliation
+from kohakuhub.storage_cleanup import (
+    SCRATCH_BRANCH_PREFIX,
+    drop_branch_rows,
+    enqueue_lfs_reconciliation,
+)
 
 logger = get_logger("RESET")
 
@@ -49,6 +53,7 @@ async def _empty_metarange(
             await client.delete_branch(repository=lakefs_repo, branch=scratch)
         except Exception as e:
             logger.warning(f"Could not delete the scratch branch {scratch}: {e}")
+        drop_branch_rows(repo, scratch)  # never read, but a branch that leaves takes its rows
         try:  # in case a reconciliation listed it meanwhile
             drop_head_refs(repo, scratch)
         except Exception as e:

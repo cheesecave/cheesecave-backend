@@ -10,6 +10,7 @@ from fastapi import HTTPException
 
 import kohakuhub.api.branches as branches_api
 import kohakuhub.api.operation_capabilities as operation_capabilities
+from test.kohakuhub.support.factories import make_repo, make_user
 
 
 @asynccontextmanager
@@ -122,8 +123,10 @@ def _response_error_message(response) -> str:
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("db_scope")
 async def test_create_branch_and_tag_routes_cover_success_and_error_paths(monkeypatch):
-    repo = SimpleNamespace(repo_type="model", full_id="owner/repo")
+    # A real row: creating a branch copies its File rows (#11)
+    repo = make_repo(make_user("owner"), "repo")
     user = SimpleNamespace(username="owner")
     client = _FakeClient()
 
@@ -221,8 +224,10 @@ async def test_create_branch_and_tag_routes_cover_success_and_error_paths(monkey
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("db_scope")
 async def test_delete_branch_and_tag_cover_success_not_found_and_guardrails(monkeypatch):
-    repo = SimpleNamespace(repo_type="model", full_id="owner/repo")
+    # A real row: deleting a branch drops its File rows (#11)
+    repo = make_repo(make_user("owner"), "repo")
     user = SimpleNamespace(username="owner")
     client = _FakeClient()
 

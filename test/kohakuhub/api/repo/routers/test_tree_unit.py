@@ -1683,6 +1683,9 @@ class _BranchLakeFS(_FakeLakeFSClient):
         super().__init__(**kwargs)
         self.contents = dict(contents or {})
 
+    async def get_branch(self, **kwargs):
+        return {"commit_id": "commit-dev"}  # the branch has no rows yet: they are read here (#11)
+
     async def get_object(self, **kwargs):
         content = self.contents.get(kwargs["path"])
         if content is None:
@@ -1721,7 +1724,10 @@ async def test_list_repo_tree_on_a_side_branch_reports_its_own_identities(monkey
     _main_rows_for_branch_paths()
     lake = _BranchLakeFS(
         contents={"README.md": b"hello"},
-        list_responses=[{"results": _branch_objects(), "pagination": {"has_more": False}}],
+        list_responses=[  # the page, then the listing that seeds the branch's rows
+            {"results": _branch_objects(), "pagination": {"has_more": False}},
+            {"results": _branch_objects(), "pagination": {"has_more": False}},
+        ],
     )
     monkeypatch.setattr(tree_api, "get_lakefs_client", lambda: lake)
 
@@ -1751,7 +1757,10 @@ async def test_list_repo_tree_on_a_side_branch_keeps_the_checksum_of_an_unreadab
     _main_rows_for_branch_paths()
     lake = _BranchLakeFS(
         contents={},  # README.md cannot be read
-        list_responses=[{"results": _branch_objects()[1:], "pagination": {"has_more": False}}],
+        list_responses=[
+            {"results": _branch_objects()[1:], "pagination": {"has_more": False}},
+            {"results": _branch_objects()[1:], "pagination": {"has_more": False}},
+        ],
     )
     monkeypatch.setattr(tree_api, "get_lakefs_client", lambda: lake)
 
@@ -1776,6 +1785,7 @@ async def test_get_paths_info_on_a_side_branch_reports_its_own_identities(monkey
     _main_rows_for_branch_paths()
     lake = _BranchLakeFS(
         contents={"README.md": b"hello"},
+        list_responses=[{"results": _branch_objects(), "pagination": {"has_more": False}}],
         stat_map={
             "weights.bin": _branch_objects()[0],
             "README.md": _branch_objects()[1],

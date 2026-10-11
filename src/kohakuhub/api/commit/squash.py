@@ -42,7 +42,7 @@ from kohakuhub.db import (
 )
 from kohakuhub.db_operations import create_commit
 from kohakuhub.logger import get_logger
-from kohakuhub.storage_cleanup import FORGET_SQUASHED_KIND, release_objects
+from kohakuhub.storage_cleanup import FORGET_SQUASHED_KIND, drop_branch_rows, release_objects
 
 logger = get_logger("SQUASH")
 
@@ -203,6 +203,8 @@ def _record(
             refs = (H.repository == repo) & H.branch.in_(gone)
             released = {sha for (sha,) in H.select(H.sha256).where(refs).tuples()}
             H.delete().where(refs).execute()
+            for name in gone:
+                drop_branch_rows(repo, name)
             release_objects(released)  # what only the dropped branches linked
         if whole_repository:
             Commit.delete().where(Commit.repository == repo).execute()
@@ -219,6 +221,7 @@ def _record(
                 FORGET_SQUASHED_KIND,
                 {
                     "repo_id": repo.id,
+                    "branch": branch,
                     "commit": commit,
                     "through": through or 0,
                     "at": datetime.now(

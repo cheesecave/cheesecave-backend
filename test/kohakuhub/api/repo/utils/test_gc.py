@@ -11,9 +11,10 @@ from test.kohakuhub.support.factories import make_repo, make_user
 pytestmark = pytest.mark.usefixtures("db_scope")
 
 
-def _file(repo, path, sha):
+def _file(repo, path, sha, branch="main"):
     return File.create(
         repository=repo,
+        branch=branch,
         path_in_repo=path,
         sha256=sha,
         lfs=True,
@@ -45,9 +46,11 @@ def test_track_lfs_object_without_a_file_row_keeps_history_unlinked():
     assert row.file_id is None
 
 
-def test_track_lfs_object_on_a_side_branch_links_no_file_row():
+def test_track_lfs_object_on_a_side_branch_links_that_branchs_row():
+    """A version links the row of the branch its commit landed on, never main's (#11)."""
     repo = make_repo(make_user("owner"), "repo")
-    _file(repo, "weights/model.bin", "a" * 64)  # main's row describes main's object
+    main_row = _file(repo, "weights/model.bin", "a" * 64)  # main's row describes main's object
+    dev_row = _file(repo, "weights/model.bin", "b" * 64, branch="dev")
 
     gc_utils.track_lfs_object(
         "model", "owner", "repo", "weights/model.bin", "b" * 64, 2, "commit-4", branch="dev"
@@ -55,7 +58,8 @@ def test_track_lfs_object_on_a_side_branch_links_no_file_row():
 
     row = LFSObjectHistory.get(LFSObjectHistory.commit_id == "commit-4")
     assert row.sha256 == "b" * 64
-    assert row.file_id is None
+    assert row.file_id == dev_row.id
+    assert row.file_id != main_row.id
 
 
 def test_track_lfs_object_ignores_an_unknown_repository():

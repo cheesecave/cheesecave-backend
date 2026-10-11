@@ -12,6 +12,8 @@ import uuid
 from collections.abc import Iterable
 from datetime import datetime, timedelta, timezone
 
+from peewee import SQL, Select, fn
+
 from kohakuhub.config import cfg
 from kohakuhub.logger import get_logger
 from kohakuhub.db import (
@@ -468,17 +470,18 @@ def list_organization_members(org: User) -> list[UserOrganization]:
 # ===== File operations =====
 
 
-def get_file(repo: Repository, path_in_repo: str) -> File | None:
-    """Get file by repository FK and path (only active files)."""
+def get_file(repo: Repository, path_in_repo: str, branch: str = "main") -> File | None:
+    """The active file row of ``path_in_repo`` on ``branch`` (#11)."""
     return File.get_or_none(
         (File.repository == repo)
+        & (File.branch == branch)
         & (File.path_in_repo == path_in_repo)
         & (File.is_deleted == False)
     )
 
 
 def get_repo_file_metadata_map(
-    repo: Repository, paths: Iterable[str] | None = None
+    repo: Repository, paths: Iterable[str] | None = None, branch: str = "main"
 ) -> dict[str, tuple[str, int]]:
     """Map active file paths to the fields needed by batch callers.
 
@@ -487,7 +490,7 @@ def get_repo_file_metadata_map(
     When ``paths`` is provided, only those paths are selected so a small
     preupload batch does not scan the whole repository.
     """
-    query = (File.repository == repo) & (File.is_deleted == False)
+    query = (File.repository == repo) & (File.branch == branch) & (File.is_deleted == False)
     if paths is not None:
         query &= File.path_in_repo.in_(list(paths))
 
@@ -502,31 +505,27 @@ def get_repo_file_metadata_map(
     }
 
 
-def get_repo_file_sha256_map(repo: Repository) -> dict[str, str]:
-    """Map every active file path in a repo to its stored sha256, in one query.
-
-    Replaces a `get_file()` per path for callers that need many paths from the
-    same repository. Measured on a 4000-file repo (2000 LFS): the per-path loop
-    costs 2.137s versus 0.102s for the whole sibling build using this map.
-
-    Only the two columns anyone needs are selected. Materialising full ORM rows
-    instead costs ~1063 B per row versus ~243 B — ~106 MB against ~24 MB on a
-    100k-file repo, allocated per request.
-
-    The `(repository, path_in_repo)` unique index is index-served here, and it
-    is unique irrespective of `is_deleted`, so at most one row exists per path
-    and no key can be lost to a collision.
-
-    Returns:
-        Mapping of `path_in_repo` to `sha256` (empty string if the row has none).
-    """
-    return {
-        path: (sha256 or "")
-        for path, sha256 in File.select(File.path_in_repo, File.sha256)
-        .where((File.repository == repo) & (File.is_deleted == False))
+def repository_lfs_totals(repo: Repository) -> tuple[int, int]:
+    """``(bytes, objects)`` of the live LFS objects of ``repo``, each object
+    counted once for the whole repository: the same content on two branches is
+    one object (#11). Groups on sha256 so it works on SQLite and PostgreSQL."""
+    once = (
+        File.select(File.sha256, fn.MAX(File.size).alias("size"))
+        .where(
+            (File.repository == repo) & (File.is_deleted == False) & (File.lfs == True)  # noqa: E712
+        )
+        .group_by(File.sha256)
+    )
+    totals = (
+        Select(
+            from_list=[once.alias("objects")],
+            columns=[fn.COALESCE(fn.SUM(SQL("objects.size")), 0), fn.COUNT(SQL("*"))],
+        )
+        .bind(File._meta.database)
         .tuples()
-        .iterator()
-    }
+    )
+    [(total, count)] = list(totals)
+    return int(total), int(count)
 
 
 def get_file_by_sha256(sha256: str) -> File | None:

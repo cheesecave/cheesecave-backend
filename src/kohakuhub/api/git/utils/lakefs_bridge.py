@@ -21,6 +21,7 @@ from kohakuhub.api.git.utils.objects import (
     create_commit_object,
     create_pack_file,
 )
+from kohakuhub.api.commit.records import read_branch
 from kohakuhub.api.git.utils.server import create_empty_pack
 
 logger = get_logger("GIT_LAKEFS")
@@ -192,10 +193,14 @@ class GitLakeFSBridge:
         if not repo:
             return {}
 
+        # The rows of the branch being served (#11), made ready first
+        await read_branch(self.lakefs_client, self.lakefs_repo, repo, branch)
         file_records = {
             f.path_in_repo: f
             for f in File.select().where(
-                (File.repository == repo) & (File.is_deleted == False)
+                (File.repository == repo)
+                & (File.branch == branch)
+                & (File.is_deleted == False)
             )
         }
 

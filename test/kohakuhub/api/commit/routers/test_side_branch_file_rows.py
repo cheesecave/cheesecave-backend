@@ -1,19 +1,19 @@
-"""A commit to a side branch must not rewrite main's File rows (#11, plan B)."""
+"""Reproduction for #11: a commit to a side branch rewrites main's File row."""
 
 from __future__ import annotations
 
+import base64
 import json
 from contextlib import asynccontextmanager
 
 import pytest
-from fastapi import HTTPException
 
 import kohakuhub.api.commit.routers.operations as commit_ops
 from kohakuhub.api.repo.routers.tree import _build_file_record_map
-from kohakuhub.db import File, LFSObjectHistory
+from kohakuhub.db import File
 from test.kohakuhub.support.factories import make_file, make_repo, make_user
 
-pytestmark = pytest.mark.usefixtures("db_scope")
+pytestmark = pytest.mark.usefixtures("db_fresh")
 
 
 class _Request:
@@ -28,7 +28,7 @@ class _Request:
 class _LakeFS:
     def __init__(self):
         self.branch_data = {"commit_id": "head-commit"}
-        self.commits = 0
+        self.commit_data = {"id": "commit-created"}
 
     async def upload_object(self, **kwargs):
         return {"ok": True}
@@ -52,9 +52,7 @@ class _LakeFS:
         return self.branch_data
 
     async def commit(self, **kwargs):
-        # Each commit gets its own id, as LakeFS gives them (commits are rows)
-        self.commits += 1
-        return {"id": f"commit-{self.commits}"}
+        return self.commit_data
 
     async def get_commit(self, **kwargs):
         return {"id": kwargs["commit_id"]}
@@ -75,8 +73,7 @@ def _file_body(content_b64: str) -> bytes:
 
 @pytest.mark.asyncio
 async def test_side_branch_commit_leaves_main_file_row_unchanged(monkeypatch):
-    client = _LakeFS()
-    monkeypatch.setattr(commit_ops, "get_lakefs_client", lambda: client)
+    monkeypatch.setattr(commit_ops, "get_lakefs_client", lambda: _LakeFS())
     monkeypatch.setattr(commit_ops.operation_lock, "ensure_free", lambda repo: None)
     monkeypatch.setattr(commit_ops.operation_lock, "writing", _no_lock)
     repo = make_repo(make_user("owner"), "repo")
@@ -160,173 +157,202 @@ async def test_main_commit_is_not_skipped_after_a_side_branch_overwrote_the_row(
     assert "main" in uploads
 
 
-# ----- the commit route writes no File row for a side branch -----
+# --- stage 2: every File write carries its branch ----------------------------------
 
-OID_OLD = "a" * 64  # an LFS object main's row links
-OID_NEW = "b" * 64  # an LFS object only the side branch links
-OID_MAIN = "c" * 64
-BLOB_HELLO = "b6fc4c620b67d95f953a5c1c1230aaab5db5a1b0"  # git blob of "hello"
-
-
-class _Lake(_LakeFS):
-    """LakeFS stays a fake; it records what the side-branch tests check."""
-
-    def __init__(self):
-        super().__init__()
-        self.links = []
-        self.listing = []
-        self.on_commit = None
-
-    async def link_physical_address(self, **kwargs):
-        self.links.append((kwargs["branch"], kwargs["path"]))
-        return {"ok": True}
-
-    async def list_objects(self, **kwargs):
-        return {"results": self.listing}
-
-    async def commit(self, **kwargs):
-        if self.on_commit:
-            await self.on_commit()
-        return await super().commit(**kwargs)
+from kohakuhub.api.commit.routers.operations import calculate_git_blob_sha1  # noqa: E402
+from kohakuhub.api.files import check_file_by_sha256, process_preupload_file  # noqa: E402
+from kohakuhub.db_operations import get_file, get_repo_file_metadata_map  # noqa: E402
 
 
-@pytest.fixture
-def lake(monkeypatch):
-    client = _Lake()
+def _blob(content: bytes) -> str:
+    return calculate_git_blob_sha1(content)
+
+
+def _row(repo, branch: str, path: str):
+    return File.get_or_none(
+        (File.repository == repo) & (File.branch == branch) & (File.path_in_repo == path)
+    )
+
+
+def _body(*records) -> bytes:
+    lines = [{"key": "header", "value": {"summary": "change"}}]
+    lines.extend({"key": key, "value": value} for key, value in records)
+    return "\n".join(json.dumps(line) for line in lines).encode("utf-8")
+
+
+def _file(path: str, content: bytes) -> tuple:
+    return "file", {"path": path, "content": base64.b64encode(content).decode(), "encoding": "base64"}
+
+
+def _setup(monkeypatch, client=None):
+    client = client or _LakeFS()
     monkeypatch.setattr(commit_ops, "get_lakefs_client", lambda: client)
     monkeypatch.setattr(commit_ops.operation_lock, "ensure_free", lambda repo: None)
     monkeypatch.setattr(commit_ops.operation_lock, "writing", _no_lock)
-    return client
+    repo = make_repo(make_user("owner"), "repo")
+    return client, repo
 
 
-@pytest.fixture
-def stored(monkeypatch):
-    """S3 is an environment service: every LFS object is stored, 10 bytes."""
-
-    async def exists(bucket, key):
-        return True
-
-    async def metadata(bucket, key):
-        return {"size": 10}
-
-    monkeypatch.setattr(commit_ops.cfg.s3, "bucket", "hub-storage")
-    monkeypatch.setattr(commit_ops, "object_exists", exists)
-    monkeypatch.setattr(commit_ops, "get_object_metadata", metadata)
-
-
-def _ndjson(*operations) -> bytes:
-    records = [{"key": "header", "value": {"summary": "change"}}, *operations]
-    return "\n".join(json.dumps(r) for r in records).encode("utf-8")
-
-
-def _lfs_op(path: str, oid: str) -> dict:
-    return {"key": "lfsFile", "value": {"path": path, "oid": oid, "size": 10, "algo": "sha256"}}
-
-
-def _delete_op(path: str) -> dict:
-    return {"key": "deletedFile", "value": {"path": path}}
-
-
-async def _commit_to(repo, revision: str, *operations):
+async def _commit(repo, revision: str, body: bytes):
     return await commit_ops.commit(
         commit_ops.RepoType.model, repo.namespace, repo.name, revision,
-        _Request(_ndjson(*operations)), user=repo.owner,
+        _Request(body), user=repo.owner,
     )
 
 
-def _row(repo, path):
-    return File.get((File.repository == repo) & (File.path_in_repo == path))
+@pytest.mark.asyncio
+async def test_side_branch_regular_commit_writes_its_own_row(monkeypatch):
+    _, repo = _setup(monkeypatch)
+    await _commit(repo, "main", _body(_file("a.txt", b"hello")))
+    await _commit(repo, "dev", _body(_file("a.txt", b"world")))
+    assert _row(repo, "dev", "a.txt").sha256 == _blob(b"world")
+    assert _row(repo, "main", "a.txt").sha256 == _blob(b"hello")
 
 
-async def test_side_branch_lfs_object_that_main_links_is_still_linked_on_the_branch(
-    lake, stored
-):
-    repo = make_repo(make_user("owner"), "repo")
-    make_file(repo, "weights.bin", sha256=OID_OLD, size=10, lfs=True)
-
-    await _commit_to(repo, "dev", _lfs_op("weights.bin", OID_OLD))
-
-    # Same content as main's row: the branch still gets the link (no skip)
-    assert ("dev", "weights.bin") in lake.links
-    assert _row(repo, "weights.bin").sha256 == OID_OLD
+@pytest.mark.asyncio
+async def test_side_branch_lfs_object_writes_its_own_row(monkeypatch):
+    client, repo = _setup(monkeypatch)
+    monkeypatch.setattr(commit_ops, "object_exists", _always_true)
+    oid = "a" * 64
+    await commit_ops.process_lfs_file("big.bin", oid, 7, "sha256", repo, "repo", "dev")
+    assert _row(repo, "dev", "big.bin").lfs is True
+    assert _row(repo, "dev", "big.bin").sha256 == oid
+    assert _row(repo, "main", "big.bin") is None
 
 
-async def test_side_branch_delete_leaves_the_main_row_active(lake, stored):
-    repo = make_repo(make_user("owner"), "repo")
-    make_file(repo, "README.md", sha256=BLOB_HELLO, size=5)
-
-    await _commit_to(repo, "dev", _delete_op("README.md"))
-
-    assert _row(repo, "README.md").is_deleted is False
+async def _always_true(bucket, key):
+    return True
 
 
-async def test_side_branch_folder_delete_leaves_the_main_rows_active(lake, stored):
-    repo = make_repo(make_user("owner"), "repo")
-    make_file(repo, "data/a.bin", sha256=OID_OLD, size=10, lfs=True)
-    lake.listing = [{"path": "data/a.bin", "path_type": "object"}]
-
-    await _commit_to(repo, "dev", {"key": "deletedFolder", "value": {"path": "data"}})
-
-    assert _row(repo, "data/a.bin").is_deleted is False
-
-
-async def test_side_branch_copy_writes_no_row_for_the_destination(lake, stored):
-    repo = make_repo(make_user("owner"), "repo")
-    make_file(repo, "src.txt", sha256=BLOB_HELLO, size=5)
-    copy = {
-        "key": "copyFile",
-        "value": {"path": "copy.txt", "srcPath": "src.txt", "srcRevision": "main"},
-    }
-
-    await _commit_to(repo, "dev", copy)
-
-    assert File.get_or_none((File.repository == repo) & (File.path_in_repo == "copy.txt")) is None
+@pytest.mark.asyncio
+async def test_side_branch_delete_marks_only_its_own_row(monkeypatch):
+    _, repo = _setup(monkeypatch)
+    await _commit(repo, "main", _body(_file("a.txt", b"hello")))
+    await _commit(repo, "dev", _body(_file("a.txt", b"world")))
+    await _commit(repo, "dev", _body(("deletedFile", {"path": "a.txt"})))
+    assert _row(repo, "dev", "a.txt").is_deleted is True
+    assert _row(repo, "main", "a.txt").is_deleted is False
 
 
-async def test_failed_side_branch_commit_keeps_the_main_row_a_main_commit_wrote_meanwhile(
-    lake, stored
-):
-    repo = make_repo(make_user("owner"), "repo")
-    make_file(repo, "README.md", sha256=BLOB_HELLO, size=5)
+class _FolderLakeFS(_LakeFS):
+    def __init__(self, listing):
+        super().__init__()
+        self.listing = listing
 
-    async def main_lands_meanwhile():
-        File.update(sha256=OID_MAIN, size=10).where(
-            (File.repository == repo) & (File.path_in_repo == "README.md")
-        ).execute()
-        raise HTTPException(409, detail={"error": "conflict"})
-
-    lake.on_commit = main_lands_meanwhile
-
-    with pytest.raises(HTTPException) as refused:
-        await _commit_to(repo, "dev", _file_op("README.md", "d29ybGQ="))  # "world"
-    assert refused.value.status_code == 409
-    # The undo restores only what the branch changed: main's own write survives
-    assert _row(repo, "README.md").sha256 == OID_MAIN
+    async def list_objects(self, **kwargs):
+        return {
+            "results": [
+                {"path": path, "path_type": "object"} for path in self.listing
+            ]
+        }
 
 
-async def test_side_branch_lfs_history_does_not_link_the_main_row(lake, stored):
-    repo = make_repo(make_user("owner"), "repo")
-    make_file(repo, "weights.bin", sha256=OID_OLD, size=10, lfs=True)
+@pytest.mark.asyncio
+async def test_side_branch_folder_delete_marks_only_its_own_rows(monkeypatch):
+    client, repo = _setup(monkeypatch, _FolderLakeFS(["folder/a.txt"]))
+    await _commit(repo, "main", _body(_file("folder/a.txt", b"hello")))
+    await _commit(repo, "dev", _body(_file("folder/a.txt", b"world")))
+    await _commit(repo, "dev", _body(("deletedFolder", {"path": "folder"})))
+    assert _row(repo, "dev", "folder/a.txt").is_deleted is True
+    assert _row(repo, "main", "folder/a.txt").is_deleted is False
 
-    await _commit_to(repo, "dev", _lfs_op("weights.bin", OID_NEW))
 
-    history = LFSObjectHistory.get(
-        (LFSObjectHistory.repository == repo) & (LFSObjectHistory.sha256 == OID_NEW)
+@pytest.mark.asyncio
+async def test_side_branch_copy_writes_its_own_row(monkeypatch):
+    client, repo = _setup(monkeypatch)
+    await _commit(repo, "main", _body(_file("src.txt", b"hello")))
+    await _commit(
+        repo, "dev", _body(("copyFile", {"path": "copy.txt", "srcPath": "src.txt", "srcRevision": "main"}))
     )
-    assert history.file_id is None  # main's row describes main's object, not this one
+    assert _row(repo, "dev", "copy.txt") is not None
+    assert _row(repo, "main", "copy.txt") is None
 
 
-async def test_main_lfs_history_links_the_main_row(lake, stored):
+class _FailingUploadLakeFS(_LakeFS):
+    """The second upload fails, after the first file's row is already written."""
+
+    def __init__(self, fail_path):
+        super().__init__()
+        self.fail_path = fail_path
+
+    async def upload_object(self, **kwargs):
+        if kwargs["path"] == self.fail_path:
+            raise RuntimeError("lakefs is down")
+        return {"ok": True}
+
+
+@pytest.mark.asyncio
+async def test_failed_side_branch_commit_restores_its_own_rows(monkeypatch):
+    client, repo = _setup(monkeypatch)
+    await _commit(repo, "main", _body(_file("a.txt", b"hello")))
+    await _commit(repo, "dev", _body(_file("a.txt", b"old")))
+    client.upload_object = _FailingUploadLakeFS("b.txt").upload_object
+    with pytest.raises(Exception):
+        await _commit(repo, "dev", _body(_file("a.txt", b"new"), _file("b.txt", b"x")))
+    assert _row(repo, "dev", "a.txt").sha256 == _blob(b"old")
+    assert _row(repo, "main", "a.txt").sha256 == _blob(b"hello")
+
+
+def test_metadata_map_and_sha_check_read_the_requested_branch(db_fresh):
     repo = make_repo(make_user("owner"), "repo")
-    make_file(repo, "weights.bin", sha256=OID_OLD, size=10, lfs=True)
+    make_file(repo, "a.txt", "1" * 40, size=5, branch="main")
+    make_file(repo, "a.txt", "2" * 40, size=5, branch="dev")
+    assert get_repo_file_metadata_map(repo, ["a.txt"], branch="main")["a.txt"] == ("1" * 40, 5)
+    assert get_repo_file_metadata_map(repo, ["a.txt"], branch="dev")["a.txt"] == ("2" * 40, 5)
+    assert get_file(repo, "a.txt", branch="dev").sha256 == "2" * 40
+    assert get_file(repo, "a.txt").sha256 == "1" * 40
 
-    await _commit_to(repo, "main", _lfs_op("weights.bin", OID_NEW))
 
-    history = LFSObjectHistory.get(
-        (LFSObjectHistory.repository == repo) & (LFSObjectHistory.sha256 == OID_NEW)
+@pytest.mark.asyncio
+async def test_preupload_dedupe_uses_the_branch_rows(db_fresh):
+    repo = make_repo(make_user("owner"), "repo")
+    make_file(repo, "a.txt", "3" * 40, size=5, branch="main")
+    assert await check_file_by_sha256(repo, "a.txt", "3" * 40, 5, branch="main") is True
+    assert await check_file_by_sha256(repo, "a.txt", "3" * 40, 5, branch="dev") is False
+
+
+# --- stage 3: reads take their branch's rows ---------------------------------------
+
+
+def test_tree_map_reads_the_named_branch_only():
+    from test.kohakuhub.support.factories import make_file
+
+    repo = make_repo(make_user("owner"), "repo")
+    make_file(repo, "README.md", "1" * 40, branch="main")
+    make_file(repo, "README.md", "2" * 40, branch="dev")
+
+    assert _build_file_record_map(repo, ["README.md"], "dev")["README.md"].sha256 == "2" * 40
+    assert _build_file_record_map(repo, ["README.md"])["README.md"].sha256 == "1" * 40
+
+
+@pytest.mark.asyncio
+async def test_copy_from_a_commit_records_the_git_blob_id(monkeypatch):
+    """A regular file copied from a commit (no row of its own) gets the git blob id
+    as its checksum, as the tree and the blobs manifest expect (#11, stage 3)."""
+
+    class _Content(_LakeFS):
+        async def get_object(self, **kwargs):
+            return b"hello"
+
+    client, repo = _setup(monkeypatch, _Content())
+
+    async def no_history(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(commit_ops, "ensure_revision_in_history", no_history)
+    await commit_ops.process_copy_file(
+        "copied.md", "README.md", "commit-id", repo, "lakefs-repo", "main"
     )
-    assert history.file_id == _row(repo, "weights.bin").id
+    assert _row(repo, "main", "copied.md").sha256 == _blob(b"hello")
 
 
-def _file_op(path: str, content_b64: str) -> dict:
-    return {"key": "file", "value": {"path": path, "content": content_b64, "encoding": "base64"}}
+def test_blobs_manifest_reads_the_main_rows_only():
+    from kohakuhub.api.repo.utils.hf import _regular_blob_ids
+    from test.kohakuhub.support.factories import make_file
+
+    repo = make_repo(make_user("owner"), "repo")
+    make_file(repo, "README.md", "1" * 40, branch="main")
+    make_file(repo, "README.md", "2" * 40, branch="dev")
+
+    assert _regular_blob_ids(repo, "main") == {"README.md": "1" * 40}
+    assert _regular_blob_ids(repo, "dev") == {"README.md": "2" * 40}

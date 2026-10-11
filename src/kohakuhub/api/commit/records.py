@@ -12,11 +12,12 @@ from datetime import datetime, timezone
 from typing import NamedTuple
 
 import httpx
-from peewee import EXCLUDED
+from peewee import EXCLUDED, IntegrityError, Value
 
 from kohakuhub import path_commits, usage
 from kohakuhub.api.commit import availability
 from kohakuhub.api.commit.routers.operations import calculate_git_blob_sha1
+from kohakuhub.api.repo.utils import operation_lock
 from kohakuhub.config import cfg
 from kohakuhub.db import File, LFSObjectHistory, LfsHeadRef, Repository, User, db
 from kohakuhub.db_operations import create_commit, should_use_lfs
@@ -171,15 +172,22 @@ class FileIdentity(NamedTuple):
 
 
 async def revision_identities(
-    client, lakefs_repo: str, repo: Repository, ref: str, entries: dict[str, dict]
+    client,
+    lakefs_repo: str,
+    repo: Repository,
+    ref: str,
+    entries: dict[str, dict],
+    derived: set[str] | None = None,
 ) -> dict[str, FileIdentity]:
     """What ``record_commits`` records for each entry (path: LakeFS entry) of
     ``ref``, read from LakeFS and computed on demand: an LFS object's sha256
-    from its address, else the git blob id of the content. Only the default
-    branch's rows are stored (#11), so this answers for every other revision.
-    An entry whose content cannot be read keeps its LakeFS checksum, as a
-    listing without a row does.
+    from its address, else the git blob id of the content. An entry whose
+    content cannot be read keeps its LakeFS checksum, as a listing without a
+    row does; ``derived``, when given, receives the paths whose id was computed
+    instead (the ones it is safe to record).
 
+    Used where a row cannot answer: a commit id (rows are per branch, and a
+    branch's rows describe its head), and the rows a commit records.
     ponytail: no cache; commit ids are immutable, so one could be kept per commit.
     """
     lfs_now = {
@@ -191,6 +199,8 @@ async def revision_identities(
         if path not in lfs_now and not should_use_lfs(repo, path, e.get("size_bytes", 0))
     ]
     blob_ids = await _regular_ids(client, lakefs_repo, ref, regular)
+    if derived is not None:  # the paths whose id is not the checksum LakeFS gave
+        derived.update(path for path in entries if path in lfs_now or path in blob_ids)
     return {
         path: FileIdentity(
             sha256=lfs_now.get(path)
@@ -200,6 +210,150 @@ async def revision_identities(
         )
         for path, e in entries.items()
     }
+
+
+async def revision_branch(client, lakefs_repo: str, revision: str) -> str | None:
+    """``revision`` when LakeFS has it as a branch, else ``None`` (a commit id or
+    a tag): only a branch has File rows of its own (#11)."""
+    if revision == usage.MAIN:
+        return revision
+    try:
+        await client.get_branch(repository=lakefs_repo, branch=revision)
+    except Exception as error:
+        text = str(error).lower()
+        if "404" in text or "not found" in text:
+            return None
+        raise
+    return revision
+
+
+def _has_rows(repo: Repository, branch: str) -> bool:
+    return File.select().where((File.repository == repo) & (File.branch == branch)).exists()
+
+
+async def _listing(client, lakefs_repo: str, ref: str) -> dict[str, dict]:
+    """Every object at ``ref``, as LakeFS lists it (path: entry)."""
+    entries, after = {}, ""
+    while True:
+        page = await client.list_objects(
+            repository=lakefs_repo, ref=ref, prefix="", delimiter="", amount=1000, after=after
+        )
+        results = page if isinstance(page, list) else page.get("results", [])
+        entries.update(
+            (obj["path"], obj) for obj in results if obj.get("path_type") == "object"
+        )
+        pagination = {} if isinstance(page, list) else page.get("pagination") or {}
+        after = pagination.get("next_offset")
+        if not pagination.get("has_more") or not after:
+            return entries
+
+
+def _record_identities(
+    repo: Repository, branch: str, entries: dict[str, dict], identities: dict
+) -> None:
+    """Insert the rows of ``identities`` (path: FileIdentity) that have none. A row the
+    database already holds is kept: ``ON CONFLICT DO NOTHING`` also absorbs the pre-A
+    key's refusal during the expand window, which leaves those paths row-less."""
+    rows = [
+        {
+            "repository": repo,
+            "branch": branch,
+            "path_in_repo": path,
+            "size": entries[path].get("size_bytes") or 0,
+            "sha256": identity.sha256,
+            "lfs": identity.lfs,
+            "is_deleted": False,
+            "owner": repo.owner_id,
+        }
+        for path, identity in identities.items()
+    ]
+    with db.atomic():
+        for batch in _batches(rows):
+            File.insert_many(batch).on_conflict_ignore().execute()
+
+
+async def _seed_rows(client, lakefs_repo: str, repo: Repository, branch: str, commit: str) -> None:
+    """Record the identities of ``branch`` at ``commit``, read from LakeFS."""
+    entries = await _listing(client, lakefs_repo, commit)
+    derived: set[str] = set()
+    identities = await revision_identities(client, lakefs_repo, repo, commit, entries, derived)
+    _record_identities(repo, branch, entries, {p: identities[p] for p in derived})
+
+
+async def branch_identities(
+    client, lakefs_repo: str, repo: Repository, branch: str, entries: dict[str, dict]
+) -> dict[str, FileIdentity]:
+    """What ``branch`` holds for each entry (path: LakeFS entry): its row, and for a path
+    it has no row for, the identity computed from LakeFS at the branch head (#11).
+
+    A path with no row never answers with LakeFS's checksum: that is not a git blob id.
+    The computed identity is recorded, so the next read finds the row. ponytail: during
+    the expand window the pre-A key refuses those rows, so such paths are computed again
+    on every read until the contract; the first read after it records them.
+    """
+    rows = {
+        row.path_in_repo: FileIdentity(row.sha256, row.lfs)
+        for row in File.select(File.path_in_repo, File.sha256, File.lfs).where(
+            (File.repository == repo)
+            & (File.branch == branch)
+            & File.path_in_repo.in_(list(entries))
+            & (File.is_deleted == False)  # noqa: E712
+        )
+    }
+    missing = {path: entry for path, entry in entries.items() if path not in rows}
+    if not missing:
+        return rows
+    derived: set[str] = set()
+    computed = await revision_identities(client, lakefs_repo, repo, branch, missing, derived)
+    _record_identities(repo, branch, missing, {p: computed[p] for p in derived})
+    return {**rows, **computed}
+
+
+async def read_branch(client, lakefs_repo: str, repo: Repository, revision: str) -> str | None:
+    """The branch ``revision`` names, with its File rows in place; ``None`` for a
+    commit id or a tag, whose identities the caller computes.
+
+    A branch with no rows at all (created before rows were kept for it) gets them
+    read from LakeFS once, under the repository's write lock, so a commit that
+    lands meanwhile is not lost: the head is read under that lock.
+    """
+    branch = await revision_branch(client, lakefs_repo, revision)
+    if branch is None or branch == usage.MAIN or _has_rows(repo, branch):
+        return branch
+    async with operation_lock.writing(repo):
+        if not _has_rows(repo, branch):
+            head = (await client.get_branch(repository=lakefs_repo, branch=branch))["commit_id"]
+            await _seed_rows(client, lakefs_repo, repo, branch, head)
+    return branch
+
+
+def copy_branch_rows(repo: Repository, source: str, branch: str) -> None:
+    """A new branch starts with the rows of the branch it was made from (#11).
+
+    The pre-A key (expand window, before the contract) refuses a copy of any path
+    main has. The copy is one statement, so nothing is copied then, and the branch
+    has no rows: they are read from LakeFS as needed (``branch_identities``).
+    """
+    columns = [
+        File.repository,
+        File.branch,
+        File.path_in_repo,
+        File.size,
+        File.sha256,
+        File.lfs,
+        File.is_deleted,
+        File.owner,
+        File.created_at,
+        File.updated_at,
+    ]
+    rows = File.select(File.repository, Value(branch), *columns[2:]).where(
+        (File.repository == repo) & (File.branch == source)
+    )
+    try:
+        with db.atomic():
+            File.insert_from(rows, columns).execute()
+    except IntegrityError:
+        logger.warning(f"Branch {branch} starts without rows: the expand's old key refused the copy")
 
 
 def _regular_bytes(entries: dict[str, dict | None]) -> int:
@@ -258,9 +412,12 @@ def _batches(items: list, size: int = ROW_BATCH):
         yield items[start : start + size]
 
 
-async def _record_files(client, lakefs_repo: str, repo: Repository, head: str, actual: dict, lfs_now: dict) -> None:
-    """The File rows of the paths a default branch's commits changed, as its
-    head holds them now (``actual``: the head's entry at each path)."""
+async def _record_files(
+    client, lakefs_repo: str, repo: Repository, branch: str, head: str, actual: dict, lfs_now: dict
+) -> None:
+    """The File rows of ``branch`` for the paths its commits changed, as its
+    head holds them now (``actual``: the head's entry at each path). Each
+    branch keeps its own rows (#11)."""
     present = {path: e for path, e in actual.items() if e is not None}
     regular = [
         path
@@ -286,11 +443,12 @@ async def _record_files(client, lakefs_repo: str, repo: Repository, head: str, a
                 "lfs": path not in regular,
                 "is_deleted": False,
                 "owner": repo.owner,
+                "branch": branch,
             }
         )
     for batch in _batches(rows):
         File.insert_many(batch).on_conflict(
-            conflict_target=(File.repository, File.path_in_repo),
+            conflict_target=(File.repository, File.branch, File.path_in_repo),
             update={
                 File.sha256: EXCLUDED.sha256,
                 File.size: EXCLUDED.size,
@@ -302,7 +460,7 @@ async def _record_files(client, lakefs_repo: str, repo: Repository, head: str, a
         await asyncio.sleep(0)
     for batch in _batches([path for path, e in actual.items() if e is None]):
         File.update(is_deleted=True, updated_at=now).where(
-            (File.repository == repo) & File.path_in_repo.in_(batch)
+            (File.repository == repo) & (File.branch == branch) & File.path_in_repo.in_(batch)
         ).execute()
         await asyncio.sleep(0)
 
@@ -365,8 +523,7 @@ async def record_commits(
             )
         record_head_change(repo, branch, {path: lfs_now.get(path) for path in changed}, [])
 
-        if branch == usage.MAIN:  # the File rows describe the default branch (#11)
-            await _record_files(client, lakefs_repo, repo, head, actual, lfs_now)
+        await _record_files(client, lakefs_repo, repo, branch, head, actual, lfs_now)
 
         # Each round's LFS versions, attributed to the commit that brought them
         # and dated when it was made: a commit that landed after it stays newer
@@ -378,14 +535,18 @@ async def record_commits(
                 await path_commits.record(repo, branch, {**commit, "id": commit_id}, wanted)
             except Exception as e:
                 logger.warning(f"Could not record the last commits of {commit_id[:8]}: {e}")
-        file_ids = {}  # a side branch's history links no row: they describe main (#11)
-        if branch == usage.MAIN:
-            for batch in _batches(list(lfs_now)):
-                file_ids.update(
-                    File.select(File.path_in_repo, File.id)
-                    .where((File.repository == repo) & File.path_in_repo.in_(batch))
-                    .tuples()
+        # Each history row links the branch's own File row (#11)
+        file_ids = {}
+        for batch in _batches(list(lfs_now)):
+            file_ids.update(
+                File.select(File.path_in_repo, File.id)
+                .where(
+                    (File.repository == repo)
+                    & (File.branch == branch)
+                    & File.path_in_repo.in_(batch)
                 )
+                .tuples()
+            )
         history = [
             {
                 "repository": repo,

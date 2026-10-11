@@ -119,6 +119,31 @@ async def test_build_blob_sha1s_creates_regular_blobs_lfs_pointers_and_support_f
 
 
 @pytest.mark.asyncio
+async def test_build_blob_sha1s_reads_the_rows_of_the_branch_served(monkeypatch, db_scope):
+    """A side branch's LFS pointer is the one its own row names, not main's (#11, stage 3)."""
+    s3 = FakeS3Service()
+    client = FakeLakeFSClient(s3_service=s3, default_bucket="bucket")
+    await client.create_repository("m-owner-demo", "s3://bucket/m-owner-demo", default_branch="main")
+    await client.upload_object("m-owner-demo", "main", "weights/model.safetensors", b"large-binary")
+    await client.commit("m-owner-demo", "main", "seed objects")
+    await client.create_branch("m-owner-demo", "dev", source="main")
+    bridge = _make_bridge(monkeypatch, client)
+
+    repo = make_repo(make_user("owner"), "demo")
+    make_file(repo, "weights/model.safetensors", "f" * 64, size=12, lfs=True)
+    make_file(repo, "weights/model.safetensors", "e" * 64, size=12, lfs=True, branch="dev")
+    monkeypatch.setattr(lakefs_bridge, "should_use_lfs", lambda repo, path, size: False)
+    monkeypatch.setattr(lakefs_bridge.cfg.app, "base_url", "https://hub.local")
+
+    objects = [{"path": "weights/model.safetensors", "path_type": "object", "size_bytes": 12}]
+    on_dev = await bridge._build_blob_sha1s(objects, branch="dev")
+    on_main = await bridge._build_blob_sha1s(objects, branch="main")
+
+    assert "oid sha256:" + "e" * 64 in on_dev["weights/model.safetensors"][1].decode("latin-1")
+    assert "oid sha256:" + "f" * 64 in on_main["weights/model.safetensors"][1].decode("latin-1")
+
+
+@pytest.mark.asyncio
 async def test_build_blob_sha1s_respects_existing_gitattributes(monkeypatch, db_scope):
     s3 = FakeS3Service()
     client = FakeLakeFSClient(s3_service=s3, default_bucket="bucket")

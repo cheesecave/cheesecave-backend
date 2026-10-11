@@ -3,6 +3,7 @@
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from kohakuhub.db import Repository, User
@@ -59,6 +60,14 @@ class CreateBranchCompatPayload(BaseModel):
     startingPoint: Optional[str] = None
 
 
+async def _delete_new_branch(client, lakefs_repo: str, name: str) -> None:
+    """Undo a branch made in this request whose rows could not be made: best effort."""
+    try:
+        await client.delete_branch(repository=lakefs_repo, branch=name)
+    except Exception as e:
+        logger.warning(f"Could not remove branch {name} after a failed create: {e}")
+
+
 @router.post("/{repo_type}s/{namespace}/{name}/branch")
 async def create_branch(
     repo_type: str,
@@ -113,6 +122,15 @@ async def create_branch(
                 name=payload.branch,
                 source=source_commit,
             )
+            # Same content as the source branch: it starts with that branch's rows (#11).
+            # A failure here leaves no branch behind: a retry must not meet a 409 on it.
+            try:
+                source_branch = await records.revision_branch(client, lakefs_repo, source_ref)
+                if source_branch is not None:
+                    records.copy_branch_rows(repo_row, source_branch, payload.branch)
+            except Exception:
+                await _delete_new_branch(client, lakefs_repo, payload.branch)
+                raise
     except HTTPException:
         raise  # refused while an operation holds the repository
     except ValueError as e:
@@ -135,7 +153,12 @@ async def create_branch(
                 f"Branch '{payload.branch}' already exists",
             )
 
-        return hf_server_error(f"Failed to create branch: {error_msg}")
+        # The body names the failure: an empty 500 leaves the operator nothing to act on
+        return JSONResponse(
+            status_code=500,
+            content={"error": f"Failed to create branch: {error_msg}"},
+            headers={"X-Error-Code": HFErrorCode.SERVER_ERROR},
+        )
 
     enqueue_branch_links(repo_row, payload.branch)
     return {"success": True, "message": f"Branch '{payload.branch}' created"}
