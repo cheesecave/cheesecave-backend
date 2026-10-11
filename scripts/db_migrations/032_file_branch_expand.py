@@ -171,18 +171,21 @@ def rollback(database=None, config=None) -> None:
             f"refusing to roll back issue #11: {count} file row(s) on a non-main branch "
             "cannot exist in the pre-A schema; delete them first (see the PR rollout notes)"
         )
+    # The contract leaves the old name taken by its guard (an empty index): it goes,
+    # and the unique key is built in its place.
     if config.app.db_backend == "postgres":
         if _constraint_exists(database, NEW_INDEX):
             database.execute_sql(f'ALTER TABLE "file" DROP CONSTRAINT "{NEW_INDEX}"')
         database.execute_sql(f'DROP INDEX CONCURRENTLY IF EXISTS "{NEW_INDEX}"')
-        if not _index_exists(database, OLD_INDEX):
-            database.execute_sql(
-                f'CREATE UNIQUE INDEX CONCURRENTLY "{OLD_INDEX}" ON "file" ("repository_id", "path_in_repo")'
-            )
+        database.execute_sql(f'DROP INDEX IF EXISTS "{OLD_INDEX}"')
+        database.execute_sql(
+            f'CREATE UNIQUE INDEX CONCURRENTLY "{OLD_INDEX}" ON "file" ("repository_id", "path_in_repo")'
+        )
     else:
         database.execute_sql(f'DROP INDEX IF EXISTS "{NEW_INDEX}"')
+        database.execute_sql(f'DROP INDEX IF EXISTS "{OLD_INDEX}"')
         database.execute_sql(
-            f'CREATE UNIQUE INDEX IF NOT EXISTS "{OLD_INDEX}" ON "file" ("repository_id", "path_in_repo")'
+            f'CREATE UNIQUE INDEX "{OLD_INDEX}" ON "file" ("repository_id", "path_in_repo")'
         )
     database.execute_sql('ALTER TABLE "file" DROP COLUMN "branch"')
     database.execute_sql(f'DROP TABLE IF EXISTS "{ROLLOUT_TABLE}"')

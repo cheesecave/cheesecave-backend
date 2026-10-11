@@ -1,10 +1,18 @@
 #!/usr/bin/env python3
 """Migration 033: drop the old File key (issue #11, CONTRACT, gated).
 
-Drops ``file_repository_id_path_in_repo``. After this, non-main File rows
-can be written: an old replica's ``ON CONFLICT (repository_id, path_in_repo)``
-would fail immediately, so this must not run until every replica runs the
-code that writes ``branch``.
+Drops ``file_repository_id_path_in_repo`` and keeps its name taken by an empty,
+non-unique index (``WHERE FALSE``). After this, non-main File rows can be written.
+
+The name stays taken because an old replica re-creates its declared index at
+every boot (``init_db()`` runs ``CREATE UNIQUE INDEX IF NOT EXISTS`` on it).
+Without the guard that would restore the refusal of side-branch rows. With it,
+the old replica's boot skips the index, and its ``ON CONFLICT (repository_id,
+path_in_repo)`` has no unique key to match, so an old writer fails instead of
+writing. Old images must not run after this point; nothing else can stop them,
+since their code is fixed.
+
+This must not run until every replica runs the code that writes ``branch``.
 
 Not in ``scripts/db_migrations/``: the runner runs every top-level migration
 on each container start and exits non-zero when one fails. A closed gate must
@@ -75,10 +83,13 @@ def contract(database=None, config=None) -> None:
             "new code first; then insert the row "
             f"schema_rollout(name='{MARKER}') and run this script again."
         )
-    if config.app.db_backend == "postgres":
-        database.execute_sql(f'DROP INDEX CONCURRENTLY IF EXISTS "{OLD_INDEX}"')
-    else:
+    # One transaction: the name is never free for an old replica's boot to take.
+    # The guard is empty, so building it is cheap; the drop is a catalog change.
+    with database.atomic():
         database.execute_sql(f'DROP INDEX IF EXISTS "{OLD_INDEX}"')
+        database.execute_sql(
+            f'CREATE INDEX "{OLD_INDEX}" ON "file" ("repository_id", "path_in_repo") WHERE FALSE'
+        )
 
 
 def run() -> bool:
