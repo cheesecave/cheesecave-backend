@@ -257,8 +257,9 @@ def test_rollback_refuses_while_a_non_main_row_exists(expanded):
         sha256="5" * 64,
         owner_id=repo.owner_id,
     )
-    with pytest.raises(RuntimeError, match="1 file row"):
+    with pytest.raises(RuntimeError, match="1 file row") as refused:
         module.rollback(database, module.cfg)
+    assert "docs/deployment/file-branch-contract.md" in str(refused.value)  # where an operator looks next
     assert "branch" in _columns(database)  # nothing changed
 
 

@@ -169,7 +169,7 @@ def rollback(database=None, config=None) -> None:
     if count:
         raise RuntimeError(
             f"refusing to roll back issue #11: {count} file row(s) on a non-main branch "
-            "cannot exist in the pre-A schema; delete them first (see the PR rollout notes)"
+            "cannot exist in the pre-A schema; delete them first (see docs/deployment/file-branch-contract.md, section 6)"
         )
     # The contract leaves the old name taken by its guard (an empty index): it goes,
     # and the unique key is built in its place.
