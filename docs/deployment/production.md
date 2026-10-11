@@ -113,4 +113,6 @@ Database uses `db.atomic()` for safety.
 docker exec postgres pg_dump -U hub kohakuhub | gzip > backup.sql.gz
 ```
 
+Migration 033 (per-branch File rows, issue #11) is an operator step, not a startup migration. Follow its runbook: [File branch contract](file-branch-contract.md).
+
 See [Security](./security.md) for hardening guide.

@@ -335,6 +335,22 @@ python scripts/db_migrations/contract/033_file_branch_contract.py
 
 Without the marker the script refuses (`ContractGateClosed`) and changes nothing.
 
+Before inserting the marker, run the read-only preflight. It exits non-zero and says why when the
+expand is missing or invalid, or when the state is not one the expand produces:
+
+```bash
+python scripts/db_migrations/contract/preflight_033.py
+```
+
+Rollback to the pre-branch schema is a command too. It refuses while any non-main row exists:
+
+```bash
+python scripts/db_migrations/032_file_branch_expand.py --rollback
+```
+
+The full procedure, the abort rules and the rollback paths are in
+[docs/deployment/file-branch-contract.md](../../docs/deployment/file-branch-contract.md).
+
 Rollout order, which is the whole procedure:
 
 1. Expand (032) runs with the other migrations at startup. Old replicas keep serving: they
