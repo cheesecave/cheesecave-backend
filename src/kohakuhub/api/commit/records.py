@@ -253,7 +253,7 @@ def _record_identities(
 ) -> None:
     """Insert the rows of ``identities`` (path: FileIdentity) that have none. A row the
     database already holds is kept: ``ON CONFLICT DO NOTHING`` also absorbs the pre-A
-    key's refusal during the expand window, which leaves those paths row-less."""
+    key's refusal while migration 033 has not run, which leaves those paths row-less."""
     rows = [
         {
             "repository": repo,
@@ -287,9 +287,9 @@ async def branch_identities(
     it has no row for, the identity computed from LakeFS at the branch head (#11).
 
     A path with no row never answers with LakeFS's checksum: that is not a git blob id.
-    The computed identity is recorded, so the next read finds the row. ponytail: during
-    the expand window the pre-A key refuses those rows, so such paths are computed again
-    on every read until the contract; the first read after it records them.
+    The computed identity is recorded, so the next read finds the row. ponytail: while
+    migration 033 has not run, the pre-A key refuses those rows, so such paths are computed again
+    on every read until migration 033 drops the key; the first read after it records them.
     """
     rows = {
         row.path_in_repo: FileIdentity(row.sha256, row.lfs)
@@ -330,7 +330,7 @@ async def read_branch(client, lakefs_repo: str, repo: Repository, revision: str)
 def copy_branch_rows(repo: Repository, source: str, branch: str) -> None:
     """A new branch starts with the rows of the branch it was made from (#11).
 
-    The pre-A key (expand window, before the contract) refuses a copy of any path
+    The pre-A key (still there until migration 033 has run) refuses a copy of any path
     main has. The copy is one statement, so nothing is copied then, and the branch
     has no rows: they are read from LakeFS as needed (``branch_identities``).
     """
@@ -353,7 +353,7 @@ def copy_branch_rows(repo: Repository, source: str, branch: str) -> None:
         with db.atomic():
             File.insert_from(rows, columns).execute()
     except IntegrityError:
-        logger.warning(f"Branch {branch} starts without rows: the expand's old key refused the copy")
+        logger.warning(f"Branch {branch} starts without rows: the old key refused the copy (migration 033 has not run)")
 
 
 def _regular_bytes(entries: dict[str, dict | None]) -> int:

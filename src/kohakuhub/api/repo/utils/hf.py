@@ -60,7 +60,7 @@ class HFErrorCode:
     # downstream HF clients see these as generic HfHubHTTPError; our SPA
     # and admin tooling key off them for branching).
     REPO_EXISTS = "RepoExists"
-    # A side-branch commit to a path main has, while the expand's old key still exists (#11)
+    # A side-branch commit to a path main has, while the old key still exists, i.e. migration 033 has not run (#11)
     BRANCH_PATH_CONFLICT = "BranchPathConflict"
     # A repo id whose LakeFS repository is still being deleted. Informational
     # only: hf_raise_for_status has no 409 branch, so HF clients key off the

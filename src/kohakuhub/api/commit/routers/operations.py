@@ -842,19 +842,19 @@ async def _undo(
 
 
 def _pre_a_refusal(branch: str, path: str) -> HTTPException:
-    """409 for a side-branch write to a path main already has, while the expand's old key
-    still exists: the row cannot be written until the contract drops that key (#11)."""
+    """409 for a side-branch write to a path main already has, while the old key on
+    (repository, path) still exists: migration 033 has not run on this database (#11)."""
     message = (
         f"Branch '{branch}' cannot take a commit that changes '{path}': main already has that "
-        "path, and this database still has the old key on (repository, path). Wait for the "
-        "contract migration (033), or commit to a new path."
+        "path, and this database still has the old key on (repository, path). Run the pending database "
+        "migrations (restart the service so the migration runner executes), or commit to a new path."
     )
     return HTTPException(
         409,
         detail={"error": message},
         headers={
             "X-Error-Code": HFErrorCode.BRANCH_PATH_CONFLICT,
-            "X-Error-Message": "A side branch commit must wait for the contract migration or target a new path",
+            "X-Error-Message": "Run the pending database migrations (restart the service) or target a new path",
         },
     )
 
@@ -933,7 +933,7 @@ async def _stage_one(
                     revision=revision,
                 )
     except IntegrityError as error:
-        # Only the old key refuses a side branch's row for a path main has (#11)
+        # Only the old key (dropped by migration 033) refuses a side branch's row for a path main has (#11)
         if revision == usage.MAIN:
             raise
         raise _pre_a_refusal(revision, path) from error
