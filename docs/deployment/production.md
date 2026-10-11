@@ -131,6 +131,17 @@ Rolling back:
   created without restoring a database backup: those images need the old unique key, and the
   rows of other branches break it. Take a dump before deploying
   (`docker exec postgres pg_dump -U hub kohakuhub | gzip > before-033.sql.gz`) and restore it to go back.
-@@ROLLBACKCMD@@
+
+To go back to `2f3f687` or earlier while no row of another branch exists (a branch made from a populated
+`main` has rows), stop the api and the worker and run, in a container of the current image:
+
+```bash
+python scripts/db_migrations/032_file_branch_expand.py --rollback
+```
+
+It restores the old unique key and drops `file.branch`. With rows of other branches it refuses and
+changes nothing; then restore the dump. Without either, such an image boots and reads, but every
+commit to `main` fails (`no unique or exclusion constraint matching the ON CONFLICT specification`).
+The `schema_rollout` table that 032 created is unused now; it is left in place.
 
 See [Security](./security.md) for hardening guide.
