@@ -191,5 +191,19 @@ def rollback(database=None, config=None) -> None:
     database.execute_sql(f'DROP TABLE IF EXISTS "{ROLLOUT_TABLE}"')
 
 
+def main(argv=None, database=None, config=None) -> int:
+    """``--rollback`` is the operator's command for ``rollback()``; no argument runs the expand."""
+    args = sys.argv[1:] if argv is None else argv
+    if args == ["--rollback"]:
+        try:
+            rollback(database, config)
+        except Exception as exc:
+            print(f"Migration {MIGRATION_NUMBER} rollback refused or failed: {exc}", file=sys.stderr)
+            return 1
+        print(f"Migration {MIGRATION_NUMBER}: rolled back to the pre-A schema")
+        return 0
+    return 0 if run() else 1
+
+
 if __name__ == "__main__":  # pragma: no cover - operator entry point
-    sys.exit(0 if run() else 1)
+    sys.exit(main())
