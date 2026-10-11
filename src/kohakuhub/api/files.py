@@ -12,7 +12,7 @@ from urllib.parse import quote
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import RedirectResponse, Response
 
-from kohakuhub.api.commit.records import read_branch, revision_identities
+from kohakuhub.api.commit.records import branch_identities, read_branch, revision_identities
 from kohakuhub.config import cfg
 from kohakuhub.db import File, Repository, User
 from kohakuhub.db_operations import (
@@ -490,6 +490,10 @@ async def _get_file_metadata(
     branch = await read_branch(client, lakefs_repo, repo_row, revision)
     if branch is not None:
         file_record = get_file(repo_row, path, branch=branch)
+        if file_record is None:  # no row for it on this branch: computed from LakeFS (#11)
+            file_record = (
+                await branch_identities(client, lakefs_repo, repo_row, branch, {path: obj_stat})
+            )[path]
     else:
         file_record = (
             await revision_identities(client, lakefs_repo, repo_row, commit_hash, {path: obj_stat})

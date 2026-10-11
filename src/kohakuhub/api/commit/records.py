@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from typing import NamedTuple
 
 import httpx
-from peewee import EXCLUDED, Value
+from peewee import EXCLUDED, IntegrityError, Value
 
 from kohakuhub import path_commits, usage
 from kohakuhub.api.commit import availability
@@ -172,13 +172,19 @@ class FileIdentity(NamedTuple):
 
 
 async def revision_identities(
-    client, lakefs_repo: str, repo: Repository, ref: str, entries: dict[str, dict]
+    client,
+    lakefs_repo: str,
+    repo: Repository,
+    ref: str,
+    entries: dict[str, dict],
+    derived: set[str] | None = None,
 ) -> dict[str, FileIdentity]:
     """What ``record_commits`` records for each entry (path: LakeFS entry) of
     ``ref``, read from LakeFS and computed on demand: an LFS object's sha256
     from its address, else the git blob id of the content. An entry whose
     content cannot be read keeps its LakeFS checksum, as a listing without a
-    row does.
+    row does; ``derived``, when given, receives the paths whose id was computed
+    instead (the ones it is safe to record).
 
     Used where a row cannot answer: a commit id (rows are per branch, and a
     branch's rows describe its head), and the rows a commit records.
@@ -193,6 +199,8 @@ async def revision_identities(
         if path not in lfs_now and not should_use_lfs(repo, path, e.get("size_bytes", 0))
     ]
     blob_ids = await _regular_ids(client, lakefs_repo, ref, regular)
+    if derived is not None:  # the paths whose id is not the checksum LakeFS gave
+        derived.update(path for path in entries if path in lfs_now or path in blob_ids)
     return {
         path: FileIdentity(
             sha256=lfs_now.get(path)
@@ -240,10 +248,12 @@ async def _listing(client, lakefs_repo: str, ref: str) -> dict[str, dict]:
             return entries
 
 
-async def _seed_rows(client, lakefs_repo: str, repo: Repository, branch: str, commit: str) -> None:
-    """Record the identities of ``branch`` at ``commit``, read from LakeFS."""
-    entries = await _listing(client, lakefs_repo, commit)
-    identities = await revision_identities(client, lakefs_repo, repo, commit, entries)
+def _record_identities(
+    repo: Repository, branch: str, entries: dict[str, dict], identities: dict
+) -> None:
+    """Insert the rows of ``identities`` (path: FileIdentity) that have none. A row the
+    database already holds is kept: ``ON CONFLICT DO NOTHING`` also absorbs the pre-A
+    key's refusal during the expand window, which leaves those paths row-less."""
     rows = [
         {
             "repository": repo,
@@ -260,6 +270,43 @@ async def _seed_rows(client, lakefs_repo: str, repo: Repository, branch: str, co
     with db.atomic():
         for batch in _batches(rows):
             File.insert_many(batch).on_conflict_ignore().execute()
+
+
+async def _seed_rows(client, lakefs_repo: str, repo: Repository, branch: str, commit: str) -> None:
+    """Record the identities of ``branch`` at ``commit``, read from LakeFS."""
+    entries = await _listing(client, lakefs_repo, commit)
+    derived: set[str] = set()
+    identities = await revision_identities(client, lakefs_repo, repo, commit, entries, derived)
+    _record_identities(repo, branch, entries, {p: identities[p] for p in derived})
+
+
+async def branch_identities(
+    client, lakefs_repo: str, repo: Repository, branch: str, entries: dict[str, dict]
+) -> dict[str, FileIdentity]:
+    """What ``branch`` holds for each entry (path: LakeFS entry): its row, and for a path
+    it has no row for, the identity computed from LakeFS at the branch head (#11).
+
+    A path with no row never answers with LakeFS's checksum: that is not a git blob id.
+    The computed identity is recorded, so the next read finds the row. ponytail: during
+    the expand window the pre-A key refuses those rows, so such paths are computed again
+    on every read until the contract; the first read after it records them.
+    """
+    rows = {
+        row.path_in_repo: FileIdentity(row.sha256, row.lfs)
+        for row in File.select(File.path_in_repo, File.sha256, File.lfs).where(
+            (File.repository == repo)
+            & (File.branch == branch)
+            & File.path_in_repo.in_(list(entries))
+            & (File.is_deleted == False)  # noqa: E712
+        )
+    }
+    missing = {path: entry for path, entry in entries.items() if path not in rows}
+    if not missing:
+        return rows
+    derived: set[str] = set()
+    computed = await revision_identities(client, lakefs_repo, repo, branch, missing, derived)
+    _record_identities(repo, branch, missing, {p: computed[p] for p in derived})
+    return {**rows, **computed}
 
 
 async def read_branch(client, lakefs_repo: str, repo: Repository, revision: str) -> str | None:
@@ -281,7 +328,12 @@ async def read_branch(client, lakefs_repo: str, repo: Repository, revision: str)
 
 
 def copy_branch_rows(repo: Repository, source: str, branch: str) -> None:
-    """A new branch starts with the rows of the branch it was made from (#11)."""
+    """A new branch starts with the rows of the branch it was made from (#11).
+
+    The pre-A key (expand window, before the contract) refuses a copy of any path
+    main has. The copy is one statement, so nothing is copied then, and the branch
+    has no rows: they are read from LakeFS as needed (``branch_identities``).
+    """
     columns = [
         File.repository,
         File.branch,
@@ -297,8 +349,11 @@ def copy_branch_rows(repo: Repository, source: str, branch: str) -> None:
     rows = File.select(File.repository, Value(branch), *columns[2:]).where(
         (File.repository == repo) & (File.branch == source)
     )
-    with db.atomic():
-        File.insert_from(rows, columns).execute()
+    try:
+        with db.atomic():
+            File.insert_from(rows, columns).execute()
+    except IntegrityError:
+        logger.warning(f"Branch {branch} starts without rows: the expand's old key refused the copy")
 
 
 def _regular_bytes(entries: dict[str, dict | None]) -> int:

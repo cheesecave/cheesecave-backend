@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, Form, Query, Request
 from fastapi.responses import JSONResponse
 
 from kohakuhub import path_commits, usage
-from kohakuhub.api.commit.records import read_branch, revision_identities
+from kohakuhub.api.commit.records import branch_identities, read_branch, revision_identities
 from kohakuhub.config import cfg
 from kohakuhub.auth.dependencies import get_optional_user
 from kohakuhub.auth.permissions import check_repo_read_permission
@@ -348,6 +348,7 @@ async def _process_single_path(
     file_records: dict[str, File] | None,
     semaphore: asyncio.Semaphore,
     expand: bool,
+    branch: str | None = None,
 ) -> dict | None:
     """Resolve one path to either a file or directory entry."""
     client = get_lakefs_client()
@@ -360,13 +361,19 @@ async def _process_single_path(
                 path=clean_path,
             )
 
-            if file_records is None:  # a side branch: its own identity, from LakeFS (#11)
+            if file_records is None:  # a commit id: its identity is computed (#11)
                 identities = await revision_identities(
                     client, lakefs_repo, repository, revision, {clean_path: obj_stats}
                 )
                 file_record = identities[clean_path]
             else:
                 file_record = file_records.get(clean_path)
+                if file_record is None:  # a path the branch has no row for (#11)
+                    file_record = (
+                        await branch_identities(
+                            client, lakefs_repo, repository, branch, {clean_path: obj_stats}
+                        )
+                    )[clean_path]
             checksum = (
                 file_record.sha256
                 if file_record and file_record.sha256
@@ -523,7 +530,9 @@ async def list_repo_tree(
     }
     branch = await read_branch(get_lakefs_client(), lakefs_repo, repo_row, revision)
     if branch is not None:
-        file_records = _build_file_record_map(repo_row, list(file_objects), branch)
+        file_records = await branch_identities(
+            get_lakefs_client(), lakefs_repo, repo_row, branch, file_objects
+        )
     else:  # a commit id or a tag: its identities are computed (#11)
         file_records = await revision_identities(
             get_lakefs_client(), lakefs_repo, repo_row, resolved_revision, file_objects
@@ -629,6 +638,7 @@ async def get_paths_info(
                     file_records=file_records,
                     semaphore=semaphore,
                     expand=expand,
+                    branch=branch,
                 )
                 for clean_path in normalized_paths
             ]
