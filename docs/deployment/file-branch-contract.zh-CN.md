@@ -63,19 +63,19 @@ icon: i-carbon-branch
 
 ### 第 1 步：验证副本
 
-每个副本报告的 `git_sha` 都必须包含 `d3140a2`。版本接口是公开的：
+每个副本报告的 `build.git_sha` 都必须包含 `d3140a2`。版本接口是公开的，构建标识位于 `build` 之下：
 
 ```sh
 curl -fsS http://<replica>:48888/api/version
 ```
 
-用代码仓库（本仓库的检出，而不是副本）核对报告的 `git_sha`：
+用代码仓库（本仓库的检出，而不是副本）核对报告的 `build.git_sha`：
 
 ```sh
-git -C <checkout> merge-base --is-ancestor d3140a2 <git_sha> && echo "ok: <replica> runs d3140a2 or later"
+git -C <checkout> merge-base --is-ancestor d3140a2 <build.git_sha> && echo "ok: <replica> runs d3140a2 or later"
 ```
 
-预期：每个副本都输出 `ok`。如果 `git_sha` 为 `null`，说明镜像构建时没有设置 `KOHAKU_HUB_GIT_SHA`。在确认镜像是 `d3140a2` 或之后的版本（例如通过构建记录）之前不要继续。任何运行旧镜像的副本：停止它，让其中的进行中请求结束，并保持停止。不要重新启动它。
+预期：每个副本都输出 `ok`。如果 `build.git_sha` 为 `null`，说明镜像构建时没有设置 `KOHAKU_HUB_GIT_SHA`。在确认镜像是 `d3140a2` 或之后的版本（例如通过构建记录）之前不要继续。任何运行旧镜像的副本：停止它，让其中的进行中请求结束，并保持停止。不要重新启动它。
 
 ### 第 2 步：备份数据库
 
@@ -173,7 +173,7 @@ docker logs --since 30m <replica> 2>&1 | grep -c "no unique or exclusion constra
 
 | 情况 | 操作 | 原因 |
 |---|---|---|
-| 第 1 步发现某个副本早于 `d3140a2`，或无法确认其 `git_sha` | 停止该副本并保持停止。不要插入标记。 | 旧代码通过收缩将删除的键写入 `main`。 |
+| 第 1 步发现某个副本早于 `d3140a2`，或无法确认其 `build.git_sha` | 停止该副本并保持停止。不要插入标记。 | 旧代码通过收缩将删除的键写入 `main`。 |
 | 第 2 步：转储失败或无法读取 | 停止，不继续。 | 没有备份就不做收缩。 |
 | 第 3 步退出码为 `1` | 读 `FAIL` 行。`expand_032` 或 `rollout_table` 失败，说明 032 没有完成：运行 `docker run --rm --env-file <env-file> $IMAGE python scripts/db_migrations/032_file_branch_expand.py`（它会完成扩展），然后重做第 3 步。`new_key_valid` 显示 `INVALID`，说明构建被中断：同一命令会重建它。`shared_path_rows` 失败说明状态已损坏：停止并先调查。 | 预检是有意拒绝的；收缩本身也会拒绝，甚至更糟。 |
 | 第 3 步：有长事务未结束 | 等它结束，或停止持有它的进程。重做第 3 步。 | 收缩需要对 `file` 的短暂锁。 |

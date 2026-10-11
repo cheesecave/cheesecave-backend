@@ -63,19 +63,19 @@ Run the steps in order. Stop at the first failure and follow the abort rules in 
 
 ### Step 1: verify the replicas
 
-Every replica must report a `git_sha` that contains `d3140a2`. The version endpoint is public:
+Every replica must report a `build.git_sha` that contains `d3140a2`. The version endpoint is public and returns the build identity under `build`:
 
 ```sh
 curl -fsS http://<replica>:48888/api/version
 ```
 
-Check the reported `git_sha` against the repository (a checkout of this repository, not the replica):
+Check the reported `build.git_sha` against the repository (a checkout of this repository, not the replica):
 
 ```sh
-git -C <checkout> merge-base --is-ancestor d3140a2 <git_sha> && echo "ok: <replica> runs d3140a2 or later"
+git -C <checkout> merge-base --is-ancestor d3140a2 <build.git_sha> && echo "ok: <replica> runs d3140a2 or later"
 ```
 
-Expected: `ok` for every replica. If `git_sha` is `null`, the image was built without `KOHAKU_HUB_GIT_SHA`. Do not continue until you know the image is `d3140a2` or later (for example by its build record). Any replica that runs an older image: stop it, let its in-flight requests finish, and keep it stopped. Do not restart it.
+Expected: `ok` for every replica. If `build.git_sha` is `null`, the image was built without `KOHAKU_HUB_GIT_SHA`. Do not continue until you know the image is `d3140a2` or later (for example by its build record). Any replica that runs an older image: stop it, let its in-flight requests finish, and keep it stopped. Do not restart it.
 
 ### Step 2: back up the database
 
@@ -173,7 +173,7 @@ Expected: `0` for both log searches on every replica that runs `d3140a2` or late
 
 | If | Do | Why |
 |---|---|---|
-| Step 1 finds a replica older than `d3140a2`, or a `git_sha` you cannot confirm | Stop that replica and keep it stopped. Do not insert the marker. | The older code writes `main` through the key the contract drops. |
+| Step 1 finds a replica older than `d3140a2`, or a `build.git_sha` you cannot confirm | Stop that replica and keep it stopped. Do not insert the marker. | The older code writes `main` through the key the contract drops. |
 | Step 2: the dump fails or is not readable | Stop. Do not continue. | No backup, no contract. |
 | Step 3 exits `1` | Read the `FAIL` line. `expand_032` or `rollout_table` failing means 032 did not complete: run `docker run --rm --env-file <env-file> $IMAGE python scripts/db_migrations/032_file_branch_expand.py` (it finishes the expand) and run step 3 again. `new_key_valid` failing with `INVALID` means an interrupted build: the same command rebuilds it. `shared_path_rows` failing means a broken state: stop and investigate before anything else. | The preflight refuses on purpose; the contract would refuse too, or worse. |
 | Step 3: a long transaction is open | Wait for it to end, or stop the process holding it. Re-run step 3. | The contract needs a short lock on `file`. |
