@@ -9,6 +9,7 @@ import json
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
+from peewee import IntegrityError
 
 from kohakuhub import path_commits, usage
 from kohakuhub.config import cfg
@@ -840,20 +841,35 @@ async def _undo(
             logger.warning(f"Could not drop what a failed commit staged at {path!r}: {e}")
 
 
-async def _stage_operations(
-    operations: list[dict], repo_row: Repository, lakefs_repo: str, revision: str
-) -> tuple[bool, list[dict]]:
-    """Stage each operation on the branch; whether any changed something,
-    and the LFS files to track once committed."""
-    files_changed = False
-    pending_lfs_tracking = []
+def _pre_a_refusal(branch: str, path: str) -> HTTPException:
+    """409 for a side-branch write to a path main already has, while the expand's old key
+    still exists: the row cannot be written until the contract drops that key (#11)."""
+    message = (
+        f"Branch '{branch}' cannot take a commit that changes '{path}': main already has that "
+        "path, and this database still has the old key on (repository, path). Wait for the "
+        "contract migration (033), or commit to a new path."
+    )
+    return HTTPException(
+        409,
+        detail={"error": message},
+        headers={
+            "X-Error-Code": HFErrorCode.BRANCH_PATH_CONFLICT,
+            "X-Error-Message": "A side branch commit must wait for the contract migration or target a new path",
+        },
+    )
 
-    for op in operations:
-        key = op["key"]
-        value = op["value"]
-        path = value.get("path")
-        logger.info(f"Processing {key}: {path}")
 
+async def _stage_one(
+    op: dict, repo_row: Repository, lakefs_repo: str, revision: str
+) -> tuple[bool, dict | None]:
+    """Stage one operation on the branch: whether it changed something, and the LFS
+    file to track once committed."""
+    key = op["key"]
+    value = op["value"]
+    path = value.get("path")
+    logger.info(f"Processing {key}: {path}")
+    changed, lfs_info = False, None
+    try:
         match key:
             case "file":
                 # Regular file with inline content
@@ -865,7 +881,6 @@ async def _stage_operations(
                     lakefs_repo=lakefs_repo,
                     revision=revision,
                 )
-                files_changed = files_changed or changed
 
             case "lfsFile":
                 # LFS file already in S3
@@ -878,13 +893,11 @@ async def _stage_operations(
                     lakefs_repo=lakefs_repo,
                     revision=revision,
                 )
-                files_changed = files_changed or changed
                 if lfs_info:
                     logger.debug(
                         f"[COMMIT_OP] Adding LFS file to tracking queue: {path} "
                         f"(sha256={lfs_info['sha256'][:8]}, size={lfs_info['size']:,})"
                     )
-                    pending_lfs_tracking.append(lfs_info)
                 else:
                     logger.warning(
                         f"[COMMIT_OP] process_lfs_file returned NO tracking info for: {path} "
@@ -899,7 +912,6 @@ async def _stage_operations(
                     lakefs_repo=lakefs_repo,
                     revision=revision,
                 )
-                files_changed = files_changed or changed
 
             case "deletedFolder":
                 # Delete folder recursively
@@ -909,7 +921,6 @@ async def _stage_operations(
                     lakefs_repo=lakefs_repo,
                     revision=revision,
                 )
-                files_changed = files_changed or changed
 
             case "copyFile":
                 # Copy file
@@ -921,11 +932,42 @@ async def _stage_operations(
                     lakefs_repo=lakefs_repo,
                     revision=revision,
                 )
-                files_changed = files_changed or changed
-                if lfs_info:
-                    pending_lfs_tracking.append(lfs_info)
+    except IntegrityError as error:
+        # Only the old key refuses a side branch's row for a path main has (#11)
+        if revision == usage.MAIN:
+            raise
+        raise _pre_a_refusal(revision, path) from error
+    return changed, lfs_info
 
+
+async def _stage_operations(
+    operations: list[dict], repo_row: Repository, lakefs_repo: str, revision: str
+) -> tuple[bool, list[dict]]:
+    """Stage each operation on the branch; whether any changed something,
+    and the LFS files to track once committed."""
+    files_changed = False
+    pending_lfs_tracking = []
+    for op in operations:
+        changed, lfs_info = await _stage_one(op, repo_row, lakefs_repo, revision)
+        files_changed = files_changed or changed
+        if lfs_info:
+            pending_lfs_tracking.append(lfs_info)
     return files_changed, pending_lfs_tracking
+
+
+async def _no_change_response(client, lakefs_repo: str, revision: str, repo_type, repo_id: str) -> dict:
+    """What a commit with no effective change answers: the branch's head, 200."""
+    try:
+        branch = await client.get_branch(repository=lakefs_repo, branch=revision)
+        commit_id = branch["commit_id"]
+    except Exception:
+        commit_id = "no-changes"
+    commit_url = f"{build_public_repo_path(repo_type, repo_id)}/commit/{commit_id}"
+    return {
+        "commitUrl": commit_url,
+        "commitOid": commit_id,
+        "pullRequestUrl": None,
+    }
 
 
 @router.post("/{repo_type}s/{namespace}/{name}/commit/{revision}")
@@ -1049,19 +1091,7 @@ async def commit(
 
     # If no files changed, return early
     if not files_changed:
-        try:
-            branch = await client.get_branch(repository=lakefs_repo, branch=revision)
-            commit_id = branch["commit_id"]
-        except Exception:
-            commit_id = "no-changes"
-
-        commit_url = f"{build_public_repo_path(repo_type, repo_id)}/commit/{commit_id}"
-
-        return {
-            "commitUrl": commit_url,
-            "commitOid": commit_id,
-            "pullRequestUrl": None,
-        }
+        return await _no_change_response(client, lakefs_repo, revision, repo_type, repo_id)
 
     # Create commit in LakeFS
     commit_msg = header.get("summary", "Commit via API")
@@ -1084,6 +1114,12 @@ async def commit(
         await _undo(client, lakefs_repo, revision, repo_row, touched, before)
         if isinstance(error, HTTPException):
             raise
+        # The staged content is what the branch holds (a row was missing, so the
+        # content was written again): nothing to commit, which is not a failure (#11)
+        from kohakuhub.api.commit.records import refusal  # imports this module
+
+        if refusal(error) == "unchanged":
+            return await _no_change_response(client, lakefs_repo, revision, repo_type, repo_id)
         raise HTTPException(500, detail={"error": f"Commit failed: {error}"}) from error
     except Exception as e:
         # No answer: the commit may have landed, so the branch stays as it is
