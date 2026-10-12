@@ -18,14 +18,10 @@ def _make_bridge(monkeypatch, client):
     return lakefs_bridge.GitLakeFSBridge("model", "owner", "demo", lakefs_repo="m-owner-demo")
 
 
-def test_create_lfs_pointer_and_lfsconfig_use_hf_compatible_format():
+def test_create_lfs_pointer_uses_the_hf_compatible_format():
     pointer = lakefs_bridge.create_lfs_pointer("abc123", 42).decode("utf-8")
-    config = lakefs_bridge.generate_lfsconfig("https://hub.local", "owner", "demo").decode("utf-8")
 
-    assert "version https://git-lfs.github.com/spec/v1" in pointer
-    assert "oid sha256:abc123" in pointer
-    assert "size 42" in pointer
-    assert "\turl = https://hub.local/owner/demo.git/info/lfs" in config
+    assert pointer == "version https://git-lfs.github.com/spec/v1\noid sha256:abc123\nsize 42\n"
 
 
 @pytest.mark.asyncio
@@ -97,8 +93,6 @@ async def test_build_blob_sha1s_creates_regular_blobs_lfs_pointers_and_support_f
     repo = make_repo(make_user("owner"), "demo")
     make_file(repo, "weights/model.safetensors", "f" * 64, size=12, lfs=True)
     monkeypatch.setattr(lakefs_bridge, "should_use_lfs", lambda repo, path, size: False)
-    monkeypatch.setattr(lakefs_bridge.cfg.app, "base_url", "https://hub.local")
-
     blob_data = await bridge._build_blob_sha1s(
         [
             {"path": "README.md", "path_type": "object", "size_bytes": 6},
@@ -110,12 +104,12 @@ async def test_build_blob_sha1s_creates_regular_blobs_lfs_pointers_and_support_f
     readme_blob = blob_data["README.md"][1].split(b"\0", 1)[1]
     lfs_pointer = blob_data["weights/model.safetensors"][1].split(b"\0", 1)[1].decode("utf-8")
     gitattributes = blob_data[".gitattributes"][1].split(b"\0", 1)[1].decode("utf-8")
-    lfsconfig = blob_data[".lfsconfig"][1].split(b"\0", 1)[1].decode("utf-8")
 
     assert readme_blob == b"readme"
     assert "oid sha256:" + "f" * 64 in lfs_pointer
     assert "weights/model.safetensors filter=lfs" in gitattributes
-    assert "https://hub.local/owner/demo.git/info/lfs" in lfsconfig
+    # git-lfs finds <remote>/info/lfs itself; a pinned endpoint in the tree was wrong for datasets
+    assert ".lfsconfig" not in blob_data
 
 
 @pytest.mark.asyncio
@@ -133,8 +127,6 @@ async def test_build_blob_sha1s_reads_the_rows_of_the_branch_served(monkeypatch,
     make_file(repo, "weights/model.safetensors", "f" * 64, size=12, lfs=True)
     make_file(repo, "weights/model.safetensors", "e" * 64, size=12, lfs=True, branch="dev")
     monkeypatch.setattr(lakefs_bridge, "should_use_lfs", lambda repo, path, size: False)
-    monkeypatch.setattr(lakefs_bridge.cfg.app, "base_url", "https://hub.local")
-
     objects = [{"path": "weights/model.safetensors", "path_type": "object", "size_bytes": 12}]
     on_dev = await bridge._build_blob_sha1s(objects, branch="dev")
     on_main = await bridge._build_blob_sha1s(objects, branch="main")
@@ -160,8 +152,6 @@ async def test_build_blob_sha1s_respects_existing_gitattributes(monkeypatch, db_
 
     make_repo(make_user("owner"), "demo")  # a repository with no File rows yet
     monkeypatch.setattr(lakefs_bridge, "should_use_lfs", lambda repo, path, size: False)
-    monkeypatch.setattr(lakefs_bridge.cfg.app, "base_url", "https://hub.local")
-
     blob_data = await bridge._build_blob_sha1s(
         [
             {"path": ".gitattributes", "path_type": "object", "size_bytes": 42},

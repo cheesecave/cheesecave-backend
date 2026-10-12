@@ -38,6 +38,7 @@ from kohakuhub.api.files import resolve_file_get, resolve_file_head
 from kohakuhub.api.org import router as org
 from kohakuhub.api.quota import router as quota
 from kohakuhub.auth.dependencies import get_optional_user
+from kohakuhub.api.git.errors import GitProtocolError, render_protocol_error
 from kohakuhub.auth.permissions import RepoReadDeniedError
 from kohakuhub.utils.s3 import init_storage
 from kohakuhub.api.git.routers import http as git_http
@@ -156,6 +157,12 @@ async def _repo_read_denied_handler(request: Request, exc: RepoReadDeniedError):
     layer is hiding the repo.
     """
     return hf_repo_not_found(exc.repo_id, exc.repo_type)
+
+@app.exception_handler(GitProtocolError)
+async def _git_protocol_error_handler(request: Request, exc: GitProtocolError):
+    """Answer git and git-lfs routes in the shape those clients expect (challenge included)."""
+    return render_protocol_error(exc)
+
 
 app.add_middleware(
     CORSMiddleware,

@@ -5,7 +5,6 @@ import asyncio
 import fnmatch
 import hashlib
 
-from kohakuhub.config import cfg
 from kohakuhub.constants import (
     DEFAULT_COMMIT_MESSAGE,
     DEFAULT_EMAIL,
@@ -34,15 +33,6 @@ oid sha256:{sha256}
 size {size}
 """
     return pointer.encode("utf-8")
-
-
-def generate_lfsconfig(base_url: str, namespace: str, name: str) -> bytes:
-    """Generate .lfsconfig."""
-    lfs_url = f"{base_url}/{namespace}/{name}.git/info/lfs"
-    config = f"""[lfs]
-\turl = {lfs_url}
-"""
-    return config.encode("utf-8")
 
 
 class GitLakeFSBridge:
@@ -342,11 +332,10 @@ class GitLakeFSBridge:
             sha1, blob_with_header = create_blob_object(gitattributes)
             blob_data[".gitattributes"] = (sha1, blob_with_header, "100644")
 
-        # Add .lfsconfig
-        if lfs_paths:
-            lfsconfig = generate_lfsconfig(cfg.app.base_url, self.namespace, self.name)
-            sha1, blob_with_header = create_blob_object(lfsconfig)
-            blob_data[".lfsconfig"] = (sha1, blob_with_header, "100644")
+        # No .lfsconfig: git-lfs derives <remote>/info/lfs from the clone URL, which is
+        # right for every URL form (a dataset's path carries its type). A file in the
+        # tree that names one server and one path was wrong for datasets and Spaces
+        # and would pin the deployment's address into the history.
 
         return blob_data
 

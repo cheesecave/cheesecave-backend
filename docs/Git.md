@@ -43,6 +43,13 @@ git clone http://hub.example.com/namespace/repo-name.git
 # Private repository (requires token)
 git clone http://username:your-token@hub.example.com/namespace/private-repo.git
 
+# Datasets and Spaces carry their type in the URL, as on the Hugging Face Hub
+git clone http://hub.example.com/datasets/namespace/dataset-name.git
+git clone http://hub.example.com/spaces/namespace/space-name.git
+
+# Pointer files only, no large files (fetch some later with `git lfs pull --include=...`)
+GIT_LFS_SKIP_SMUDGE=1 git clone http://hub.example.com/namespace/repo-name.git
+
 # Clone and download large files
 cd repo-name
 git lfs install
@@ -80,6 +87,24 @@ $ ls -lh model.safetensors
 ```
 
 ## Authentication Guide
+
+### How Git Authenticates
+
+`git` never sends credentials on its first request. It asks without them, and only
+if the server answers `401` with a `WWW-Authenticate` challenge does it retry with
+the credentials from the URL or from a credential helper. The server therefore
+behaves as the Hugging Face Hub does:
+
+| Caller | Public repository | Private or missing repository |
+|---|---|---|
+| Not signed in (or a wrong token) | read works | `401` with a challenge, the same answer for both, so git asks for credentials |
+| Signed in, no access | read works | `404`, the same answer for private and missing |
+| Signed in, read-only | read works | read works; a push is `403` |
+
+A credential that does not check out counts as anonymous, so a wrong token on a
+public repository is harmless. The same credentials serve `git` and `git-lfs`:
+HTTP Basic (the user name is ignored, the access token is the password) and
+`Authorization: Bearer <token>` are both accepted by the git and the LFS routes.
 
 ### Using Access Tokens
 
@@ -142,11 +167,9 @@ git lfs pull  # Download later
 # List LFS-tracked files
 git lfs ls-files
 
-# Check LFS configuration
-cat .lfsconfig
-# Should show:
-# [lfs]
-# 	url = http://hub.example.com/namespace/repo.git/info/lfs
+# Check LFS configuration (git-lfs derives the endpoint from the clone URL)
+git lfs env | grep Endpoint
+# Should show: Endpoint=http://hub.example.com/namespace/repo.git/info/lfs (auth=basic)
 ```
 
 ## Cloudflare Setup
@@ -205,12 +228,11 @@ git clone https://git.hub.example.com/org/repo.git
 ### LFS Issues
 
 **Problem:** `git lfs pull` does nothing
-**Cause:** `.lfsconfig` missing or incorrect
-**Solution:** Check/create `.lfsconfig`:
-```bash
-[lfs]
-	url = http://hub.example.com/namespace/repo.git/info/lfs
-```
+**Cause:** the LFS filter is not installed, or git-lfs has no credentials for a private repository
+**Solution:** `git lfs install`, then `git lfs env | grep Endpoint` should show the clone URL with
+`/info/lfs` appended (the repository carries no `.lfsconfig`; the endpoint always follows the clone
+URL, including for datasets and Spaces). For a private repository put the token in the clone URL or
+use a credential helper.
 
 ---
 
@@ -402,7 +424,16 @@ def parse_pkt_line(data: bytes) -> tuple[bytes | None, bytes]:
 | GET    | `/{namespace}/{name}.git/info/refs`         | Service advertisement|
 | GET    | `/{namespace}/{name}.git/HEAD`              | Get HEAD reference   |
 | POST   | `/{namespace}/{name}.git/git-upload-pack`   | Clone/fetch/pull     |
-| POST   | `/{namespace}/{name}.git/git-receive-pack`  | Push                 |
+| POST   | `/{namespace}/{name}.git/git-receive-pack`  | Push (answers `501`) |
+
+Every path is also served with the repository type in front
+(`/datasets/{namespace}/{name}.git/...`, `/spaces/...`, `/models/...`) and without
+the `.git` suffix. Without a type prefix the first repository with that name wins
+(model, then dataset, then Space); a prefix names the type exactly. An unknown
+`service` parameter is a plain `400 invalid service`. Error bodies on these routes
+are `text/plain`; on the LFS routes they are `application/vnd.git-lfs+json` with a
+`message` field and, for `401`, one `LFS-Authenticate` header per scheme (Basic and
+Bearer).
 
 ### Content-Type Headers
 
@@ -911,54 +942,35 @@ def parse_git_credentials(authorization: str | None) -> tuple[str | None, str | 
 ### Token Validation
 
 ```python
-from datetime import datetime, timezone
+from kohakuhub.auth.dependencies import get_user_by_token
 
-from kohakuhub.auth.utils import hash_token
-from kohakuhub.db import Token, User, db
-
-async def get_user_from_git_auth(authorization: str | None) -> User | None:
-    """Authenticate user from Git Basic Auth."""
-    username, token_str = parse_git_credentials(authorization)
-    if not username or not token_str:
-        return None
-
-    # Hash and lookup token
-    token_hash = hash_token(token_str)
-
-    # Database operations are synchronous with transactions
-    with db.atomic():
-        token = Token.get_or_none(Token.token_hash == token_hash)
-        if not token:
-            return None
-
-        # Get user
-        user = User.get_or_none(User.id == token.user_id)
-        if not user or not user.is_active:
-            return None
-
-        # Update last used
-        Token.update(last_used=datetime.now(timezone.utc)).where(
-            Token.id == token.id
-        ).execute()
-
-    return user
+# One lookup for every credential form: the active user an API token belongs to,
+# or None. A token that is found counts as used (last_used).
+user = get_user_by_token(token_string)
 ```
+
+`kohakuhub.api.git.auth.get_git_user` is the FastAPI dependency the git and LFS routes
+use. It takes the token from the Basic password (the user name is ignored) or from a
+Bearer header, falls back to a session cookie, and returns `None` when nothing checks out.
 
 ### Permission Checks
 
+The git and LFS routes resolve the caller with `kohakuhub.api.git.auth.get_git_user`
+(Basic, Bearer or a session cookie; anything invalid is `None`) and decide with the
+helpers in `kohakuhub/api/git/routers/http.py`:
+
 ```python
-from kohakuhub.auth.permissions import check_repo_read_permission, check_repo_write_permission
+# clone/fetch/pull (upload-pack): a repository the caller cannot see is 401 + challenge
+# for an anonymous caller and 404 for a signed-in one
+repo = _authorize_read(repo, user)
 
-# For clone/fetch/pull (upload-pack)
-user = await get_user_from_git_auth(authorization)
-check_repo_read_permission(repo, user)  # Raises HTTPException if denied
-
-# For push (receive-pack)
-user = await get_user_from_git_auth(authorization)
-if not user:
-    raise HTTPException(401, detail="Authentication required for push")
-check_repo_write_permission(repo, user)
+# push (receive-pack): no user is 401 + challenge before the repository is looked up;
+# a repository the caller cannot see is 404; visible but not writable is 403
+repo = _authorize_write(repo, user)
 ```
+
+Refusals are `GitProtocolError` (`kohakuhub/api/git/errors.py`), rendered by an
+application-level handler in the shape the client expects.
 
 ---
 
@@ -1278,45 +1290,36 @@ class GitUploadPackHandler:
 ### 2. git_http.py (FastAPI Router)
 
 ```python
-"""Git Smart HTTP endpoints."""
+"""Git Smart HTTP endpoints (abridged from kohakuhub/api/git/routers/http.py)."""
 
-from fastapi import APIRouter, Header, Request, Response
+from fastapi import APIRouter, Depends, Query, Response
 
 router = APIRouter()
 
-@router.get("/{namespace}/{name}.git/info/refs")
+@_routes("get", "/info/refs")  # registers the type-prefixed and .git-less URL forms too
 async def git_info_refs(
     namespace: str,
     name: str,
-    service: str,
-    authorization: str | None = Header(None),
+    repo_type: str | None = None,
+    service: str | None = Query(None),
+    user: User | None = Depends(get_git_user),
 ):
-    # Find repository
-    repo = await find_repository(namespace, name)
-    if not repo:
-        raise HTTPException(404, detail="Repository not found")
+    service = _check_service(service)  # 400 "invalid service"
 
-    # Authenticate
-    user = await get_user_from_git_auth(authorization)
-
-    # Check permissions
+    repo = _find_repository(repo_type, namespace, name)
     if service == "git-upload-pack":
-        check_repo_read_permission(repo, user)
-    elif service == "git-receive-pack":
-        if not user:
-            raise HTTPException(401, detail="Authentication required")
-        check_repo_write_permission(repo, user)
+        repo = _authorize_read(repo, user)   # 401 + challenge when anonymous, else 404
+    else:
+        repo = _authorize_write(repo, user)  # 401 first, then 404, then 403
 
-    # Get refs from LakeFS
-    bridge = GitLakeFSBridge(repo.repo_type, namespace, name)
+    bridge = GitLakeFSBridge(
+        repo.repo_type, namespace, name, lakefs_repo=resolve_lakefs_repo(repo)
+    )
     refs = await bridge.get_refs(branch="main")
 
-    # Generate response
     handler = GitUploadPackHandler(repo.full_id) if service == "git-upload-pack" else GitReceivePackHandler(repo.full_id)
-    response_data = handler.get_service_info(refs)
-
     return Response(
-        content=response_data,
+        content=handler.get_service_info(refs),
         media_type=f"application/x-{service}-advertisement",
         headers={"Cache-Control": "no-cache"},
     )

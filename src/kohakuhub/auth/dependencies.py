@@ -16,6 +16,29 @@ from kohakuhub.auth.external_token_parser import parse_auth_header
 logger = get_logger("AUTH")
 
 
+def get_user_by_token(token_string: str) -> Optional[User]:
+    """The active user an API token belongs to, or None.
+
+    A token that is found counts as used (``last_used``), whether or not its
+    user turns out to be active.
+    """
+    token = Token.get_or_none(Token.token_hash == hash_token(token_string))
+    if not token:
+        logger.debug("Token not found or invalid")
+        return None
+
+    Token.update(last_used=datetime.now(timezone.utc)).where(
+        Token.id == token.id
+    ).execute()
+
+    user = token.user  # Use ForeignKey relationship
+    if user and user.is_active:
+        logger.debug(f"Authenticated via token: {user.username} (token_id={token.id})")
+        return user
+    logger.warning(f"Token {token.id} found but user inactive or not found")
+    return None
+
+
 def get_current_user(
     request: Request,
     session_id: Optional[str] = Cookie(None),
@@ -70,25 +93,9 @@ def get_current_user(
 
     # Try token-based auth (API) - use parsed auth_token
     if auth_token:
-        token_hash = hash_token(auth_token)
-
-        token = Token.get_or_none(Token.token_hash == token_hash)
-        if token:
-            # Update last used
-            Token.update(last_used=datetime.now(timezone.utc)).where(
-                Token.id == token.id
-            ).execute()
-
-            user = token.user  # Use ForeignKey relationship
-            if user and user.is_active:
-                logger.debug(
-                    f"Authenticated via token: {user.username} (token_id={token.id})"
-                )
-                return user
-            else:
-                logger.warning(f"Token {token.id} found but user inactive or not found")
-        else:
-            logger.debug("Token not found or invalid")
+        user = get_user_by_token(auth_token)
+        if user:
+            return user
 
     logger.debug("Authentication failed - no valid session or token")
     raise HTTPException(401, detail="Not authenticated")

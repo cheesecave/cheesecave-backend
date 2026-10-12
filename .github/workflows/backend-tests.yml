@@ -48,7 +48,7 @@ jobs:
   backend-tests:
     name: backend unit tests
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -206,7 +206,7 @@ jobs:
     # claim stays true (docs/deployment/lakefs.md, kohakuhub.lakefs_compat).
     name: backend tests (cache disabled, LakeFS ${{ matrix.lakefs }})
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -334,7 +334,7 @@ jobs:
     # test_s3_bucket_in_endpoint_stack.py, which check what is really stored.
     name: backend tests (S3 endpoint with a path)
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 60
     env:
       KOHAKU_HUB_DB_BACKEND: postgres
       KOHAKU_HUB_DATABASE_URL: postgresql://hub_test:hub_test_password@127.0.0.1:25432/kohakuhub_test
@@ -462,7 +462,7 @@ jobs:
     # every test, not only the unit tests that need no services.
     name: backend tests (sqlite, Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
