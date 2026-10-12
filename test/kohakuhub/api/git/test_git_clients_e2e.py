@@ -15,9 +15,12 @@ from __future__ import annotations
 import hashlib
 import os
 
+import httpx
 import pytest
 import pytest_asyncio
 from huggingface_hub import HfApi
+
+from test.kohakuhub.support.bootstrap import DEFAULT_PASSWORD
 
 from test.kohakuhub.support.git_clients import (
     GitClient,
@@ -42,12 +45,6 @@ DATASET = "owner/e2e-git-dataset"
 SPACE = "owner/e2e-git-space"
 
 
-async def _token(client):
-    response = await client.post("/api/auth/tokens/create", json={"name": "git-e2e"})
-    response.raise_for_status()
-    return response.json()["token"]
-
-
 def _seed(api, repo_id, repo_type, private, with_big):
     if api.repo_exists(repo_id, repo_type=repo_type):
         return
@@ -58,25 +55,47 @@ def _seed(api, repo_id, repo_type, private, with_big):
         api.upload_file(path_or_fileobj=BIG, path_in_repo="weights.bin", repo_id=repo_id, repo_type=repo_type)
 
 
-@pytest_asyncio.fixture
-async def hub(live_server_url, owner_client, member_client, visitor_client, outsider_client, tmp_path):
-    tokens = {
-        "owner": await _token(owner_client),
-        "member": await _token(member_client),
-        "visitor": await _token(visitor_client),
-        "outsider": await _token(outsider_client),
-    }
+_PREPARED = {}
+
+
+async def _prepare(app, live_server_url):
+    """Tokens and the repositories, made once for the module: the cases only read them."""
+    if _PREPARED:
+        return _PREPARED["tokens"]
+    tokens = {}
+    for role in ("owner", "member", "visitor", "outsider"):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://testserver", follow_redirects=False
+        ) as client:
+            login = await client.post("/api/auth/login", json={"username": role, "password": DEFAULT_PASSWORD})
+            login.raise_for_status()
+            created = await client.post("/api/auth/tokens/create", json={"name": "git-e2e"})
+            created.raise_for_status()
+            tokens[role] = created.json()["token"]
     api = HfApi(endpoint=live_server_url, token=tokens["owner"])
     _seed(api, PUBLIC, "model", False, True)
     _seed(api, PRIVATE, "model", True, True)
     _seed(api, DATASET, "dataset", False, True)
     _seed(api, SPACE, "space", False, True)
+    _PREPARED["tokens"] = tokens
+    return tokens
+
+
+@pytest.fixture(scope="module")
+def git_client(tmp_path_factory):
+    """One git (and git-lfs install) for the module; every case works in its own directory."""
+    return GitClient(tmp_path_factory.mktemp("git-home"))
+
+
+@pytest_asyncio.fixture
+async def hub(app, live_server_url, tmp_path, git_client):
+    tokens = await _prepare(app, live_server_url)
 
     class Hub:
         url = live_server_url
 
         def __init__(self):
-            self.git = GitClient(tmp_path / "home")
+            self.git = git_client
             self.dest = tmp_path / "work"
             self.dest.mkdir()
             self.tokens = tokens
