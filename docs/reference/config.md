@@ -95,7 +95,7 @@ By default, the application looks for `config.toml` in the current working direc
 | `KOHAKU_HUB_FALLBACK_ENABLED` | If `true`, enables fallback to external sources. | `true` |
 | `KOHAKU_HUB_FALLBACK_CACHE_TTL` | The cache TTL for fallback repo mappings in seconds. | `300` |
 | `KOHAKU_HUB_FALLBACK_TIMEOUT` | The HTTP request timeout for external sources in seconds. | `10` |
-| `KOHAKU_HUB_FALLBACK_MAX_CONCURRENT` | The max concurrent requests to external sources. | `5` |
+| `KOHAKU_HUB_FALLBACK_MAX_CONCURRENT` | The max concurrent requests to external sources (read into the config but not enforced yet). | `5` |
 | `KOHAKU_HUB_FALLBACK_SOURCES` | A JSON list of global fallback sources. | `[]` |
 
 ## Background Task Worker Settings
