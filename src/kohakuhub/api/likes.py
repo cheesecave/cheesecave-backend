@@ -99,6 +99,9 @@ async def unlike_repository(
     if not repo:
         return hf_repo_not_found(repo_id, repo_type)
 
+    # Same privacy rule as the other like routes: an unreadable repository is "not found"
+    check_repo_read_permission(repo, user)
+
     # Delete like and decrement counter (atomic transaction)
     with db.atomic():
         deleted = delete_repository_like(repo, user)

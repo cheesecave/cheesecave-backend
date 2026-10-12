@@ -84,6 +84,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **Authorization hardening on five routes.**
+  - Organization members: only a super-admin may change or remove a super-admin,
+    or grant that role; the last super-admin of an organization cannot be demoted
+    or removed; the role must be one of `visitor`, `member`, `admin`, `super-admin`
+    (`400` otherwise, also when adding a member). An organization admin can no
+    longer change a super-admin's role through the UI or API.
+  - `GET /api/quota/{namespace}` is limited to the user themselves or, for an
+    organization, its members (`403` otherwise).
+  - `DELETE /api/invitations/{token}` for a non-organization invitation requires
+    the invitation's creator.
+  - `DELETE /api/{type}s/{namespace}/{name}/like` answers a repository the caller
+    cannot read exactly like a missing one.
+  - `POST /api/validate-yaml` stays anonymous but refuses content above 1 MiB (`413`).
+
 - **Git LFS routes: authorization is decided before anything is generated, and
   the follow-up calls carry a signed ticket.**
   - The batch route resolves the repository first. A repository that does not

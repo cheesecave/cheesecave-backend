@@ -5,7 +5,7 @@ from peewee import fn
 from pydantic import BaseModel
 
 from kohakuhub.db import Repository, User, UserOrganization, db
-from kohakuhub.constants import ERROR_USER_NOT_FOUND
+from kohakuhub.constants import ERROR_USER_NOT_FOUND, ORG_ROLE_SUPER_ADMIN, ORG_ROLES
 from kohakuhub.db_operations import (
     create_organization,
     create_user_organization,
@@ -29,6 +29,37 @@ _ERR_ORG_NOT_FOUND = "Organization not found"
 logger = get_logger("ORG")
 
 router = APIRouter()
+
+
+def _check_role_change(
+    org: User,
+    actor: UserOrganization,
+    target: UserOrganization | None,
+    new_role: str | None,
+) -> None:
+    """Reject role changes the actor may not make.
+
+    ``new_role`` is the requested role, or None when the membership is removed
+    (``target`` is None when a new member is being added). Only a super-admin may
+    grant, change or remove the super-admin role, and the last super-admin stays.
+    """
+    if new_role is not None and new_role not in ORG_ROLES:
+        raise HTTPException(
+            400, detail=f"Invalid role. Must be one of: {', '.join(ORG_ROLES)}"
+        )
+    touches_super = ORG_ROLE_SUPER_ADMIN in (new_role, target and target.role)
+    if touches_super and actor.role != ORG_ROLE_SUPER_ADMIN:
+        raise HTTPException(403, detail="Only a super-admin can manage super-admins")
+    if target and target.role == ORG_ROLE_SUPER_ADMIN and new_role != ORG_ROLE_SUPER_ADMIN:
+        remaining = [
+            m
+            for m in list_organization_members(org)
+            if m.role == ORG_ROLE_SUPER_ADMIN and m.id != target.id
+        ]
+        if not remaining:
+            raise HTTPException(
+                409, detail="Cannot demote or remove the last super-admin"
+            )
 
 
 class CreateOrganizationPayload(BaseModel):
@@ -152,6 +183,8 @@ async def add_member(
     if existing:
         raise HTTPException(400, detail="User is already a member of the organization")
 
+    _check_role_change(org, user_org, None, payload.role)
+
     # Add member using ForeignKey objects
     create_user_organization(user_to_add, org, payload.role)
     return {"success": True, "message": "Member added successfully"}
@@ -182,6 +215,8 @@ async def remove_member_endpoint(
     membership = get_user_organization(user_to_remove, org)
     if not membership:
         raise HTTPException(404, detail="User is not a member of the organization")
+
+    _check_role_change(org, user_org, membership, None)
 
     # Remove member using object operation
     delete_user_organization(membership)
@@ -239,6 +274,8 @@ async def update_member_role_endpoint(
     membership = get_user_organization(user_to_update, org)
     if not membership:
         raise HTTPException(404, detail="User is not a member of the organization")
+
+    _check_role_change(org, user_org, membership, payload.role)
 
     # Update role using object operation
     update_user_organization(membership, role=payload.role)

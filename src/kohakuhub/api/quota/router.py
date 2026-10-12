@@ -150,20 +150,25 @@ async def get_quota(
         Quota information
 
     Raises:
-        HTTPException: If not authorized or namespace not found
+        HTTPException: If not authorized
     """
 
     # Check if namespace is organization
     org = get_organization(namespace)
     is_org = org is not None
 
-    # Check if namespace exists
-    if not is_org:
-        target_user = User.get_or_none(User.username == namespace)
-        if not target_user:
+    # Authorization check: the totals include private usage, so (like the private
+    # half of /public) only the user themselves or an organization member may read
+    if is_org:
+        if get_user_organization(user, org) is None:
             raise HTTPException(
-                404, detail={"error": f"User or organization not found: {namespace}"}
+                403,
+                detail={"error": "Only organization members can view organization quota"},
             )
+    elif user.username != namespace:
+        raise HTTPException(
+            403, detail={"error": "You can only view quota for yourself"}
+        )
 
     # Get storage info
     info = get_storage_info(namespace, is_org)

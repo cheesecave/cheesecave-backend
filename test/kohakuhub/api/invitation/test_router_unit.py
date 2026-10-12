@@ -266,7 +266,7 @@ async def test_accept_list_and_delete_invitation_cover_dispatch_and_auth_paths(
 ):
     now = datetime(2024, 1, 2, tzinfo=timezone.utc)
     deleted = []
-    user = SimpleNamespace(username="alice")
+    user = SimpleNamespace(username="alice", id=1)
     org = SimpleNamespace(id=7, username="org-team")
 
     monkeypatch.setattr(invitation_router, "get_invitation", lambda token: None)
@@ -446,7 +446,10 @@ async def test_accept_list_and_delete_invitation_cover_dispatch_and_auth_paths(
     deleted_join = await invitation_router.delete_invitation_endpoint("delete-join", user=user)
     assert deleted_join["success"] is True
 
-    register_invitation = SimpleNamespace(action="register_account", parameters="{}")
+    # Only the creator deletes a non-org invitation
+    register_invitation = SimpleNamespace(
+        action="register_account", parameters="{}", created_by_id=1
+    )
     monkeypatch.setattr(invitation_router, "get_invitation", lambda token: register_invitation)
     deleted_register = await invitation_router.delete_invitation_endpoint("delete-register", user=user)
     assert deleted_register["success"] is True

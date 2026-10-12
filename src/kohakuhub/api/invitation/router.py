@@ -430,6 +430,10 @@ async def delete_invitation_endpoint(
 
         if not user_org or user_org.role not in ["admin", "super-admin"]:
             raise HTTPException(403, detail="Not authorized to delete this invitation")
+    elif invitation.created_by_id != user.id:
+        # Other actions have no organization to check against: only the creator
+        # (system-made invitations have none; the admin API manages those)
+        raise HTTPException(403, detail="Not authorized to delete this invitation")
 
     # Delete invitation
     delete_invitation(invitation)

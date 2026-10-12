@@ -91,6 +91,10 @@ def get_site_config():
     }
 
 
+# Upper bound for POST /api/validate-yaml (bytes of UTF-8). Model cards are a few KiB.
+MAX_YAML_BYTES = 1024 * 1024
+
+
 class ValidateYamlPayload(BaseModel):
     """Payload for YAML validation endpoint."""
 
@@ -108,6 +112,10 @@ def validate_yaml(body: ValidateYamlPayload):
     Returns:
         Validation result
     """
+    if len(body.content.encode()) > MAX_YAML_BYTES:
+        raise HTTPException(
+            413, detail=f"YAML content too large (limit {MAX_YAML_BYTES} bytes)"
+        )
     try:
         yaml.safe_load(body.content)
     except Exception as e:

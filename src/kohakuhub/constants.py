@@ -17,6 +17,10 @@ ERROR_INVALID_INVITATION_DATA = "Invalid invitation data"
 ERROR_USER_AUTH_REQUIRED = "User authentication required"
 ERROR_NOT_AUTHORIZED_MANAGE_TOKENS = "Not authorized to manage these tokens"
 
+# Organization roles, weakest to strongest. ``super-admin`` is the creator-level role.
+ORG_ROLE_SUPER_ADMIN = "super-admin"
+ORG_ROLES = ("visitor", "member", "admin", ORG_ROLE_SUPER_ADMIN)
+
 # Default values
 DEFAULT_EMAIL = "noreply@kohakuhub.local"
 DEFAULT_COMMIT_MESSAGE = "Initial commit"
