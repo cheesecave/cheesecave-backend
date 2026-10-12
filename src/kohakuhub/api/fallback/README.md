@@ -219,7 +219,7 @@ Environment variables (overrides `config-example.toml` defaults):
 | `KOHAKU_HUB_FALLBACK_ENABLED` | bool | `true` | Master switch. |
 | `KOHAKU_HUB_FALLBACK_CACHE_TTL` | int (s) | `300` | Bind-cache TTL. See [#78](https://github.com/deepghs/KohakuHub/issues/78). |
 | `KOHAKU_HUB_FALLBACK_TIMEOUT` | int (s) | `30` | Per-request timeout to upstream sources. |
-| `KOHAKU_HUB_FALLBACK_MAX_CONCURRENT` | int | `10` | Concurrency cap for in-flight upstream requests. |
+| `KOHAKU_HUB_FALLBACK_MAX_CONCURRENT` | int | `5` | Meant as a cap on in-flight upstream requests; **not enforced yet**, see [Known limits](#known-limits). |
 | `KOHAKU_HUB_FALLBACK_REQUIRE_AUTH` | bool | `false` | If true, require an authenticated caller before consulting any fallback source. |
 | `KOHAKU_HUB_FALLBACK_SOURCES` | JSON list | `[]` | Global source list (the admin DB-backed `fallbacksource` table is preferred for non-toy deployments). |
 
@@ -245,6 +245,14 @@ operator's responsibility:
 Mitigation: only configure sources you operate or fully trust.
 A future PR may add a configurable allowlist for post-redirect host
 patterns.
+
+## Known limits
+
+- **`KOHAKU_HUB_FALLBACK_MAX_CONCURRENT` is not enforced.** The setting is read into
+  `cfg.fallback.max_concurrent_requests` and documented, but nothing uses it, so upstream
+  requests in flight are bounded only by the server's workers and connection limits.
+- An inline `200` answer to a resolve `GET` is read into memory in full (LFS and Xet bytes are
+  redirected, never proxied). What bounds it, with measurements, is recorded in #6.
 
 ## How `huggingface_hub` clients see the fallback
 
