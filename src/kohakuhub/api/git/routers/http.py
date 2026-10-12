@@ -1,119 +1,149 @@
 """Git Smart HTTP Protocol endpoints.
 
-This module implements Git Smart HTTP protocol for clone, fetch, pull, and push operations.
+This module implements the read side of Git Smart HTTP (clone, fetch, pull) for
+models, datasets and Spaces. A push is refused (501) until it is implemented.
+
+Every route answers in the shape git itself understands (see
+``kohakuhub.api.git.errors``): ``git`` only sends the credentials in the URL
+after a ``401`` that carries a challenge, so the answer to its first,
+credential-less request decides whether authentication can work at all.
 """
 
-from datetime import datetime, timezone
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 
-from fastapi import APIRouter, Header, HTTPException, Request, Response
-
-from kohakuhub.db import Repository, Token, User
-from kohakuhub.constants import ERROR_REPO_NOT_FOUND
-from kohakuhub.db_operations import get_repository
-from kohakuhub.logger import get_logger
-from kohakuhub.auth.dependencies import get_optional_user
-from kohakuhub.auth.permissions import (
-    check_repo_read_permission,
-    check_repo_write_permission,
+from kohakuhub.api.git.auth import get_git_user
+from kohakuhub.api.git.errors import (
+    GIT,
+    GitProtocolError,
+    forbidden,
+    not_found,
+    unauthorized,
 )
-from kohakuhub.auth.utils import hash_token
 from kohakuhub.api.git.utils.lakefs_bridge import GitLakeFSBridge
-from kohakuhub.utils.lakefs import resolve_lakefs_repo
 from kohakuhub.api.git.utils.server import (
     GitReceivePackHandler,
     GitUploadPackHandler,
-    parse_git_credentials,
 )
+from kohakuhub.auth.permissions import (
+    RepoReadDeniedError,
+    check_repo_read_permission,
+    check_repo_write_permission,
+)
+from kohakuhub.db import Repository, User
+from kohakuhub.db_operations import get_repository
+from kohakuhub.logger import get_logger
+from kohakuhub.utils.lakefs import resolve_lakefs_repo
 
 logger = get_logger("GIT_HTTP")
 router = APIRouter()
 
+REPO_TYPES = ("model", "dataset", "space")
+UPLOAD_PACK = "git-upload-pack"
+RECEIVE_PACK = "git-receive-pack"
 
-def get_user_from_git_auth(authorization: str | None) -> User | None:
-    """Authenticate user from Git Basic Auth header.
+# A repository is addressed with or without its type prefix and with or without
+# ``.git``. Without a prefix the type is not known, so the first match wins
+# (model, then dataset, then Space); a prefix names the type exactly.
+URL_FORMS = (
+    "/{repo_type}s/{namespace}/{name}.git",
+    "/{namespace}/{name}.git",
+    "/{repo_type}s/{namespace}/{name}",
+    "/{namespace}/{name}",
+)
 
-    Args:
-        authorization: Authorization header value
 
-    Returns:
-        Authenticated user or None
+def _routes(method: str, suffix: str):
+    """Register a handler under every URL form of a repository."""
+
+    def decorator(handler):
+        for form in URL_FORMS:
+            handler = getattr(router, method)(form + suffix)(handler)
+        return handler
+
+    return decorator
+
+
+def _find_repository(
+    repo_type: str | None, namespace: str, name: str
+) -> Repository | None:
+    if repo_type is not None:
+        if repo_type not in REPO_TYPES:
+            raise HTTPException(404, detail="Not found")
+        return get_repository(repo_type, namespace, name)
+    for candidate in REPO_TYPES:
+        repo = get_repository(candidate, namespace, name)
+        if repo:
+            return repo
+    return None
+
+
+def _can_read(repo: Repository, user: User | None) -> bool:
+    try:
+        check_repo_read_permission(repo, user)
+    except RepoReadDeniedError:
+        return False
+    return True
+
+
+def _can_write(repo: Repository, user: User) -> bool:
+    try:
+        check_repo_write_permission(repo, user)
+    except HTTPException:
+        return False
+    return True
+
+
+def _authorize_read(repo: Repository | None, user: User | None) -> Repository:
+    """A repository the caller may not see answers like one that does not exist.
+
+    An unauthenticated caller is asked to authenticate (so git sends its
+    credentials); a signed-in one is told it was not found.
     """
-    if not authorization:
-        return None
-
-    username, token_str = parse_git_credentials(authorization)
-    if not username or not token_str:
-        return None
-
-    # Hash token and lookup
-    token_hash = hash_token(token_str)
-
-    token = Token.get_or_none(Token.token_hash == token_hash)
-    if not token:
-        logger.debug(f"Invalid token for user {username}")
-        return None
-
-    # Get user via FK relationship
-    user = token.user  # Use FK instead of manual lookup
-    if not user or not user.is_active:
-        logger.warning(f"User {username} not found or inactive")
-        return None
-
-    # Update token last used
-    Token.update(last_used=datetime.now(timezone.utc)).where(
-        Token.id == token.id
-    ).execute()
-
-    logger.info(f"Authenticated {username} via Git HTTP")
-    return user
+    if repo is None or not _can_read(repo, user):
+        raise unauthorized(GIT) if user is None else not_found(GIT)
+    return repo
 
 
-@router.get("/{namespace}/{name}.git/info/refs")
+def _authorize_write(repo: Repository | None, user: User | None) -> Repository:
+    """A push needs a valid user before the repository is even looked at, and a
+    repository the caller cannot see is not found; 403 only where it is visible."""
+    if user is None:
+        raise unauthorized(GIT)
+    if repo is None or not _can_read(repo, user):
+        raise not_found(GIT)
+    if not _can_write(repo, user):
+        raise forbidden(GIT)
+    return repo
+
+
+def _check_service(service: str | None) -> str:
+    if service not in (UPLOAD_PACK, RECEIVE_PACK):
+        raise GitProtocolError(400, GIT, "invalid service")
+    return service
+
+
+@_routes("get", "/info/refs")
 async def git_info_refs(
     namespace: str,
     name: str,
-    service: str,
-    authorization: str | None = Header(None),
+    repo_type: str | None = None,
+    service: str | None = Query(None),
+    user: User | None = Depends(get_git_user),
 ):
     """Git info/refs endpoint for service advertisement.
 
-    This endpoint advertises available refs and capabilities for upload-pack or receive-pack.
-
-    Args:
-        namespace: Repository namespace
-        name: Repository name
-        service: Git service (git-upload-pack or git-receive-pack)
-        authorization: Optional Basic Auth header
-
-    Returns:
-        Service advertisement in pkt-line format
+    Advertises the refs and capabilities for ``git-upload-pack`` (clone, fetch,
+    pull) or ``git-receive-pack`` (push).
     """
+    service = _check_service(service)
     repo_id = f"{namespace}/{name}"
     logger.info(f"Git info/refs: {service} for {repo_id}")
 
-    # Get repository - try all repo types since we don't know from URL
-    repo = None
-    for repo_type in ["model", "dataset", "space"]:
-        repo = get_repository(repo_type, namespace, name)
-        if repo:
-            break
-    if not repo:
-        raise HTTPException(404, detail=ERROR_REPO_NOT_FOUND)
-
-    # Authenticate user
-    user = get_user_from_git_auth(authorization)
-
-    # Check permissions based on service
-    if service == "git-upload-pack":
-        # Read operation (clone/fetch/pull)
-        check_repo_read_permission(repo, user)
-    elif service == "git-receive-pack":
-        # Write operation (push)
-        if not user:
-            raise HTTPException(401, detail="Authentication required for push")
-        check_repo_write_permission(repo, user)
+    repo = _find_repository(repo_type, namespace, name)
+    if service == UPLOAD_PACK:
+        repo = _authorize_read(repo, user)
     else:
-        raise HTTPException(400, detail=f"Unknown service: {service}")
+        repo = _authorize_write(repo, user)
 
     # Get refs from LakeFS using the repository's actual type
     bridge = GitLakeFSBridge(
@@ -121,15 +151,10 @@ async def git_info_refs(
     )
     refs = await bridge.get_refs(branch="main")
 
-    # Generate service advertisement
-    if service == "git-upload-pack":
-        handler = GitUploadPackHandler(repo_id)
-        response_data = handler.get_service_info(refs)
-    elif service == "git-receive-pack":
-        handler = GitReceivePackHandler(repo_id)
-        response_data = handler.get_service_info(refs)
+    if service == UPLOAD_PACK:
+        response_data = GitUploadPackHandler(repo_id).get_service_info(refs)
     else:
-        raise HTTPException(400, detail=f"Unknown service: {service}")
+        response_data = GitReceivePackHandler(repo_id).get_service_info(refs)
 
     return Response(
         content=response_data,
@@ -138,51 +163,25 @@ async def git_info_refs(
     )
 
 
-@router.post("/{namespace}/{name}.git/git-upload-pack")
+@_routes("post", "/git-upload-pack")
 async def git_upload_pack(
     namespace: str,
     name: str,
     request: Request,
-    authorization: str | None = Header(None),
+    repo_type: str | None = None,
+    user: User | None = Depends(get_git_user),
 ):
-    """Git upload-pack endpoint for clone/fetch/pull.
-
-    This endpoint handles git-upload-pack requests to download objects.
-
-    Args:
-        namespace: Repository namespace
-        name: Repository name
-        request: FastAPI request
-        authorization: Optional Basic Auth header
-
-    Returns:
-        Pack file with requested objects
-    """
+    """Git upload-pack endpoint for clone/fetch/pull."""
     repo_id = f"{namespace}/{name}"
     logger.info(f"Git upload-pack for {repo_id}")
 
-    # Get repository - try all repo types since we don't know from URL
-    repo = None
-    for repo_type in ["model", "dataset", "space"]:
-        repo = get_repository(repo_type, namespace, name)
-        if repo:
-            break
-    if not repo:
-        raise HTTPException(404, detail=ERROR_REPO_NOT_FOUND)
+    repo = _authorize_read(_find_repository(repo_type, namespace, name), user)
 
-    # Authenticate and check read permission
-    user = get_user_from_git_auth(authorization)
-    check_repo_read_permission(repo, user)
-
-    # Read request body
     request_body = await request.body()
 
-    # Create bridge for LakeFS integration using the repository's actual type
     bridge = GitLakeFSBridge(
         repo.repo_type, namespace, name, lakefs_repo=resolve_lakefs_repo(repo)
     )
-
-    # Handle upload-pack
     handler = GitUploadPackHandler(repo_id, bridge=bridge)
     response_data = await handler.handle_upload_pack(request_body)
 
@@ -193,91 +192,42 @@ async def git_upload_pack(
     )
 
 
-@router.post("/{namespace}/{name}.git/git-receive-pack")
+@_routes("post", "/git-receive-pack")
 async def git_receive_pack(
     namespace: str,
     name: str,
     request: Request,
-    authorization: str | None = Header(None),
+    repo_type: str | None = None,
+    user: User | None = Depends(get_git_user),
 ):
-    """Git receive-pack endpoint for push.
+    """Git receive-pack endpoint for push (not implemented: always 501)."""
+    logger.info(f"Git receive-pack for {namespace}/{name}")
 
-    This endpoint handles git-receive-pack requests to upload objects.
-
-    Args:
-        namespace: Repository namespace
-        name: Repository name
-        request: FastAPI request
-        authorization: Basic Auth header (required)
-
-    Returns:
-        Status report
-    """
-    repo_id = f"{namespace}/{name}"
-    logger.info(f"Git receive-pack for {repo_id}")
-
-    # Get repository - try all repo types since we don't know from URL
-    repo = None
-    for repo_type in ["model", "dataset", "space"]:
-        repo = get_repository(repo_type, namespace, name)
-        if repo:
-            break
-    if not repo:
-        raise HTTPException(404, detail=ERROR_REPO_NOT_FOUND)
-
-    # Authenticate and check write permission
-    user = get_user_from_git_auth(authorization)
-    if not user:
-        raise HTTPException(401, detail="Authentication required for push")
-
-    check_repo_write_permission(repo, user)
+    _authorize_write(_find_repository(repo_type, namespace, name), user)
 
     # Pushing over HTTP is not implemented: GitReceivePackHandler only parses the
     # ref updates and answers "ok" without storing the pack, so a push looked
     # like it worked while its data was dropped. Refuse it up front, and do not
     # read the body: the pack is neither stored nor needed, and parsing it as
     # pkt-lines kept the worker busy for as long as the push was large.
-    raise HTTPException(
+    raise GitProtocolError(
         501,
-        detail="Pushing over HTTP is not supported yet; use the Hub API "
+        GIT,
+        "Pushing over HTTP is not supported yet; use the Hub API "
         "(huggingface_hub) or the web UI to change this repository",
     )
 
 
-@router.get("/{namespace}/{name}.git/HEAD")
+@_routes("get", "/HEAD")
 async def git_head(
     namespace: str,
     name: str,
-    authorization: str | None = Header(None),
+    repo_type: str | None = None,
+    user: User | None = Depends(get_git_user),
 ):
-    """Git HEAD endpoint.
+    """Git HEAD endpoint: the default branch reference."""
+    _authorize_read(_find_repository(repo_type, namespace, name), user)
 
-    Returns the default branch reference.
-
-    Args:
-        namespace: Repository namespace
-        name: Repository name
-        authorization: Optional Basic Auth header
-
-    Returns:
-        HEAD reference
-    """
-    repo_id = f"{namespace}/{name}"
-
-    # Get repository - try all repo types since we don't know from URL
-    repo = None
-    for repo_type in ["model", "dataset", "space"]:
-        repo = get_repository(repo_type, namespace, name)
-        if repo:
-            break
-    if not repo:
-        raise HTTPException(404, detail=ERROR_REPO_NOT_FOUND)
-
-    # Authenticate and check read permission
-    user = get_user_from_git_auth(authorization)
-    check_repo_read_permission(repo, user)
-
-    # Return HEAD reference
     return Response(
         content=b"ref: refs/heads/main\n",
         media_type="text/plain",

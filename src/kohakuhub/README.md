@@ -241,7 +241,7 @@ KohakuHub is organized into three primary modules that work together to provide 
    └─> Memory-efficient streaming
    └─> No temporary files needed
 
-6. Client receives repository with .gitattributes and .lfsconfig
+6. Client receives repository with .gitattributes (git-lfs finds the LFS endpoint from the clone URL)
    └─> Automatic LFS configuration
 ```
 
@@ -343,7 +343,7 @@ KohakuHub is organized into three primary modules that work together to provide 
 - Automatic LFS pointer generation for large files
 - Configurable size threshold (default 1MB)
 - LFS Batch API for uploads/downloads
-- Automatic `.gitattributes` and `.lfsconfig` generation
+- Automatic `.gitattributes` generation
 
 ## Deployment Architecture
 

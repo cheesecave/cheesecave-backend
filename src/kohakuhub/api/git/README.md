@@ -100,7 +100,7 @@ kohakuhub/api/git/
 - Pure Python Git object construction (blobs, trees, commits)
 - Pack file generation from LakeFS objects
 - LFS pointer creation for large files
-- `.gitattributes` and `.lfsconfig` generation
+- `.gitattributes` generation (no `.lfsconfig`: git-lfs derives the endpoint from the clone URL)
 - Pattern matching for LFS file detection
 - Nested tree structure building from flat file lists
 

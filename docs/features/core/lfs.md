@@ -208,7 +208,7 @@ and collection waits for it.
 **LFS download fails:**
 - Install git-lfs: `git lfs install`
 - Pull: `git lfs pull`
-- Check .lfsconfig in repo
+- Check `git lfs env`: the endpoint is the clone URL plus `/info/lfs` (repositories carry no `.lfsconfig`)
 
 **Storage growing:**
 - Old LFS versions are kept unless `KOHAKU_HUB_LFS_AUTO_GC` is on

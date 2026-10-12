@@ -34,7 +34,8 @@ from kohakuhub.lfs_scope import (
     record_grant,
 )
 from kohakuhub.logger import get_logger
-from kohakuhub.auth.dependencies import get_optional_user
+from kohakuhub.api.git.auth import get_git_user
+from kohakuhub.api.git.errors import LFS, GitProtocolError, forbidden, not_found, unauthorized
 from kohakuhub.auth.permissions import (
     RepoReadDeniedError,
     check_repo_read_permission,
@@ -128,9 +129,6 @@ def get_lfs_key(oid: str) -> str:
 LFS_TICKET_TTL_SECONDS = 86400 * 7  # as long as the multipart part URLs live
 _OID_PATTERN = re.compile(r"[0-9a-f]{64}")
 _REPO_TYPES = ("model", "dataset", "space")
-_LFS_CHALLENGE = {
-    "LFS-Authenticate": 'Basic realm="Authentication required", charset="UTF-8"'
-}
 
 
 def is_valid_oid(oid) -> bool:
@@ -192,21 +190,15 @@ def _with_ticket(url: str, ticket: str) -> str:
     return f"{url}?ticket={ticket}"
 
 
-def _unauthorized() -> HTTPException:
-    return HTTPException(
-        401, detail={"error": "Authentication required"}, headers=dict(_LFS_CHALLENGE)
-    )
+def _unauthorized() -> GitProtocolError:
+    return unauthorized(LFS)
 
 
-def _repo_not_found() -> HTTPException:
-    return HTTPException(
-        404,
-        detail={"error": "Repository not found"},
-        headers={"X-Error-Code": "RepoNotFound"},
-    )
+def _repo_not_found() -> GitProtocolError:
+    return not_found(LFS)
 
 
-def _not_visible(user: User | None) -> HTTPException:
+def _not_visible(user: User | None) -> GitProtocolError:
     """A repository that is missing, or that the caller may not see.
 
     Both get the same answer, so the response never tells them apart: an
@@ -230,7 +222,10 @@ def _authorize_batch(repo: Repository | None, operation: str, user: User | None)
     if operation == "upload":
         if user is None:
             raise _unauthorized()
-        check_repo_write_permission(repo, user)
+        try:
+            check_repo_write_permission(repo, user)
+        except HTTPException:
+            raise forbidden(LFS)
 
 
 def _authorize_followup(
@@ -266,10 +261,7 @@ def _authorize_followup(
             continue
         return
     if readable:
-        raise HTTPException(
-            403,
-            detail={"error": "You don't have permission to modify this repository"},
-        )
+        raise forbidden(LFS)
     raise _repo_not_found()
 
 
@@ -571,7 +563,7 @@ async def lfs_batch(
     name: str,
     request: Request,
     repo_type: str | None = "model",
-    user: User | None = Depends(get_optional_user),
+    user: User | None = Depends(get_git_user),
 ):
     """Git LFS Batch API endpoint.
 
@@ -685,7 +677,7 @@ async def lfs_complete_multipart(
     request: Request,
     upload_id: str = None,
     ticket: str | None = Query(None),
-    user: User | None = Depends(get_optional_user),
+    user: User | None = Depends(get_git_user),
 ):
     """Complete multipart LFS upload.
 
@@ -833,7 +825,7 @@ async def lfs_verify(
     name: str,
     request: Request,
     ticket: str | None = Query(None),
-    user: User | None = Depends(get_optional_user),
+    user: User | None = Depends(get_git_user),
 ):
     """Verify LFS upload completion.
 

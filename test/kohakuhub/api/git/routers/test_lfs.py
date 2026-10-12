@@ -9,6 +9,8 @@ from types import SimpleNamespace
 import pytest
 from fastapi import HTTPException
 
+from kohakuhub.api.git.errors import GitProtocolError, render_protocol_error
+
 import kohakuhub.api.git.routers.lfs as lfs_router
 from test.kohakuhub.support.factories import make_file, make_org, make_repo, make_user
 from test.kohakuhub.support.grants import grant_lfs_upload
@@ -202,7 +204,7 @@ async def test_lfs_batch_validates_payload_auth_quota_and_operations(monkeypatch
 
     assert invalid_body.value.status_code == 400
 
-    with pytest.raises(HTTPException) as missing_auth:
+    with pytest.raises(GitProtocolError) as missing_auth:
         await lfs_router.lfs_batch(
             "owner",
             "repo",
@@ -497,10 +499,10 @@ async def test_followup_routes_refuse_requests_without_ticket_or_user_before_rea
         lfs_router.lfs_complete_multipart("owner", "repo", _Raises(), ticket=None, user=None),
         lfs_router.lfs_verify("owner", "repo", _Raises(), ticket=None, user=None),
     ):
-        with pytest.raises(HTTPException) as refused:
+        with pytest.raises(GitProtocolError) as refused:
             await call
         assert refused.value.status_code == 401
-        assert refused.value.headers["LFS-Authenticate"].startswith("Basic")
+        assert render_protocol_error(refused.value).headers["lfs-authenticate"].startswith("Basic")
 
 
 @pytest.mark.asyncio
@@ -536,7 +538,7 @@ def test_authorize_followup_accepts_a_valid_ticket_without_a_user(monkeypatch):
 
 def test_authorize_followup_refuses_anonymous_callers_with_a_bad_ticket():
     for ticket in (None, "", "garbage"):
-        with pytest.raises(HTTPException) as refused:
+        with pytest.raises(GitProtocolError) as refused:
             lfs_router._authorize_followup("owner", "repo", None, ticket, "verify", "a" * 64)
         assert refused.value.status_code == 401
 
@@ -563,20 +565,20 @@ def test_authorize_followup_signed_in_paths(monkeypatch, db_scope):
     dataset = make_repo(owner, "r", repo_type="dataset")
 
     # no repository by that name at all (the rows above are under "r", not "nope")
-    with pytest.raises(HTTPException) as missing:
+    with pytest.raises(GitProtocolError) as missing:
         lfs_router._authorize_followup("o", "nope", user, None, "verify", "a" * 64)
     assert missing.value.status_code == 404
-    assert missing.value.headers["X-Error-Code"] == "RepoNotFound"
+    assert render_protocol_error(missing.value).headers["x-error-code"] == "RepoNotFound"
 
     # one that exists but cannot be seen: same answer
     _permissions(monkeypatch, readable=[])
-    with pytest.raises(HTTPException) as hidden:
+    with pytest.raises(GitProtocolError) as hidden:
         lfs_router._authorize_followup("o", "r", user, None, "verify", "a" * 64)
     assert hidden.value.status_code == 404
 
     # readable but not writable
     _permissions(monkeypatch, readable=[model], writable=[])
-    with pytest.raises(HTTPException) as readonly:
+    with pytest.raises(GitProtocolError) as readonly:
         lfs_router._authorize_followup("o", "r", user, None, "verify", "a" * 64)
     assert readonly.value.status_code == 403
 
@@ -596,16 +598,16 @@ def test_authorize_batch_decisions(monkeypatch, db_scope):
     )
 
     # missing repo: anonymous is challenged, a signed-in caller gets a 404
-    with pytest.raises(HTTPException) as anonymous:
+    with pytest.raises(GitProtocolError) as anonymous:
         lfs_router._authorize_batch(None, "download", None)
-    with pytest.raises(HTTPException) as signed_in:
+    with pytest.raises(GitProtocolError) as signed_in:
         lfs_router._authorize_batch(None, "upload", user)
     assert anonymous.value.status_code == 401
     assert signed_in.value.status_code == 404
 
     # a repo the caller cannot read behaves the same
     _permissions(monkeypatch, readable=[])
-    with pytest.raises(HTTPException) as hidden:
+    with pytest.raises(GitProtocolError) as hidden:
         lfs_router._authorize_batch(repo, "download", None)
     assert hidden.value.status_code == 401
 
@@ -616,7 +618,7 @@ def test_authorize_batch_decisions(monkeypatch, db_scope):
     )
     assert lfs_router._authorize_batch(repo, "download", None) is None
     assert writes == []
-    with pytest.raises(HTTPException) as no_user:
+    with pytest.raises(GitProtocolError) as no_user:
         lfs_router._authorize_batch(repo, "upload", None)
     assert no_user.value.status_code == 401
     assert lfs_router._authorize_batch(repo, "upload", user) is None
@@ -624,7 +626,7 @@ def test_authorize_batch_decisions(monkeypatch, db_scope):
 
 
 def test_every_lfs_route_has_an_authorization_dependency():
-    """A new route in this module must carry get_optional_user (and then decide
+    """A new route in this module must carry get_git_user (and then decide
     what to do with it); an unauthenticated route is how the follow-up calls
     used to be exposed."""
     from fastapi.routing import APIRoute
@@ -633,7 +635,7 @@ def test_every_lfs_route_has_an_authorization_dependency():
     for route in lfs_router.router.routes:
         assert isinstance(route, APIRoute)
         calls = {dep.call for dep in route.dependant.dependencies}
-        if lfs_router.get_optional_user not in calls:
+        if lfs_router.get_git_user not in calls:
             missing.append(route.path)
 
     assert missing == []
