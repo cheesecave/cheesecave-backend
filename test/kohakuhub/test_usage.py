@@ -493,7 +493,11 @@ async def test_moves_and_deletes_carry_the_usage(u, owner_client):
     assert response.status_code == 200, response.text
     assert u.usage.namespace_used(ORG, False) == before[1]
     purge = _pending(u, _live("kohakuhub.storage_cleanup").PURGE_KIND)
-    assert {"lakefs_repo": lakefs_repo, "repo": f"model:{ORG}/usage-move"} in purge
+    assert {
+        "lakefs_repo": lakefs_repo,
+        "repo": f"model:{ORG}/usage-move",
+        "claim_prefix": f"lfs-claim/{row.id}/",
+    } in purge
 
 
 async def test_recount_endpoints(u, owner_client, admin_client):
