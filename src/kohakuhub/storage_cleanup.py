@@ -163,11 +163,19 @@ def record_repository_lfs(repo: Repository) -> int:
     return len(shas)
 
 
-def enqueue_purge(lakefs_repo: str, label: str) -> int | None:
-    """Schedule the purge of one LakeFS repository; ``None`` if already pending."""
-    return tasks.enqueue(
-        PURGE_KIND, {"lakefs_repo": lakefs_repo, "repo": label}, dedupe_key=f"purge:{lakefs_repo}"
-    )
+def enqueue_purge(
+    lakefs_repo: str, label: str, claim_prefix: str | None = None
+) -> int | None:
+    """Schedule the purge of one LakeFS repository; ``None`` if already pending.
+
+    ``claim_prefix`` is where the repository's unproven LFS claims are held
+    (``lfs_gc.claim_key``); their grant rows go with the repository row, so the
+    purge has to remember where the bytes are.
+    """
+    payload = {"lakefs_repo": lakefs_repo, "repo": label}
+    if claim_prefix:
+        payload["claim_prefix"] = claim_prefix
+    return tasks.enqueue(PURGE_KIND, payload, dedupe_key=f"purge:{lakefs_repo}")
 
 
 def schedule_repository_purge(repo: Repository) -> str:
@@ -180,7 +188,9 @@ def schedule_repository_purge(repo: Repository) -> str:
     """
     lakefs_repo = resolve_lakefs_repo(repo)
     record_repository_lfs(repo)
-    enqueue_purge(lakefs_repo, f"{repo.repo_type}:{repo.full_id}")
+    enqueue_purge(
+        lakefs_repo, f"{repo.repo_type}:{repo.full_id}", claim_prefix=claim_key(repo.id, "")
+    )
     return lakefs_repo
 
 
@@ -231,12 +241,14 @@ async def purge_repository(payload: dict[str, Any], ctx: tasks.TaskContext) -> N
     # Objects go first: while the LakeFS repository exists, nobody can create
     # a new repository with this id whose objects this loop would delete.
     ctx.stage("deleting objects")
-    prefix = f"{lakefs_repo}/"
     deleted = 0
-    while batch := await run_in_s3_executor(_delete_prefix_batch, cfg.s3.bucket, prefix):
-        deleted += batch
-        ctx.progress(deleted)
-        logger.info(f"Deleted {deleted} object(s) under s3://{cfg.s3.bucket}/{prefix}")
+    for prefix in (f"{lakefs_repo}/", payload.get("claim_prefix")):
+        while prefix and (
+            batch := await run_in_s3_executor(_delete_prefix_batch, cfg.s3.bucket, prefix)
+        ):
+            deleted += batch
+            ctx.progress(deleted)
+            logger.info(f"Deleted {deleted} object(s) under s3://{cfg.s3.bucket}/{prefix}")
 
     ctx.stage("deleting LakeFS repository")
     try:

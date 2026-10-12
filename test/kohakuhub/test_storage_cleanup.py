@@ -93,7 +93,11 @@ def test_schedule_records_lfs_candidates_and_enqueues_the_purge_once():
     assert lakefs_repo == resolve_lakefs_repo(repo)
     assert {row.sha256 for row in LfsGcCandidate.select()} == shas
     assert _queued(storage_cleanup.PURGE_KIND) == [
-        {"lakefs_repo": lakefs_repo, "repo": "model:owner/demo-model"}
+        {
+            "lakefs_repo": lakefs_repo,
+            "repo": "model:owner/demo-model",
+            "claim_prefix": f"lfs-claim/{repo.id}/",
+        }
     ]
     assert len(_queued(storage_cleanup.COLLECT_LFS_KIND)) == 1
 
@@ -195,6 +199,21 @@ async def test_purge_deletes_the_prefix_then_the_lakefs_repository(storage, monk
 
     assert snapshot() == (sorted(keep), ["m-other-model-0002"])
     assert points == 2 * (2 + 3)  # two stages and three batch reports, two points each
+
+
+async def test_purge_also_deletes_the_repositorys_unproven_lfs_claims(storage):
+    doomed = "m-gone-user-model-0001"
+    claims = {f"lfs-claim/7/{'a' * 64}", f"lfs-claim/7/{'b' * 64}"}
+    keep = {f"lfs-claim/70/{'a' * 64}", f"lfs-claim/17/{'a' * 64}", "lfs/aa/bb/aabb"}
+    storage.keys = {f"{doomed}/data/0"} | claims | keep
+    storage.repos = {doomed}
+
+    await storage_cleanup.purge_repository(
+        {"lakefs_repo": doomed, "repo": "model:gone/model", "claim_prefix": "lfs-claim/7/"},
+        RecordingContext(),
+    )
+
+    assert storage.keys == keep
 
 
 async def test_purge_refuses_a_lakefs_repository_a_row_still_uses(storage):
