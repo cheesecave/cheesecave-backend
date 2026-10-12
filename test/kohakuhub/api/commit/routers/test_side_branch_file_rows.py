@@ -12,6 +12,7 @@ import kohakuhub.api.commit.routers.operations as commit_ops
 from kohakuhub.api.repo.routers.tree import _build_file_record_map
 from kohakuhub.db import File
 from test.kohakuhub.support.factories import make_file, make_repo, make_user
+from test.kohakuhub.support.grants import grant_lfs_upload_everywhere
 
 pytestmark = pytest.mark.usefixtures("db_fresh")
 
@@ -214,6 +215,7 @@ async def test_side_branch_lfs_object_writes_its_own_row(monkeypatch):
     client, repo = _setup(monkeypatch)
     monkeypatch.setattr(commit_ops, "object_exists", _always_true)
     oid = "a" * 64
+    grant_lfs_upload_everywhere(oid)
     await commit_ops.process_lfs_file("big.bin", oid, 7, "sha256", repo, "repo", "dev")
     assert _row(repo, "dev", "big.bin").lfs is True
     assert _row(repo, "dev", "big.bin").sha256 == oid

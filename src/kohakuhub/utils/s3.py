@@ -1,5 +1,6 @@
 """S3 client utilities and helper functions."""
 
+import hashlib
 import atexit
 from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime, timedelta, timezone
@@ -572,6 +573,27 @@ async def get_object_metadata(bucket: str, key: str) -> dict:
         ClientError: If object not found
     """
     return await run_in_s3_executor(_get_object_metadata_sync, bucket, key)
+
+
+def _object_sha256_sync(bucket: str, key: str) -> str:
+    """Synchronous implementation of object_sha256: hash while streaming."""
+    digest = hashlib.sha256()
+    body = get_s3_client().get_object(Bucket=bucket, Key=key)["Body"]
+    try:
+        for chunk in body.iter_chunks(8 * 1024 * 1024):
+            digest.update(chunk)
+    finally:
+        body.close()
+    return digest.hexdigest()
+
+
+async def object_sha256(bucket: str, key: str) -> str:
+    """SHA-256 of a stored object, read in chunks (never held in memory).
+
+    Raises:
+        ClientError: If object not found
+    """
+    return await run_in_s3_executor(_object_sha256_sync, bucket, key)
 
 
 def _object_exists_sync(bucket: str, key: str) -> bool:

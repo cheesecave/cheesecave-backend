@@ -12,6 +12,7 @@ from botocore.exceptions import ClientError
 from kohakuhub import lakefs_rest_client
 from kohakuhub.task_testing import RecordingContext
 from test.kohakuhub.api.helpers import encode_ndjson
+from test.kohakuhub.support.grants import grant_lfs_upload_everywhere
 
 PATH = "gc-test/weights.bin"
 
@@ -105,6 +106,7 @@ def _stored(m, sha):
 def _put(m, content):
     oid = hashlib.sha256(content).hexdigest()
     m.s3.put_object(Bucket=m.cfg.s3.bucket, Key=m.gc.lfs_key(oid), Body=content)
+    grant_lfs_upload_everywhere(oid)
     return oid
 
 

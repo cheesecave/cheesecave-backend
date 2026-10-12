@@ -65,6 +65,12 @@ def lfs_key(sha256: str) -> str:
     return f"lfs/{sha256[:2]}/{sha256[2:4]}/{sha256}"
 
 
+def claim_key(repository_id: int, sha256: str) -> str:
+    """Where a claim's bytes are uploaded: private to one repository, never the
+    shared key (see ``kohakuhub.lfs_scope``)."""
+    return f"lfs-claim/{repository_id}/{sha256}"
+
+
 def lfs_oid(physical_address: str | None) -> str | None:
     """The sha256 of a global LFS object address, or ``None`` for any other.
 

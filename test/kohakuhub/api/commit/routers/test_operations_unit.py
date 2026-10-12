@@ -14,6 +14,7 @@ from fastapi import HTTPException
 import kohakuhub.api.commit.routers.operations as commit_ops
 from kohakuhub.db import File
 from test.kohakuhub.support.factories import make_file, make_repo, make_user
+from test.kohakuhub.support.grants import grant_lfs_upload_everywhere
 
 pytestmark = pytest.mark.usefixtures("db_scope")
 
@@ -219,6 +220,8 @@ async def test_process_lfs_file_covers_same_content_new_content_and_failures(mon
     monkeypatch.setattr(
         commit_ops, "claim_for_commit", lambda oid, exists: claims.append((oid, exists))
     )
+    grant_lfs_upload_everywhere("sameoid")
+    grant_lfs_upload_everywhere("newoid")
 
     with pytest.raises(HTTPException) as missing_oid:
         await commit_ops.process_lfs_file("weights.bin", None, 10, "sha256", repo, "lakefs", "main")
@@ -551,6 +554,7 @@ async def test_lfs_object_check_that_s3_cannot_answer_is_a_server_error(monkeypa
         raise RuntimeError("S3 endpoint unreachable")
 
     monkeypatch.setattr(commit_ops, "object_exists", unreachable)
+    grant_lfs_upload_everywhere("newoid")
 
     with pytest.raises(HTTPException) as broken:
         await commit_ops.process_lfs_file("weights.bin", "newoid", 11, "sha256", repo, "lakefs", "main")

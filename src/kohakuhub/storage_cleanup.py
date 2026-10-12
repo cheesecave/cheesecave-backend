@@ -41,11 +41,12 @@ from kohakuhub.db import (
     File,
     LFSObjectHistory,
     LfsGcCandidate,
+    LfsGrant,
     LfsHeadRef,
     Repository,
     utcnow,
 )
-from kohakuhub.lfs_gc import lfs_key, record_candidates
+from kohakuhub.lfs_gc import claim_key, lfs_key, record_candidates
 from kohakuhub.logger import get_logger
 from kohakuhub.utils.lakefs import get_lakefs_client, resolve_lakefs_repo
 from kohakuhub.utils.s3 import get_s3_client
@@ -54,6 +55,9 @@ logger = get_logger("STORAGE_CLEANUP")
 
 PURGE_KIND = "storage.purge_repository"
 COLLECT_LFS_KIND = "storage.collect_lfs"
+EXPIRE_LFS_CLAIMS_KIND = "storage.expire_lfs_claims"
+# Past the 7 days the part URLs of a multipart upload stay valid.
+LFS_CLAIM_TTL = timedelta(days=8)
 EXPIRE_RECENT_LFS_KIND = "storage.expire_recent_lfs"
 REVIEW_LFS_WINDOW_KIND = "storage.review_lfs_window"
 RECONCILE_LFS_KIND = "storage.reconcile_lfs_references"
@@ -285,6 +289,24 @@ async def collect_lfs(payload: dict[str, Any], ctx: tasks.TaskContext) -> None:
         deleted += len(doomed)
         ctx.progress(checked, max(total, checked))
     logger.info(f"Checked {checked} LFS object(s); deleted {deleted} nothing relies on")
+
+
+@tasks.task(EXPIRE_LFS_CLAIMS_KIND, every=timedelta(hours=1), max_attempts=3)
+async def expire_lfs_claims(payload: dict[str, Any]) -> None:
+    """Remove claims nobody proved in time: the bytes held for them and their records."""
+    G = LfsGrant
+    stale = list(
+        G.select(G.id, G.repository, G.sha256).where(
+            (G.kind == "claim") & (G.proven == False) & (G.created_at < utcnow() - LFS_CLAIM_TTL)
+        )
+    )
+    if not stale:
+        return
+    await run_in_s3_executor(
+        _delete_keys, cfg.s3.bucket, [claim_key(g.repository_id, g.sha256) for g in stale]
+    )
+    G.delete().where(G.id.in_([g.id for g in stale])).execute()
+    logger.info(f"Removed {len(stale)} unproven LFS claim(s)")
 
 
 @tasks.task(EXPIRE_RECENT_LFS_KIND, every=timedelta(hours=1), max_attempts=3)
