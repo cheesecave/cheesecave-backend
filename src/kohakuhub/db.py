@@ -811,6 +811,29 @@ class LfsHeadRef(BaseModel):
         indexes = ((("repository", "branch", "path_in_repo", "sha256"), True),)
 
 
+class LfsGrant(BaseModel):
+    """A repository's standing to reference one stored LFS object.
+
+    Objects are stored once for the whole instance, so what a repository may
+    link, verify or commit is decided per repository (see
+    ``kohakuhub.lfs_scope``). ``kind`` is ``upload`` when the repository was
+    handed an upload for the object, or ``claim`` when the object was already
+    stored for repositories the caller cannot read: the bytes then go to a key
+    private to the repository and count once their hash is proven
+    (``proven``).
+    """
+
+    repository = ForeignKeyField(Repository, on_delete="CASCADE", index=True)
+    sha256 = CharField(max_length=64, index=True)
+    kind = CharField(max_length=8)
+    proven = BooleanField(default=False)
+    created_at = DateTimeField(default=utcnow)
+
+    class Meta:
+        table_name = "lfs_grant"
+        indexes = ((("repository", "sha256"), True),)
+
+
 class LfsGcState(BaseModel):
     """Durable garbage collection state, such as when the LFS references of
     every branch head were last reconciled (see ``kohakuhub.lfs_gc``)."""
@@ -913,6 +936,7 @@ def init_db():
             LfsObjectTombstone,
             LfsRecentObject,
             LfsHeadRef,
+            LfsGrant,
             LfsGcState,
             RepositoryWrite,
         ],

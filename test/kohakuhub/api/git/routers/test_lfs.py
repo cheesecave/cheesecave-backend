@@ -11,6 +11,7 @@ from fastapi import HTTPException
 
 import kohakuhub.api.git.routers.lfs as lfs_router
 from test.kohakuhub.support.factories import make_file, make_org, make_repo, make_user
+from test.kohakuhub.support.grants import grant_lfs_upload
 
 
 class _FakeRequest:
@@ -34,7 +35,10 @@ def test_get_lfs_key_uses_balanced_directory_layout():
 async def test_process_upload_object_skips_existing_content(monkeypatch, db_scope):
     monkeypatch.setattr(lfs_router, "object_exists", lambda bucket, key: _async_return(True))
 
-    response = await lfs_router.process_upload_object("a" * 64, 123, "owner/repo")
+    repo = make_repo(make_user("owner"), "repo")
+    make_file(repo, "weights.bin", "a" * 64, size=123)
+
+    response = await lfs_router.process_upload_object(repo, "a" * 64, 123, "owner/repo")
 
     assert response.actions is None
     assert response.error is None
@@ -98,9 +102,10 @@ async def test_process_upload_object_supports_multipart_and_single_part(monkeypa
         lfs_router, "generate_upload_presigned_url", fake_generate_upload_presigned_url
     )
 
-    multipart_response = await lfs_router.process_upload_object("b" * 64, 11, "owner/repo")
+    repo = make_repo(make_user("owner"), "repo")
+    multipart_response = await lfs_router.process_upload_object(repo, "b" * 64, 11, "owner/repo")
     single_response = await lfs_router.process_upload_object(
-        "c" * 64, 9, "owner/repo", is_browser=True
+        repo, "c" * 64, 9, "owner/repo", is_browser=True
     )
 
     assert multipart_seen["part_count"] == 3
@@ -136,7 +141,8 @@ async def test_process_upload_object_returns_error_when_presign_fails(monkeypatc
 
     monkeypatch.setattr(lfs_router, "generate_upload_presigned_url", broken_upload)
 
-    response = await lfs_router.process_upload_object("d" * 64, 50, "owner/repo")
+    repo = make_repo(make_user("owner"), "repo")
+    response = await lfs_router.process_upload_object(repo, "d" * 64, 50, "owner/repo")
 
     assert response.error.code == 500
     assert "presign failed" in response.error.message
@@ -146,23 +152,24 @@ async def test_process_upload_object_returns_error_when_presign_fails(monkeypatc
 async def test_process_download_object_covers_missing_success_and_failure(monkeypatch, db_scope):
     monkeypatch.setattr(lfs_router.cfg.s3, "bucket", "hub-storage")
 
-    missing = await lfs_router.process_download_object("e" * 64, 123)
+    repo = make_repo(make_user("owner"), "repo")
+    missing = await lfs_router.process_download_object(repo, "e" * 64, 123)
     assert missing.error.code == 404
 
-    make_file(make_repo(make_user("owner"), "repo"), "weights.bin", "e" * 64, size=123)
+    make_file(repo, "weights.bin", "e" * 64, size=123)
     monkeypatch.setattr(
         lfs_router,
         "generate_download_presigned_url",
         lambda bucket, key, expires_in: _async_return("https://download/object"),
     )
-    success = await lfs_router.process_download_object("e" * 64, 123)
+    success = await lfs_router.process_download_object(repo, "e" * 64, 123)
     assert success.actions["download"]["href"] == "https://download/object"
 
     async def broken_download(**_kwargs):
         raise RuntimeError("download failed")
 
     monkeypatch.setattr(lfs_router, "generate_download_presigned_url", broken_download)
-    failure = await lfs_router.process_download_object("e" * 64, 123)
+    failure = await lfs_router.process_download_object(repo, "e" * 64, 123)
     assert failure.error.code == 500
 
 
@@ -179,11 +186,11 @@ async def test_lfs_batch_validates_payload_auth_quota_and_operations(monkeypatch
     monkeypatch.setattr(lfs_router, "check_repo_read_permission", lambda repo_arg, user_arg: permission_calls.append(("read", repo_arg, user_arg)))
     monkeypatch.setattr(lfs_router, "check_quota", lambda namespace, total_bytes, is_private, is_org: (True, None))
 
-    async def fake_process_upload_object(oid, size, repo_id, is_browser):
+    async def fake_process_upload_object(repo_arg, oid, size, repo_id, is_browser, user=None):
         upload_calls.append((oid, size, repo_id, is_browser))
         return lfs_router.LFSObjectResponse(oid=oid, size=size, authenticated=True)
 
-    async def fake_process_download_object(oid, size):
+    async def fake_process_download_object(repo_arg, oid, size):
         download_calls.append((oid, size))
         return lfs_router.LFSObjectResponse(oid=oid, size=size, authenticated=True)
 
@@ -332,8 +339,10 @@ async def test_lfs_complete_multipart_validates_and_completes_upload(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_lfs_verify_covers_validation_completion_and_size_checks(monkeypatch):
+async def test_lfs_verify_covers_validation_completion_and_size_checks(monkeypatch, db_scope):
     writer = SimpleNamespace(username="owner")
+    make_repo(make_user("owner"), "repo")
+    grant_lfs_upload("owner", "repo", "a" * 64)
     authorized = []
     monkeypatch.setattr(lfs_router, "_authorize_followup", lambda *args: authorized.append(args))
     verify = functools.partial(lfs_router.lfs_verify, ticket="t", user=writer)

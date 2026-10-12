@@ -4,6 +4,7 @@ import base64
 import hashlib
 
 from test.kohakuhub.api.helpers import encode_ndjson, file_op
+from test.kohakuhub.support.grants import grant_lfs_upload
 
 
 async def test_commit_regular_file_and_show_up_in_tree(owner_client):
@@ -38,6 +39,7 @@ async def test_commit_lfs_file_from_service_storage(owner_client, backend_test_s
         Body=content,
         ContentType="application/octet-stream",
     )
+    grant_lfs_upload("owner", "demo-model", oid)
 
     payload = encode_ndjson(
         [

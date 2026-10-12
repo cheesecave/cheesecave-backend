@@ -19,8 +19,20 @@ from pydantic import BaseModel
 
 from kohakuhub.config import cfg
 from kohakuhub.db import Repository, User
-from kohakuhub.db_operations import get_file_by_sha256, get_organization, get_repository
+from kohakuhub.db_operations import (
+    get_organization,
+    get_repository,
+    repository_holds_lfs_object,
+)
 from kohakuhub.lfs_gc import tombstone_state, touch
+from kohakuhub.lfs_scope import (
+    claim_key,
+    grant_of,
+    has_standing,
+    may_reference,
+    readable_by,
+    record_grant,
+)
 from kohakuhub.logger import get_logger
 from kohakuhub.auth.dependencies import get_optional_user
 from kohakuhub.auth.permissions import (
@@ -261,15 +273,47 @@ def _authorize_followup(
     raise _repo_not_found()
 
 
+def _named_repositories(namespace: str, name: str) -> list[Repository]:
+    """The repositories a follow-up URL can mean (it names no repository type)."""
+    found = (get_repository(repo_type, namespace, name) for repo_type in _REPO_TYPES)
+    return [repo for repo in found if repo is not None]
+
+
+def _upload_key(namespace: str, name: str, oid: str) -> str:
+    """Where this object's bytes are being uploaded: the key private to a
+    repository for a claim that is not proven yet, the shared key otherwise."""
+    for repo in _named_repositories(namespace, name):
+        grant = grant_of(repo, oid)
+        if grant is not None and grant.kind == "claim" and not grant.proven:
+            return claim_key(repo.id, oid)
+    return get_lfs_key(oid)
+
+
+async def _may_reference(namespace: str, name: str, user: User | None, oid: str) -> bool:
+    """Whether any repository the URL can mean may reference the object."""
+    for repo in _named_repositories(namespace, name):
+        if await may_reference(repo, user, oid):
+            return True
+    return False
+
+
 async def process_upload_object(
-    oid: str, size: int, repo_id: str, is_browser: bool = False
+    repo,
+    oid: str,
+    size: int,
+    repo_id: str,
+    is_browser: bool = False,
+    user: User | None = None,
 ) -> LFSObjectResponse:
     """Process single LFS object for upload operation.
 
     Args:
+        repo: The repository row the upload is for
         oid: Object ID (SHA256)
         size: File size in bytes
         repo_id: Repository ID
+        user: The caller; whether a stored object may be reused for this
+            repository depends on what the caller may read (``lfs_scope``)
 
     Returns:
         LFS object response with upload actions or error
@@ -292,15 +336,29 @@ async def process_upload_object(
     touch(oid)  # first, so a collection deciding after this keeps it
     collected = tombstone_state(oid) is not None
 
+    # Storage is shared by every repository, so stored content alone must not
+    # make this repository's upload skip, and an upload must never write over
+    # an object other repositories use (see ``kohakuhub.lfs_scope``).
     if s3_exists and not collected:
-        # Tell client to skip upload
-        logger.info(f"LFS object {oid[:8]} already exists, skipping upload")
-        return LFSObjectResponse(
-            oid=oid,
-            size=size,
-            authenticated=True,
-            # No actions = already exists
-        )
+        standing = has_standing(repo, oid)
+        if standing or readable_by(user, oid):
+            if not standing:
+                record_grant(repo, oid, "upload")
+            # Tell client to skip upload
+            logger.info(f"LFS object {oid[:8]} already exists, skipping upload")
+            return LFSObjectResponse(
+                oid=oid,
+                size=size,
+                authenticated=True,
+                # No actions = already exists
+            )
+        # Stored, but only for repositories the caller cannot read: the bytes
+        # go to a key private to this repository and count once they hash to
+        # the object id.
+        record_grant(repo, oid, "claim")
+        lfs_key = claim_key(repo.id, oid)
+    else:
+        record_grant(repo, oid, "upload")
 
     # Check if multipart upload required
     # HuggingFace clients detect multipart by presence of 'chunk_size' in header
@@ -449,10 +507,11 @@ async def process_upload_object(
         )
 
 
-async def process_download_object(oid: str, size: int) -> LFSObjectResponse:
+async def process_download_object(repo, oid: str, size: int) -> LFSObjectResponse:
     """Process single LFS object for download operation.
 
     Args:
+        repo: The repository the request is made through
         oid: Object ID (SHA256)
         size: File size in bytes
 
@@ -461,10 +520,10 @@ async def process_download_object(oid: str, size: int) -> LFSObjectResponse:
     """
     lfs_key = get_lfs_key(oid)
 
-    # Check if object exists; a collected object's File rows can outlive it
-    existing = get_file_by_sha256(oid)
-
-    if not existing or tombstone_state(oid) is not None:
+    # Objects are stored once for the whole instance: only the requested
+    # repository's own rows say it may hand this one out. A collected object's
+    # rows can outlive it.
+    if not repository_holds_lfs_object(repo, oid) or tombstone_state(oid) is not None:
         return LFSObjectResponse(
             oid=oid,
             size=size,
@@ -588,10 +647,10 @@ async def lfs_batch(
         match batch_req.operation:
             case "upload":
                 return await process_upload_object(
-                    obj.oid, obj.size, repo_id, batch_req.is_browser
+                    repo, obj.oid, obj.size, repo_id, batch_req.is_browser, user
                 )
             case "download":
-                return await process_download_object(obj.oid, obj.size)
+                return await process_download_object(repo, obj.oid, obj.size)
             case _:
                 return LFSObjectResponse(
                     oid=obj.oid,
@@ -713,7 +772,7 @@ async def lfs_complete_multipart(
 
         normalized_parts.append({"PartNumber": int(part_number), "ETag": etag})
 
-    lfs_key = get_lfs_key(oid)
+    lfs_key = _upload_key(namespace, name, oid)
 
     try:
         # Complete the multipart upload on S3
@@ -836,7 +895,7 @@ async def lfs_verify(
         oid,
     )
 
-    lfs_key = get_lfs_key(oid)
+    lfs_key = _upload_key(namespace, name, oid)
 
     # If this is a multipart upload, complete it first
     if upload_id and parts:
@@ -862,6 +921,12 @@ async def lfs_verify(
                 500,
                 detail={"error": f"Failed to complete multipart upload: {str(e)}"},
             )
+
+    # An object the repository may not reference is answered like a missing
+    # one; a claim is proven here, by hashing what the repository uploaded.
+    if not await _may_reference(namespace, name, user, oid):
+        raise HTTPException(404, detail={"error": "Object not found in storage"})
+    lfs_key = get_lfs_key(oid)
 
     # Verify object exists in S3
     if not await object_exists(cfg.s3.bucket, lfs_key):

@@ -15,6 +15,7 @@ import pytest
 
 from kohakuhub import lakefs_rest_client
 from test.kohakuhub.api.helpers import encode_ndjson
+from test.kohakuhub.support.grants import grant_lfs_upload_everywhere
 from test.kohakuhub.support.db import history_operations_need_postgres
 
 REPO = "owner/avail-demo"
@@ -85,6 +86,7 @@ class Repo:
         self.m.s3.put_object(
             Bucket=self.m.cfg.s3.bucket, Key=f"lfs/{oid[:2]}/{oid[2:4]}/{oid}", Body=content
         )
+        grant_lfs_upload_everywhere(oid)
         return oid
 
     async def commit(self, *ops, branch="main", summary="change"):

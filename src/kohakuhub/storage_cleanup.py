@@ -41,11 +41,12 @@ from kohakuhub.db import (
     File,
     LFSObjectHistory,
     LfsGcCandidate,
+    LfsGrant,
     LfsHeadRef,
     Repository,
     utcnow,
 )
-from kohakuhub.lfs_gc import lfs_key, record_candidates
+from kohakuhub.lfs_gc import claim_key, lfs_key, record_candidates
 from kohakuhub.logger import get_logger
 from kohakuhub.utils.lakefs import get_lakefs_client, resolve_lakefs_repo
 from kohakuhub.utils.s3 import get_s3_client
@@ -54,6 +55,9 @@ logger = get_logger("STORAGE_CLEANUP")
 
 PURGE_KIND = "storage.purge_repository"
 COLLECT_LFS_KIND = "storage.collect_lfs"
+EXPIRE_LFS_CLAIMS_KIND = "storage.expire_lfs_claims"
+# Past the 7 days the part URLs of a multipart upload stay valid.
+LFS_CLAIM_TTL = timedelta(days=8)
 EXPIRE_RECENT_LFS_KIND = "storage.expire_recent_lfs"
 REVIEW_LFS_WINDOW_KIND = "storage.review_lfs_window"
 RECONCILE_LFS_KIND = "storage.reconcile_lfs_references"
@@ -159,11 +163,19 @@ def record_repository_lfs(repo: Repository) -> int:
     return len(shas)
 
 
-def enqueue_purge(lakefs_repo: str, label: str) -> int | None:
-    """Schedule the purge of one LakeFS repository; ``None`` if already pending."""
-    return tasks.enqueue(
-        PURGE_KIND, {"lakefs_repo": lakefs_repo, "repo": label}, dedupe_key=f"purge:{lakefs_repo}"
-    )
+def enqueue_purge(
+    lakefs_repo: str, label: str, claim_prefix: str | None = None
+) -> int | None:
+    """Schedule the purge of one LakeFS repository; ``None`` if already pending.
+
+    ``claim_prefix`` is where the repository's unproven LFS claims are held
+    (``lfs_gc.claim_key``); their grant rows go with the repository row, so the
+    purge has to remember where the bytes are.
+    """
+    payload = {"lakefs_repo": lakefs_repo, "repo": label}
+    if claim_prefix:
+        payload["claim_prefix"] = claim_prefix
+    return tasks.enqueue(PURGE_KIND, payload, dedupe_key=f"purge:{lakefs_repo}")
 
 
 def schedule_repository_purge(repo: Repository) -> str:
@@ -176,7 +188,9 @@ def schedule_repository_purge(repo: Repository) -> str:
     """
     lakefs_repo = resolve_lakefs_repo(repo)
     record_repository_lfs(repo)
-    enqueue_purge(lakefs_repo, f"{repo.repo_type}:{repo.full_id}")
+    enqueue_purge(
+        lakefs_repo, f"{repo.repo_type}:{repo.full_id}", claim_prefix=claim_key(repo.id, "")
+    )
     return lakefs_repo
 
 
@@ -227,12 +241,14 @@ async def purge_repository(payload: dict[str, Any], ctx: tasks.TaskContext) -> N
     # Objects go first: while the LakeFS repository exists, nobody can create
     # a new repository with this id whose objects this loop would delete.
     ctx.stage("deleting objects")
-    prefix = f"{lakefs_repo}/"
     deleted = 0
-    while batch := await run_in_s3_executor(_delete_prefix_batch, cfg.s3.bucket, prefix):
-        deleted += batch
-        ctx.progress(deleted)
-        logger.info(f"Deleted {deleted} object(s) under s3://{cfg.s3.bucket}/{prefix}")
+    for prefix in (f"{lakefs_repo}/", payload.get("claim_prefix")):
+        while prefix and (
+            batch := await run_in_s3_executor(_delete_prefix_batch, cfg.s3.bucket, prefix)
+        ):
+            deleted += batch
+            ctx.progress(deleted)
+            logger.info(f"Deleted {deleted} object(s) under s3://{cfg.s3.bucket}/{prefix}")
 
     ctx.stage("deleting LakeFS repository")
     try:
@@ -285,6 +301,24 @@ async def collect_lfs(payload: dict[str, Any], ctx: tasks.TaskContext) -> None:
         deleted += len(doomed)
         ctx.progress(checked, max(total, checked))
     logger.info(f"Checked {checked} LFS object(s); deleted {deleted} nothing relies on")
+
+
+@tasks.task(EXPIRE_LFS_CLAIMS_KIND, every=timedelta(hours=1), max_attempts=3)
+async def expire_lfs_claims(payload: dict[str, Any]) -> None:
+    """Remove claims nobody proved in time: the bytes held for them and their records."""
+    G = LfsGrant
+    stale = list(
+        G.select(G.id, G.repository, G.sha256).where(
+            (G.kind == "claim") & (G.proven == False) & (G.created_at < utcnow() - LFS_CLAIM_TTL)
+        )
+    )
+    if not stale:
+        return
+    await run_in_s3_executor(
+        _delete_keys, cfg.s3.bucket, [claim_key(g.repository_id, g.sha256) for g in stale]
+    )
+    G.delete().where(G.id.in_([g.id for g in stale])).execute()
+    logger.info(f"Removed {len(stale)} unproven LFS claim(s)")
 
 
 @tasks.task(EXPIRE_RECENT_LFS_KIND, every=timedelta(hours=1), max_attempts=3)

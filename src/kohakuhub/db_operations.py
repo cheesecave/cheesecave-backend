@@ -25,6 +25,7 @@ from kohakuhub.db import (
     File,
     Invitation,
     LFSObjectHistory,
+    LfsHeadRef,
     Repository,
     RepositoryLike,
     Session,
@@ -531,6 +532,31 @@ def repository_lfs_totals(repo: Repository) -> tuple[int, int]:
 def get_file_by_sha256(sha256: str) -> File | None:
     """Get file by SHA256 hash (only active files)."""
     return File.get_or_none((File.sha256 == sha256) & (File.is_deleted == False))
+
+
+def repository_holds_lfs_object(repository: Repository, sha256: str) -> bool:
+    """True when ``repository`` itself references the object: an active File
+    row (any branch), a commit-history row, or a branch-head link. Objects are
+    stored once for the whole instance, so this is what scopes a read of an
+    object to the repository it is requested through."""
+    return bool(
+        File.select(File.id)
+        .where(
+            (File.repository == repository)
+            & (File.sha256 == sha256)
+            & (File.is_deleted == False)
+        )
+        .exists()
+        or LFSObjectHistory.select(LFSObjectHistory.id)
+        .where(
+            (LFSObjectHistory.repository == repository)
+            & (LFSObjectHistory.sha256 == sha256)
+        )
+        .exists()
+        or LfsHeadRef.select(LfsHeadRef.id)
+        .where((LfsHeadRef.repository == repository) & (LfsHeadRef.sha256 == sha256))
+        .exists()
+    )
 
 
 def create_file(

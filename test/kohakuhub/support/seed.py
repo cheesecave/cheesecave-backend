@@ -11,6 +11,7 @@ from datetime import datetime, timedelta, timezone
 import httpx
 
 from test.kohakuhub.support.bootstrap import DEFAULT_PASSWORD
+from test.kohakuhub.support.grants import grant_lfs_upload
 from test.kohakuhub.support.seed_credentials import (
     SEED_SSH_KEYS,
     SEED_TOKENS,
@@ -213,6 +214,7 @@ async def build_baseline(
         Body=lfs_bytes,
         ContentType="application/octet-stream",
     )
+    grant_lfs_upload("owner", "demo-model", oid)
 
     lfs_commit = _encode_lines(
         [

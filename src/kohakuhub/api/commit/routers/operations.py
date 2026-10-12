@@ -28,6 +28,7 @@ from kohakuhub.auth.dependencies import get_current_user
 from kohakuhub.auth.permissions import check_repo_write_permission
 from kohakuhub.utils.lakefs import get_lakefs_client, resolve_lakefs_repo
 from kohakuhub.utils.repo_paths import MAX_PATH_BYTES, too_long
+from kohakuhub.lfs_scope import may_reference
 from kohakuhub.utils.s3 import get_object_metadata, object_exists
 from kohakuhub.api.repo.utils import operation_lock
 from kohakuhub.api.repo.utils.gc import track_lfs_object
@@ -95,6 +96,8 @@ async def process_regular_file(
         repo: Repository object
         lakefs_repo: LakeFS repository name
         revision: Branch name
+        user: The committer; what they may read decides whether a stored object
+            this repository never uploaded can be attached (``lfs_scope``)
 
     Returns:
         True if file was changed, False if unchanged
@@ -208,6 +211,7 @@ async def process_lfs_file(
     repo: Repository,
     lakefs_repo: str,
     revision: str,
+    user: User | None = None,
 ) -> tuple[bool, dict | None]:
     """Process LFS file that was uploaded to S3.
 
@@ -328,6 +332,17 @@ async def process_lfs_file(
     # Construct S3 physical address
     lfs_key = f"lfs/{oid[:2]}/{oid[2:4]}/{oid}"
     physical_address = f"s3://{cfg.s3.bucket}/{lfs_key}"
+
+    # An object this repository may not reference is answered like one that is
+    # not stored (the object id alone never attaches somebody else's content).
+    if not await may_reference(repo, user, oid):
+        raise HTTPException(
+            400,
+            detail={
+                "error": f"LFS object {oid} not found in storage. "
+                f"Upload to S3 may have failed. Path: {lfs_key}"
+            },
+        )
 
     # Verify object exists in S3
     try:
@@ -860,7 +875,7 @@ def _pre_a_refusal(branch: str, path: str) -> HTTPException:
 
 
 async def _stage_one(
-    op: dict, repo_row: Repository, lakefs_repo: str, revision: str
+    op: dict, repo_row: Repository, lakefs_repo: str, revision: str, user: User | None = None
 ) -> tuple[bool, dict | None]:
     """Stage one operation on the branch: whether it changed something, and the LFS
     file to track once committed."""
@@ -892,6 +907,7 @@ async def _stage_one(
                     repo=repo_row,
                     lakefs_repo=lakefs_repo,
                     revision=revision,
+                    user=user,
                 )
                 if lfs_info:
                     logger.debug(
@@ -941,14 +957,18 @@ async def _stage_one(
 
 
 async def _stage_operations(
-    operations: list[dict], repo_row: Repository, lakefs_repo: str, revision: str
+    operations: list[dict],
+    repo_row: Repository,
+    lakefs_repo: str,
+    revision: str,
+    user: User | None = None,
 ) -> tuple[bool, list[dict]]:
     """Stage each operation on the branch; whether any changed something,
     and the LFS files to track once committed."""
     files_changed = False
     pending_lfs_tracking = []
     for op in operations:
-        changed, lfs_info = await _stage_one(op, repo_row, lakefs_repo, revision)
+        changed, lfs_info = await _stage_one(op, repo_row, lakefs_repo, revision, user)
         files_changed = files_changed or changed
         if lfs_info:
             pending_lfs_tracking.append(lfs_info)
@@ -1081,7 +1101,7 @@ async def commit(
     before = _file_rows(repo_row, touched, revision)
     try:
         files_changed, pending_lfs_tracking = await _stage_operations(
-            operations, repo_row, lakefs_repo, revision
+            operations, repo_row, lakefs_repo, revision, user
         )
     except Exception as error:
         await _undo(client, lakefs_repo, revision, repo_row, touched, before)
