@@ -22,6 +22,7 @@ from kohakuhub.api import (
     stats,
     validation,
 )
+from kohakuhub.api.ref_path import FullRefMiddleware
 from kohakuhub.api.repo.utils.hf import HFErrorCode, hf_repo_not_found
 from kohakuhub.api.invitation import router as invitation
 from kohakuhub.auth import router as auth_router
@@ -128,6 +129,7 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
 
 
 app.add_middleware(RequestIdMiddleware)
+app.add_middleware(FullRefMiddleware)
 
 
 @app.exception_handler(RepoReadDeniedError)

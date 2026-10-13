@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`resolve` tells a missing revision from a missing file** ([#58](https://github.com/cheesecave/cheesecave-backend/issues/58)).
+  `GET`/`HEAD /{repo}/resolve/nope/<file>` answered `EntryNotFound`, so `hf_hub_download(revision="nope")`
+  raised `EntryNotFoundError`; it is now `404 RevisionNotFound` (`RevisionNotFoundError`), and
+  `EntryNotFound` only when the revision exists and the path does not. Every `stat_object` failure
+  used to look like a missing file; a LakeFS failure is now a `500 ServerError` (retried by
+  `huggingface_hub`). A revision LakeFS refuses as an id (`a..b`, `main~1`, a space) is a missing
+  revision too, as "Invalid rev id" on the Hub, on `resolve`, `revision`, `tree` and the source of a
+  new branch; it was a `500` where the error was not a plain 404.
+- **`refs/heads/<branch>` is understood** (#58). The client sends the revision as
+  `refs%2Fheads%2F<branch>`, which the server split at the slash. `resolve`, `revision` and `tree`
+  now read it as the branch, like the Hub. A branch name with a slash of its own is still #67.
+- **`If-None-Match` on `resolve`** ([#59](https://github.com/cheesecave/cheesecave-backend/issues/59)).
+  A request naming the file's ETag gets `304` (GET and HEAD) instead of a redirect, with `ETag`,
+  `X-Repo-Commit` and `X-Linked-Etag`, and is not counted as a download. The whole RFC 9110 form
+  is accepted (list, `W/`, `*`), which is more than the Hub does.
+
 - **Concurrent commits to one branch lost files** ([#56](https://github.com/cheesecave/cheesecave-backend/issues/56)).
   LakeFS commits whatever is staged on a branch, so two commit requests staging at once made
   one commit carry both requests' files. The other answered 500 or "no changes" although its
