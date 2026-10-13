@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Concurrent commits to one branch lost files** ([#56](https://github.com/cheesecave/cheesecave-backend/issues/56)).
+  LakeFS commits whatever is staged on a branch, so two commit requests staging at once made
+  one commit carry both requests' files. The other answered 500 or "no changes" although its
+  files were committed, its file rows were undone, and with no row linking them the LFS
+  collection deleted their objects a day later. A branch now takes one commit at a time, held
+  in the database (`branch_commit_lock`, migration 034) from staging to the last record; any
+  other request waits for its turn, like the Hub's concurrency queue, and is refused only after
+  20 s with the Hub's own `429 maximum time in concurrency queue reached` and `Retry-After: 2`
+  (huggingface_hub retries it with backoff), having staged nothing; the reason is also in
+  `X-Error-Message`, which is where huggingface_hub reads it.
+  Content that is already in the branch is no longer "undone": its rows and LFS links are
+  kept, so uploading a lost file again repairs it.
+- **`create_commit(parent_commit=...)` is honoured** ([#57](https://github.com/cheesecave/cheesecave-backend/issues/57)):
+  a commit whose parent is no longer the branch head is refused with `412` ("A commit has
+  happened since. Please refresh and try again."), as the Hub answers.
+- **Upgrade safety net.** Migration 034 makes the next LFS reference reconciliation due, and
+  the hourly expiry of uploads waits for it (whatever `lfs_auto_gc` says), so objects the old
+  race left unlinked are linked before anything is collected. The reconciliation counts files
+  that link an already deleted object (`linked_objects_collected`) and leaves them without
+  row or link, so uploading them again works.
 
 ### Added
 

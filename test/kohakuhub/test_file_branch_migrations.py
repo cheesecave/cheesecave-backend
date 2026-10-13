@@ -16,7 +16,7 @@ from types import SimpleNamespace
 from peewee import EXCLUDED, IntegrityError, SqliteDatabase
 import pytest
 
-from kohakuhub.db import File
+from kohakuhub.db import BranchCommitLock, File
 from test.kohakuhub.support import factories
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -40,6 +40,15 @@ def _postgres(database):
 def _sql(database, statement):
     """Peewee's raw SQL uses ``%s`` on PostgreSQL and ``?`` on SQLite."""
     return statement if _postgres(database) else statement.replace("%s", "?")
+
+
+def _before_034(database):
+    """The database 033 ships to: no branch commit lock table yet.
+
+    With the table (034) present, 033 is skipped as superseded by a later migration, which
+    these tests are not about.
+    """
+    database.drop_tables([BranchCommitLock], safe=True)
 
 
 def _bind(monkeypatch, database, module):
@@ -120,6 +129,7 @@ def _new_upsert(repo, path, sha):
 def pre_a(db_dual, monkeypatch):
     """The expand module bound to a pre-A database, with one repository and one main row."""
     _old_file_table(db_dual)
+    _before_034(db_dual)
     module = _bind(monkeypatch, db_dual, _load("file_branch_expand", EXPAND_PATH))
     owner = factories.make_user("owner")
     repo = factories.make_repo(owner, "repo")
@@ -359,6 +369,7 @@ def test_033_running_again_is_a_no_op(drop, capsys):
 
 def test_033_on_a_fresh_database_is_a_no_op(db_dual, monkeypatch, capsys):
     """A database built by init_db never had the old key: nothing to drop, nothing created."""
+    _before_034(db_dual)
     module = _bind(monkeypatch, db_dual, _load("file_branch_drop_old_key", DROP_PATH))
     before = _index_names(db_dual)
     assert module.is_applied(db_dual, module.cfg)
@@ -389,7 +400,11 @@ def test_a_database_without_032_goes_through_032_then_033_in_one_run(pre_a, monk
     """The path of anyone who skipped the previous deploy: the runner applies 032, then 033."""
     runner = _load("run_migrations_order", ROOT / "scripts/run_migrations.py")
     names = [name for name, _path in runner.discover_migrations()]
-    assert names[-2:] == ["032_file_branch_expand", "033_file_branch_drop_old_key"]
+    assert names[-3:] == [
+        "032_file_branch_expand",
+        "033_file_branch_drop_old_key",
+        "034_branch_commit_lock",
+    ]
 
     expand_module, database, repo = pre_a
     module = _bind(monkeypatch, database, _load("file_branch_drop_old_key", DROP_PATH))

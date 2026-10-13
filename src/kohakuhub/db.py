@@ -861,6 +861,27 @@ class RepositoryWrite(BaseModel):
         table_name = "repository_write"
 
 
+class BranchCommitLock(BaseModel):
+    """The commit in flight on a branch of a repository (#56).
+
+    LakeFS commits whatever is staged on a branch, so two requests staging
+    there at once would commit each other's files. A request takes this row
+    before it stages anything and gives it back when it is done; the unique
+    key on ``(repository, branch)`` decides who holds the branch. The lease
+    expires, so a process that dies holding it frees the branch (see
+    api/repo/utils/branch_lock).
+    """
+
+    repository = ForeignKeyField(Repository, on_delete="CASCADE", index=False)
+    branch = CharField()
+    token = CharField(max_length=64)
+    until = DateTimeField()
+
+    class Meta:
+        table_name = "branch_commit_lock"
+        indexes = ((("repository", "branch"), True),)
+
+
 class BackgroundWorker(BaseModel):
     """A worker process, registered at startup and kept fresh by heartbeats.
 
@@ -939,6 +960,7 @@ def init_db():
             LfsGrant,
             LfsGcState,
             RepositoryWrite,
+            BranchCommitLock,
         ],
         safe=True,
     )

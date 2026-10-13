@@ -62,6 +62,16 @@ history_operations_need_postgres = pytest.mark.skipif(
 )
 
 
+# Real client threads hitting one live server write the database from several server threads at
+# once (FastAPI runs its synchronous dependencies in a thread pool, each thread with its own
+# connection: token usage, usage counters, commits). SQLite has one writer at a time and
+# answers "database is locked" under that load; production runs PostgreSQL.
+concurrent_writers_need_postgres = pytest.mark.skipif(
+    not postgres_configured(),
+    reason="several client threads write through the server at once; SQLite allows one writer",
+)
+
+
 def make_database(tmp_path, name="unit", backend=None):
     """Return ``(database, schema)``. ``schema`` is None for SQLite.
 

@@ -174,6 +174,17 @@ It only adds or corrects rows, so running it again changes nothing. If
 recording a branch operation's links ever fails, a reconciliation is queued
 and collection waits for it.
 
+**Upgrading to the version with one commit at a time per branch.** Before it, two commits to
+one branch at the same time could leave files without rows and without links (a commit
+committed the other's staged files, and the other's rows were undone). The collection deleted
+the objects of such files a day after the upload, whatever `KOHAKU_HUB_LFS_AUTO_GC` says. The
+upgrade (migration 034) makes the next reconciliation due, and uploads stay protected until it
+has run: the hourly expiry of uploads queues it and waits, so objects still stored are linked
+before anything is collected. Objects already deleted cannot come back. The reconciliation
+counts them as `linked_objects_collected`, and logs, per repository, the files that link
+one: they are listed but cannot be downloaded. It records no row and no link for them, so
+uploading the same content again is a normal upload and revives the object.
+
 ---
 
 ## Best Practices

@@ -118,10 +118,41 @@ NDJSON (Newline-Delimited JSON) - one JSON object per line:
   "key": "header",
   "value": {
     "summary": "Commit message",
-    "description": "Optional detailed description"
+    "description": "Optional detailed description",
+    "parentCommit": "Optional commit id the branch must still point at"
   }
 }
 ```
+
+**`parentCommit`** (what `create_commit(parent_commit=...)` sends) is the commit id the client
+expects the branch to point at, or its first characters. If the branch has moved on, nothing is
+committed and the answer is `412 Precondition Failed`:
+
+```json
+{"error": "A commit has happened since. Please refresh and try again."}
+```
+
+**One commit at a time per branch.** A branch takes one commit request at a time, from the
+moment its files are staged until everything is recorded. As with the Hub's concurrency queue, a
+commit that arrives while another commit to the same branch is running waits for its turn (up to
+20 seconds) and then goes through: concurrent commits all succeed, each in its own commit. A commit
+that waits longer is refused the way the Hub refuses one, whoever it is: `429 Too Many Requests`
+with `Retry-After: 2`, nothing committed and nothing left staged.
+
+```json
+{"error": "maximum time in concurrency queue reached"}
+```
+
+`huggingface_hub` retries a 429 with backoff (`http_backoff`, honouring `Retry-After`) where it
+sends commits that way, and shows the message in the exception otherwise. The same message is in the
+`X-Error-Message` header, which is where `huggingface_hub` reads it from. Commits to different
+branches, and to different repositories, do not wait for each other. Name the `parentCommit` you
+expect when a branch that has moved on must not be committed to: it is refused with `412` (above).
+A commit that loses its place while it runs (its lease expired and was taken) is refused with `503`
+and `Retry-After: 2`; nothing was committed, so it can be sent again.
+
+A request whose `parentCommit` names a branch that does not exist is answered `404` with
+`X-Error-Code: RevisionNotFound`.
 
 ---
 

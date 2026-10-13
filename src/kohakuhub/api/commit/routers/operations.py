@@ -30,13 +30,14 @@ from kohakuhub.utils.lakefs import get_lakefs_client, resolve_lakefs_repo
 from kohakuhub.utils.repo_paths import MAX_PATH_BYTES, too_long
 from kohakuhub.lfs_scope import may_reference
 from kohakuhub.utils.s3 import get_object_metadata, object_exists
-from kohakuhub.api.repo.utils import operation_lock
+from kohakuhub.api.repo.utils import branch_lock, operation_lock
 from kohakuhub.api.repo.utils.gc import track_lfs_object
 from kohakuhub.lfs_gc import (
     LfsObjectUnavailable,
     claim_for_commit,
     lfs_oid,
     record_evicted_versions,
+    tombstone_state,
 )
 from kohakuhub.storage_cleanup import enqueue_lfs_collection, record_head_change
 from kohakuhub.api.repo.utils.hf import HFErrorCode, ensure_revision_in_history
@@ -318,6 +319,11 @@ async def process_lfs_file(
                 f"- WILL TRACK in LFSObjectHistory"
             )
             # File exists and is active - normal case
+            # A tombstone says the object was collected while the file's row came back (a
+            # read puts a missing row back): the same content committed again claims it, so it
+            # is revived if it was uploaded again and refused (409) if it was not (#56)
+            if tombstone_state(oid) is not None:
+                await _claim_lfs_object(oid, f"lfs/{oid[:2]}/{oid[2:4]}/{oid}")
             # Still return tracking info for new commit
             return False, {
                 "path": path,
@@ -1097,6 +1103,82 @@ async def commit(
         if op["key"] in CREATING and too_long(op["value"].get("path") or ""):
             raise _path_too_long(op["value"]["path"])
 
+    if len(revision) > BRANCH_NAME_MAX:  # no branch has such a name: refuse before keeping it anywhere
+        raise _revision_not_found(repo_id, revision)
+
+    # One commit at a time per branch: LakeFS commits whatever is staged on a branch, so
+    # another request staging meanwhile would have its files committed by this one (#56)
+    async with branch_lock.holding(repo_row, revision) as lease:
+        return await _commit_on_leased_branch(
+            lease, header, operations, repo_type, repo_row, lakefs_repo, revision, user, client
+        )
+
+
+BRANCH_NAME_MAX = 255  # the width of the column the lease and the File rows keep it in
+
+
+def _revision_not_found(repo_id: str, branch: str) -> HTTPException:
+    message = f"Revision '{branch[:100]}' not found in repository '{repo_id}'"
+    return HTTPException(
+        status_code=404,
+        detail={"error": message},
+        headers={"X-Error-Code": HFErrorCode.REVISION_NOT_FOUND, "X-Error-Message": message},
+    )
+
+
+async def _require_parent(client, lakefs_repo: str, repo_id: str, branch: str, parent) -> None:
+    """412 unless ``branch`` still points at ``parent`` (a commit id or its first characters):
+    a commit made on a parent that has since moved is refused, as the Hub answers (#57)."""
+    if not isinstance(parent, str):
+        message = "parentCommit must be a commit id"
+        raise HTTPException(400, detail={"error": message}, headers={"X-Error-Message": message})
+    try:
+        head = (await client.get_branch(repository=lakefs_repo, branch=branch))["commit_id"]
+    except httpx.HTTPStatusError as error:
+        if error.response.status_code != 404:
+            raise HTTPException(500, detail={"error": f"Commit failed: {error}"}) from error
+        raise _revision_not_found(repo_id, branch) from error
+    if not head.startswith(parent):
+        message = "A commit has happened since. Please refresh and try again."
+        raise HTTPException(412, detail={"error": message}, headers={"X-Error-Message": message})
+
+
+def _head_links(
+    operations: list[dict], pending_lfs_tracking: list[dict]
+) -> tuple[dict[str, str | None], list[str]]:
+    """What the operations change in what the branch head links: the paths (with the sha256
+    of an LFS file) and the folders that were deleted."""
+    head_paths = {
+        op["value"].get("path"): None
+        for op in operations
+        if op["key"] in ("file", "lfsFile", "deletedFile", "copyFile")
+    }
+    head_paths.update({info["path"]: info["sha256"] for info in pending_lfs_tracking})
+    folders = [
+        path if path.endswith("/") else f"{path}/"
+        for path in (op["value"].get("path") for op in operations if op["key"] == "deletedFolder")
+    ]
+    return head_paths, folders
+
+
+async def _commit_on_leased_branch(
+    lease: branch_lock.Lease,
+    header: dict,
+    operations: list[dict],
+    repo_type: RepoType,
+    repo_row: Repository,
+    lakefs_repo: str,
+    revision: str,
+    user: User,
+    client,
+) -> dict:
+    """Stage, commit and record what a commit request carries, on a branch this request holds
+    (``branch_lock``): nothing else stages on it until this returns."""
+    namespace, name, repo_id = repo_row.namespace, repo_row.name, repo_row.full_id
+
+    if header.get("parentCommit") is not None:
+        await _require_parent(client, lakefs_repo, repo_id, revision, header["parentCommit"])
+
     touched = _touched(operations)
     before = _file_rows(repo_row, touched, revision)
     try:
@@ -1111,6 +1193,12 @@ async def commit(
 
     # If no files changed, return early
     if not files_changed:
+        # The branch holds this content already. Its LFS files are linked all the same, so a
+        # file whose links an earlier version lost is linked by uploading it again (#56)
+        if pending_lfs_tracking:
+            record_head_change(
+                repo_row, revision, {info["path"]: info["sha256"] for info in pending_lfs_tracking}, []
+            )
         return await _no_change_response(client, lakefs_repo, revision, repo_type, repo_id)
 
     # Create commit in LakeFS
@@ -1119,6 +1207,9 @@ async def commit(
     logger.info(f"Commit message: {commit_msg}")
 
     try:
+        # Still ours? If the lease lapsed and was taken, somebody else may be staging
+        # on the branch: nothing may be committed over them
+        lease.check()
         # A history operation holding the repository goes first; the staged
         # changes then land on top of what it left (operation_lock)
         async with operation_lock.writing(repo_row):
@@ -1129,17 +1220,23 @@ async def commit(
                 metadata={"description": commit_desc} if commit_desc else None,
             )
     except (HTTPException, httpx.HTTPStatusError) as error:
-        # Refused (an operation holds the repository, or LakeFS said no):
-        # nothing was committed
+        from kohakuhub.api.commit.records import refusal  # imports this module
+
+        if isinstance(error, httpx.HTTPStatusError) and refusal(error) == "unchanged":
+            # The staged content is what the branch holds already (rows were missing, so
+            # the content was written again): nothing to commit, and not a failure. The rows
+            # describe the branch as it is, so they stay, and so do the links that keep the
+            # collector away from these objects. Undoing them left the files with no rows,
+            # and the collector deleted their objects (#56)
+            record_head_change(repo_row, revision, *_head_links(operations, pending_lfs_tracking))
+            return await _no_change_response(client, lakefs_repo, revision, repo_type, repo_id)
+        # Refused (an operation holds the repository, the lease was lost, or LakeFS said no):
+        # nothing was committed. ponytail: after a lost lease this also resets this request's
+        # own paths on a branch somebody else holds; a lease only lapses after a minute
+        # without renewal (a database outage), and keeping the staging would be worse
         await _undo(client, lakefs_repo, revision, repo_row, touched, before)
         if isinstance(error, HTTPException):
             raise
-        # The staged content is what the branch holds (a row was missing, so the
-        # content was written again): nothing to commit, which is not a failure (#11)
-        from kohakuhub.api.commit.records import refusal  # imports this module
-
-        if refusal(error) == "unchanged":
-            return await _no_change_response(client, lakefs_repo, revision, repo_type, repo_id)
         raise HTTPException(500, detail={"error": f"Commit failed: {error}"}) from error
     except Exception as e:
         # No answer: the commit may have landed, so the branch stays as it is
@@ -1240,17 +1337,7 @@ async def commit(
         )
 
     # What the branch head links now; garbage collection never deletes it (#114)
-    head_paths = {
-        op["value"].get("path"): None
-        for op in operations
-        if op["key"] in ("file", "lfsFile", "deletedFile", "copyFile")
-    }
-    head_paths.update({info["path"]: info["sha256"] for info in pending_lfs_tracking})
-    folders = [
-        path if path.endswith("/") else f"{path}/"
-        for path in (op["value"].get("path") for op in operations if op["key"] == "deletedFolder")
-    ]
-    record_head_change(repo_row, revision, head_paths, folders)
+    record_head_change(repo_row, revision, *_head_links(operations, pending_lfs_tracking))
 
     if revision == usage.MAIN:
         from kohakuhub.api.commit.records import count_main_move  # imports this module

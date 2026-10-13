@@ -324,6 +324,13 @@ async def expire_lfs_claims(payload: dict[str, Any]) -> None:
 @tasks.task(EXPIRE_RECENT_LFS_KIND, every=timedelta(hours=1), max_attempts=3)
 async def expire_recent_lfs(payload: dict[str, Any]) -> None:
     """Hand uploads whose grace period ended to the collection."""
+    if not lfs_gc.references_reconciled():
+        # An upload leaves its grace period for the collection only once every link a branch
+        # head has is recorded, whatever ``lfs_auto_gc`` says: files an earlier version left
+        # unlinked (#56) are linked by the reconciliation, and an upload nothing links is
+        # collected
+        enqueue_lfs_reconciliation()
+        return
     expired = lfs_gc.expire_recent()
     if expired:
         enqueue_lfs_collection()
@@ -544,6 +551,26 @@ async def reconcile_lfs_references(payload: dict[str, Any], ctx: tasks.TaskConte
         else:
             heads, default_head, default_paths, counts = found
             stats.update(counts)
+            # A link whose object is already deleted gets no row and no link: it cannot be
+            # downloaded, and a row saying the file is there would make the next upload of
+            # the same content "unchanged", so it could never be uploaded again (#56)
+            lost = lfs_gc.collected_links(heads)
+            if lost:
+                lost_shas = {sha for _, _, sha in lost}
+                heads = {link for link in heads if link[2] not in lost_shas}
+                # nor is the path "on the head" for restoring a deleted row, which would say the
+                # file is there just the same
+                default_paths = set(default_paths) - {
+                    path for path, value in default_head.items() if value[0] in lost_shas
+                }
+                default_head = {
+                    path: value for path, value in default_head.items() if value[0] not in lost_shas
+                }
+                stats["linked_objects_collected"] += len(lost)
+                logger.warning(
+                    f"{repo.full_id}: {len(lost)} link(s) point at LFS objects that were already "
+                    f"deleted; upload the files again: {[path for _, path, _ in lost[:5]]}"
+                )
             stats.update(lfs_gc.reconcile_references(repo, heads, default_head, default_paths))
         stats["repositories"] += 1
         done += 1

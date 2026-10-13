@@ -752,7 +752,7 @@ async def test_a_commit_stands_whatever_counting_it_does(u, owner_client, monkey
 
 
 async def test_concurrent_commits_to_main(u, owner_client):
-    """Commits racing on main (LakeFS refuses some: "predicate failed")."""
+    """Commits racing on main: one holds the branch at a time, the others wait their turn."""
     repo = await _new(u, owner_client, "usage-concurrent")
 
     async def attempt(i):
