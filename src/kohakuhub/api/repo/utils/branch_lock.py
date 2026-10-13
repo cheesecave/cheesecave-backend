@@ -9,11 +9,13 @@ objects a day later.
 
 So the commit route takes this lease before it stages anything and gives it
 back after everything is recorded. The unique key on ``(repository, branch)``
-decides who holds the branch; a request that cannot take it is refused at once
-with the same answer whoever it is (409, retryable) and has staged nothing.
-A client that wants its commit after another's tries again, or names the
-``parent_commit`` it expects (refused with 412 once the branch has moved, as
-the Hub answers).
+decides who holds the branch. Like the Hub's concurrency queue, a commit that
+finds the branch busy waits for its turn (``QUEUE_SECONDS``); one that waits
+too long gets what the Hub answers then: ``429 maximum time in concurrency
+queue reached`` (huggingface_hub issue 3071), which huggingface_hub retries
+with backoff, honouring ``Retry-After``. Whoever it is, the answer is the same,
+and the request has staged nothing. A client that names the ``parent_commit``
+it expects is refused with 412 once the branch has moved, as the Hub does.
 
 The lease is in the database, not in the process, because the API runs several
 workers. It expires, so a process that dies holding it frees the branch within
@@ -22,6 +24,7 @@ works, and checks it still holds it right before LakeFS commits (``Lease.check``
 """
 
 import asyncio
+import random
 import uuid
 from contextlib import asynccontextmanager
 from datetime import timedelta
@@ -36,6 +39,8 @@ logger = get_logger("BRANCH_LOCK")
 
 LEASE_SECONDS = 60  # a crashed holder frees the branch after this long
 RENEW_SECONDS = LEASE_SECONDS / 3  # renewed this often while the commit runs
+QUEUE_SECONDS = 20.0  # a commit waits this long for the branch before it is refused
+QUEUE_POLL_SECONDS = 0.05  # how often a waiting commit looks again (with some jitter)
 RETRY_AFTER = "2"  # seconds, for requests refused while the branch is held
 
 
@@ -94,30 +99,41 @@ def release(repo_id: int, branch: str, token: str) -> None:
     ).execute()
 
 
-def _busy(branch: str) -> HTTPException:
+def _refusal(status: int, message: str) -> HTTPException:
+    """``X-Error-Message`` is what ``huggingface_hub`` shows the user: it does not read the
+    ``detail`` object FastAPI wraps the error in. ``Retry-After`` is honoured by its backoff."""
     return HTTPException(
-        status_code=409,
-        detail={
-            "error": (
-                f"Branch '{branch}' is busy: another commit to it is in progress. "
-                "Nothing was committed; try again in a few seconds."
-            )
-        },
-        headers={"Retry-After": RETRY_AFTER},
+        status_code=status,
+        detail={"error": message},
+        headers={"Retry-After": RETRY_AFTER, "X-Error-Message": message},
     )
+
+
+def _busy() -> HTTPException:
+    # The Hub's own words for a commit that waited too long in its queue
+    return _refusal(429, "maximum time in concurrency queue reached")
 
 
 def _lost(branch: str) -> HTTPException:
-    return HTTPException(
-        status_code=409,
-        detail={
-            "error": (
-                f"The lease on branch '{branch}' was lost before the commit finished. "
-                "Nothing was committed; try again."
-            )
-        },
-        headers={"Retry-After": RETRY_AFTER},
+    # Nothing was committed, so a client may retry: 503 is retried with backoff
+    return _refusal(
+        503,
+        f"The lease on branch '{branch}' was lost before the commit finished. "
+        "Nothing was committed; try again.",
     )
+
+
+async def _wait_for(repo_id: int, branch: str) -> str:
+    """Take the branch, waiting up to ``QUEUE_SECONDS`` for its turn."""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + QUEUE_SECONDS
+    while True:
+        token = acquire(repo_id, branch)
+        if token is not None:
+            return token
+        if loop.time() >= deadline:
+            raise _busy()
+        await asyncio.sleep(QUEUE_POLL_SECONDS * (0.5 + random.random()))
 
 
 class Lease:
@@ -127,7 +143,7 @@ class Lease:
         self.repo_id, self.branch, self.token = repo_id, branch, token
 
     def check(self) -> None:
-        """Refuse (409) if the lease lapsed or was taken since: LakeFS must not
+        """Refuse (503) if the lease lapsed or was taken since: LakeFS must not
         commit on a branch somebody else may be staging on."""
         if not is_held(self.repo_id, self.branch, self.token):
             raise _lost(self.branch)
@@ -135,10 +151,9 @@ class Lease:
 
 @asynccontextmanager
 async def holding(repo: Repository, branch: str):
-    """Hold the branch for the length of the block; refuse (409) if it is held."""
-    token = acquire(repo.id, branch)
-    if token is None:
-        raise _busy(branch)
+    """Hold the branch for the length of the block; wait for it if it is held, and refuse
+    (429) once the wait is over."""
+    token = await _wait_for(repo.id, branch)
 
     async def keep_renewing():
         while True:

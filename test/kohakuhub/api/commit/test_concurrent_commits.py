@@ -23,13 +23,15 @@ from test.kohakuhub.api.helpers import encode_ndjson
 
 
 @pytest.fixture
-def m(prepared_backend_test_state):
+def m(prepared_backend_test_state, monkeypatch):
     lakefs_rest_client._singleton_client = None
     ns = SimpleNamespace()
     ns.cfg = _live("kohakuhub.config").cfg
     ns.db = _live("kohakuhub.db")
     ns.gc = _live("kohakuhub.lfs_gc")
     ns.lock = _live("kohakuhub.api.repo.utils.branch_lock")
+    # No waiting in the queue unless a test asks for it: a branch another request holds is refused at once
+    monkeypatch.setattr(ns.lock, "QUEUE_SECONDS", 0)
     ns.cleanup = _live("kohakuhub.storage_cleanup")
     ns.ops = _live("kohakuhub.api.commit.routers.operations")
     ns.s3 = _live("kohakuhub.utils.s3").get_s3_client()
@@ -127,9 +129,10 @@ def _in_storage(m, oid):
 
 def _is_busy(response):
     return (
-        response.status_code == 409
+        response.status_code == 429  # what the Hub answers when a commit waited too long in its queue
         and response.headers.get("retry-after") == "2"
-        and "busy" in response.json()["detail"]["error"]
+        and response.json()["detail"]["error"] == "maximum time in concurrency queue reached"
+        and response.headers.get("x-error-message") == response.json()["detail"]["error"]
     )
 
 
@@ -148,10 +151,10 @@ async def test_commits_racing_on_one_branch_never_share_files(m, owner_client):
     )
 
     statuses = [r.status_code for r in responses]
-    assert set(statuses) <= {200, 409}, statuses  # never a 500
+    assert set(statuses) <= {200, 429}, statuses  # never a 500
     winners = {i for i, r in enumerate(responses) if r.status_code == 200}
     assert winners
-    assert all(_is_busy(r) for r in responses if r.status_code == 409)
+    assert all(_is_busy(r) for r in responses if r.status_code == 429)
     # what the branch holds is what the winners wrote: nothing of a loser, nothing staged
     assert await _tree(m, repo) == {f"par/{i}.txt" for i in winners}
     assert _file_paths(m, repo) == {f"par/{i}.txt" for i in winners}
@@ -211,13 +214,43 @@ async def test_lfs_files_of_racing_commits_survive_the_collector(m, owner_client
         *(_post(m, repo, [lfs(f"par/{i}.bin", contents[i])]) for i in range(8))
     )
 
-    assert {r.status_code for r in responses} <= {200, 409}
+    assert {r.status_code for r in responses} <= {200, 429}
     winners = [i for i, r in enumerate(responses) if r.status_code == 200]
     assert winners
     await _collect_a_day_later(m)
     for i in winners:
         assert _in_storage(m, hashlib.sha256(contents[i]).hexdigest()), f"par/{i}.bin was collected"
     assert await _tree(m, repo) == {f"par/{i}.bin" for i in winners}
+
+
+async def test_commits_racing_on_one_branch_queue_up_and_all_land(m, owner_client, monkeypatch):
+    """The Hub queues concurrent commits: every request lands, in its own commit, no retry needed."""
+    monkeypatch.setattr(m.lock, "QUEUE_SECONDS", 60)
+    repo = await _new(m, owner_client, "serial-queue")
+    initial = await repo.head()
+    contents = {i: f"queued lfs {i} ".encode() * 20 for i in range(4)}
+
+    def op(i):
+        return lfs(f"par/{i}.bin", contents[i]) if i < 4 else _file(f"par/{i}.txt", f"c{i}")
+
+    responses = await asyncio.gather(
+        *(_post(m, repo, [op(i)], summary=f"commit {i}") for i in range(12))
+    )
+
+    assert [r.status_code for r in responses] == [200] * 12, [r.text[:80] for r in responses if r.status_code != 200]
+    expected = {f"par/{i}.bin" for i in range(4)} | {f"par/{i}.txt" for i in range(4, 12)}
+    assert await _tree(m, repo) == expected and _file_paths(m, repo) == expected
+    assert await _staged(m, repo) == []
+    by_oid = {responses[i].json()["commitOid"]: i for i in range(12)}
+    commits = [c for c in await _commits(m, repo) if c["id"] != initial]
+    assert {c["id"] for c in commits} == set(by_oid)  # one commit each
+    for commit in commits:
+        i = by_oid[commit["id"]]
+        path = f"par/{i}.bin" if i < 4 else f"par/{i}.txt"
+        assert await _added_by(m, repo, commit) == {path}
+    await _collect_a_day_later(m)
+    for i in range(4):
+        assert _in_storage(m, hashlib.sha256(contents[i]).hexdigest())
 
 
 # --- the one that cannot get the branch ----------------------------------------------------
@@ -316,7 +349,7 @@ async def test_a_commit_that_lost_its_lease_does_not_reach_lakefs(m, owner_clien
 
     response = await _post(m, repo, [_file("a.txt", "a")])
 
-    assert response.status_code == 409, response.text
+    assert response.status_code == 503, response.text  # nothing was committed: retried with backoff
     assert "lost" in response.json()["detail"]["error"]
     assert await repo.head() == head
     assert await _staged(m, repo) == []
@@ -337,6 +370,7 @@ async def test_a_stale_parent_is_refused_and_leaves_nothing_behind(m, owner_clie
     assert response.json()["detail"]["error"] == (
         "A commit has happened since. Please refresh and try again."
     )
+    assert response.headers["x-error-message"] == response.json()["detail"]["error"]
     assert await repo.head() == moved
     assert await _tree(m, repo) == {"first.txt"}
     assert await _staged(m, repo) == []
@@ -357,7 +391,8 @@ async def test_the_current_parent_commits_whole_or_abbreviated(m, owner_client):
     assert await _tree(m, repo) == {"a.txt", "b.txt"}
 
 
-async def test_two_commits_on_the_same_parent_keep_one(m, owner_client):
+async def test_two_commits_on_the_same_parent_keep_one(m, owner_client, monkeypatch):
+    monkeypatch.setattr(m.lock, "QUEUE_SECONDS", 30)  # they queue, then the parent is stale for all but one
     repo = await _new(m, owner_client, "serial-same-parent")
     parent = await repo.head()
 
@@ -369,7 +404,7 @@ async def test_two_commits_on_the_same_parent_keep_one(m, owner_client):
     )
 
     codes = sorted(r.status_code for r in responses)
-    assert codes.count(200) == 1 and set(codes) <= {200, 409, 412}, codes
+    assert codes == [200, 412, 412, 412, 412], codes
     winner = next(i for i, r in enumerate(responses) if r.status_code == 200)
     assert await _tree(m, repo) == {f"par/{winner}.txt"}
 
@@ -393,6 +428,7 @@ async def test_a_parent_that_is_not_a_commit_id_is_a_bad_request(m, owner_client
 
     assert response.status_code == 400, response.text
     assert "parentCommit" in response.json()["detail"]["error"]
+    assert response.headers["x-error-message"] == response.json()["detail"]["error"]
     assert await _staged(m, repo) == []
     assert m.db.BranchCommitLock.select().count() == 0
 

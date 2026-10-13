@@ -87,17 +87,56 @@ async def test_holding_gives_the_lease_back_when_the_block_fails(repo):
     assert _row(repo) is None
 
 
-async def test_a_busy_branch_is_refused_the_same_way_whoever_asks(repo):
+async def test_a_commit_waits_for_the_branch_and_then_takes_it(repo):
+    """Like the Hub's concurrency queue: a commit that finds the branch busy waits for it."""
+    entered = []
+
+    async def second():
+        async with branch_lock.holding(repo, "main"):
+            entered.append("second")
+
+    async with branch_lock.holding(repo, "main"):
+        waiting = asyncio.create_task(second())
+        await asyncio.sleep(0.3)
+        assert not waiting.done() and entered == []  # still in the queue
+    await asyncio.wait_for(waiting, timeout=10)  # the branch was given back: it took its turn
+    assert entered == ["second"]
+    assert _row(repo) is None
+
+
+async def test_the_queue_is_served_one_at_a_time(repo):
+    running, peak, done = 0, 0, []
+
+    async def commit(i):
+        nonlocal running, peak
+        async with branch_lock.holding(repo, "main"):
+            running += 1
+            peak = max(peak, running)
+            await asyncio.sleep(0.02)
+            running -= 1
+            done.append(i)
+
+    await asyncio.wait_for(asyncio.gather(*(commit(i) for i in range(12))), timeout=60)
+    assert peak == 1 and sorted(done) == list(range(12))
+
+
+async def test_a_commit_that_waits_too_long_gets_the_hubs_queue_answer(repo, monkeypatch):
+    """The Hub answers 429 "maximum time in concurrency queue reached" (huggingface_hub issue 3071);
+    huggingface_hub retries a 429 with backoff, honouring Retry-After. Whoever it is, the answer is
+    the same, and the holder's lease is not touched."""
+    monkeypatch.setattr(branch_lock, "QUEUE_SECONDS", 0.2)
     async with branch_lock.holding(repo, "main"):
         for _ in range(3):
             with pytest.raises(HTTPException) as refused:
                 async with branch_lock.holding(repo, "main"):
                     raise AssertionError("must not get in")
             error = refused.value
-            assert error.status_code == 409
-            assert error.headers == {"Retry-After": branch_lock.RETRY_AFTER}
-            assert "main" in error.detail["error"] and "busy" in error.detail["error"]
-        # the refused askers did not take the holder's lease away
+            assert error.status_code == 429
+            assert error.detail == {"error": "maximum time in concurrency queue reached"}
+            assert error.headers == {
+                "Retry-After": branch_lock.RETRY_AFTER,
+                "X-Error-Message": "maximum time in concurrency queue reached",  # what huggingface_hub shows
+            }
         assert _row(repo) is not None
     assert _row(repo) is None
 
@@ -107,8 +146,11 @@ async def test_check_fails_once_the_lease_is_lost(repo):
         BranchCommitLock.delete().execute()  # expired and taken, or removed
         with pytest.raises(HTTPException) as lost:
             lease.check()
-        assert lost.value.status_code == 409
-        assert lost.value.headers == {"Retry-After": branch_lock.RETRY_AFTER}
+        assert lost.value.status_code == 503  # nothing was committed; retried with backoff by the clients
+        assert lost.value.headers == {
+            "Retry-After": branch_lock.RETRY_AFTER,
+            "X-Error-Message": lost.value.detail["error"],
+        }
         assert "lost" in lost.value.detail["error"]
     # leaving must not disturb a lease that is somebody else's now
     other = branch_lock.acquire(repo.id, "main")

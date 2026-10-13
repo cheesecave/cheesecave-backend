@@ -15,6 +15,8 @@ import pytest
 from huggingface_hub import CommitOperationAdd, HfApi, hf_hub_download
 from huggingface_hub.utils import HfHubHTTPError
 
+from test.kohakuhub.api.commit.test_availability import _file, _live
+from test.kohakuhub.api.helpers import encode_ndjson
 from test.kohakuhub.support.db import concurrent_writers_need_postgres
 from test.kohakuhub.api.commit.test_concurrent_commits import (  # noqa: F401 - m is the fixture
     _added_by,
@@ -67,10 +69,10 @@ async def test_parallel_uploads_to_one_branch(
         *(asyncio.to_thread(_upload, api, repo.id, i, contents[i]) for i in contents)
     )
 
-    assert {status for _, status, _ in results} <= {200, 409}, results  # never a 500
+    assert {status for _, status, _ in results} <= {200, 429}, results  # never a 500
     winners = {i for i, status, _ in results if status == 200}
     assert winners
-    assert all(retry == "2" for _, status, retry in results if status == 409)
+    assert all(retry == "2" for _, status, retry in results if status == 429)
     # the repository holds the winners' files and nothing else, none of it staged
     expected = {_path(i, contents[i]) for i in winners}
     assert await _tree(m, repo) == expected
@@ -114,7 +116,7 @@ async def test_parallel_uploads_that_try_again_all_land(
             _, status, _ = _upload(api, repo.id, i, contents[i])
             if status == 200:
                 return True
-            assert status == 409, status
+            assert status in (412, 429), status  # what the Hub answers; the documented retry is on these
             time.sleep(0.05)
         return False
 
@@ -160,6 +162,7 @@ async def test_create_commit_on_a_stale_parent_commit(
     with pytest.raises(HfHubHTTPError) as refused:
         await asyncio.to_thread(commit, "third.txt", stale)
     assert refused.value.response.status_code == 412
+    assert "A commit has happened since" in (refused.value.server_message or "")  # the user sees why
     assert await _tree(m, repo) == {"first.txt", "second.txt"}
     assert await _staged(m, repo) == []
 
@@ -167,3 +170,79 @@ async def test_create_commit_on_a_stale_parent_commit(
     info = await asyncio.to_thread(commit, "third.txt", current)
     assert info.commit_message == "add third.txt"
     assert await _tree(m, repo) == {"first.txt", "second.txt", "third.txt"}
+
+
+async def test_create_commit_on_a_busy_branch_says_why(m, owner_client, live_server_url, hf_api_token):
+    """A commit that waited too long in the queue is the Hub's 429, with the Hub's words, and the
+    huggingface_hub user is shown them."""
+    api = HfApi(endpoint=live_server_url, token=hf_api_token)
+    repo = await _new(m, owner_client, "hf-busy")
+    row_id = m.db.Repository.get(m.db.Repository.full_id == repo.id).id
+    token = m.lock.acquire(row_id, "main")
+    try:
+        with pytest.raises(HfHubHTTPError) as refused:
+            await asyncio.to_thread(
+                api.create_commit, repo.id, [CommitOperationAdd("a.txt", b"a")], commit_message="a"
+            )
+    finally:
+        m.lock.release(row_id, "main", token)
+    assert refused.value.response.status_code == 429
+    assert refused.value.response.headers.get("retry-after") == "2"
+    assert "maximum time in concurrency queue reached" in (refused.value.server_message or "")
+
+
+@concurrent_writers_need_postgres
+async def test_parallel_upload_file_calls_all_succeed_like_on_the_hub(
+    m, owner_client, live_server_url, hf_api_token, monkeypatch
+):
+    """The plain huggingface_hub call, no retry of ours: concurrent commits to one branch queue up
+    and every call returns, as against the Hub."""
+    monkeypatch.setattr(m.lock, "QUEUE_SECONDS", 120)
+    api = HfApi(endpoint=live_server_url, token=hf_api_token)
+    repo = await _new(m, owner_client, "hf-queue")
+    contents = _contents(12)
+
+    results = await asyncio.gather(
+        *(asyncio.to_thread(_upload, api, repo.id, i, contents[i]) for i in contents)
+    )
+
+    assert [status for _, status, _ in results] == [200] * 12, results
+    expected = {_path(i, contents[i]) for i in contents}
+    assert await _tree(m, repo) == expected and _file_paths(m, repo) == expected
+    assert await _staged(m, repo) == []
+
+
+async def test_http_backoff_rides_out_a_busy_branch(m, owner_client, live_server_url, hf_api_token):
+    """What huggingface_hub does with a retryable status: its own `http_backoff`, which its upload
+    pipeline sends commits with (that pipeline is not reachable here, the suite keeps the client off
+    Xet and it is used only with Xet). A commit refused with 429 is sent again after the wait and goes
+    through once the branch is free."""
+    from huggingface_hub.utils import http_backoff
+
+    repo = await _new(m, owner_client, "hf-backoff")
+    # the client the test's loop just made must not be reused by the live server's loop (see test_super_squash)
+    _live("kohakuhub.lakefs_rest_client")._singleton_client = None
+    row_id = m.db.Repository.get(m.db.Repository.full_id == repo.id).id
+    payload = encode_ndjson(
+        [{"key": "header", "value": {"summary": "via backoff"}}, _file("a.txt", "a")]
+    )
+
+    def commit():
+        return http_backoff(
+            "POST",
+            f"{live_server_url}/api/models/{repo.id}/commit/main",
+            data=payload,
+            headers={"Authorization": f"Bearer {hf_api_token}", "Content-Type": "application/x-ndjson"},
+            retry_on_status_codes=(429, 503),
+            base_wait_time=0.2,
+        )
+
+    token = m.lock.acquire(row_id, "main")
+    sending = asyncio.create_task(asyncio.to_thread(commit))
+    await asyncio.sleep(1.0)  # refused (429) at least once while the branch is held
+    assert not sending.done()
+    m.lock.release(row_id, "main", token)
+    response = await asyncio.wait_for(sending, timeout=60)
+
+    assert response.status_code == 200, response.text
+    assert await _tree(m, repo) == {"a.txt"}

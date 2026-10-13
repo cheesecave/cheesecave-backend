@@ -15,7 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   files were committed, its file rows were undone, and with no row linking them the LFS
   collection deleted their objects a day later. A branch now takes one commit at a time, held
   in the database (`branch_commit_lock`, migration 034) from staging to the last record; any
-  other request is refused at once with `409` and `Retry-After: 2`, having staged nothing.
+  other request waits for its turn, like the Hub's concurrency queue, and is refused only after
+  20 s with the Hub's own `429 maximum time in concurrency queue reached` and `Retry-After: 2`
+  (huggingface_hub retries it with backoff), having staged nothing; the reason is also in
+  `X-Error-Message`, which is where huggingface_hub reads it.
   Content that is already in the branch is no longer "undone": its rows and LFS links are
   kept, so uploading a lost file again repairs it.
 - **`create_commit(parent_commit=...)` is honoured** ([#57](https://github.com/cheesecave/cheesecave-backend/issues/57)):

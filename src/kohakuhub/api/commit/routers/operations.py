@@ -1130,7 +1130,8 @@ async def _require_parent(client, lakefs_repo: str, repo_id: str, branch: str, p
     """412 unless ``branch`` still points at ``parent`` (a commit id or its first characters):
     a commit made on a parent that has since moved is refused, as the Hub answers (#57)."""
     if not isinstance(parent, str):
-        raise HTTPException(400, detail={"error": "parentCommit must be a commit id"})
+        message = "parentCommit must be a commit id"
+        raise HTTPException(400, detail={"error": message}, headers={"X-Error-Message": message})
     try:
         head = (await client.get_branch(repository=lakefs_repo, branch=branch))["commit_id"]
     except httpx.HTTPStatusError as error:
@@ -1138,9 +1139,8 @@ async def _require_parent(client, lakefs_repo: str, repo_id: str, branch: str, p
             raise HTTPException(500, detail={"error": f"Commit failed: {error}"}) from error
         raise _revision_not_found(repo_id, branch) from error
     if not head.startswith(parent):
-        raise HTTPException(
-            412, detail={"error": "A commit has happened since. Please refresh and try again."}
-        )
+        message = "A commit has happened since. Please refresh and try again."
+        raise HTTPException(412, detail={"error": message}, headers={"X-Error-Message": message})
 
 
 def _head_links(
