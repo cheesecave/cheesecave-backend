@@ -32,6 +32,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Account routes in the Hub's shapes** (#60, #64, #65). `list_user_followers`, `list_user_following`
+  and `list_organization_followers` read a bare array with `Link` paging (they raised `TypeError`
+  before); `whoami-v2` carries `avatarUrl` and the Hub's organization fields; user and organization
+  overview, organization members, `auth_check`, `get_model_tags` and `get_dataset_tags` exist. The
+  follower routes change shape (`{items, has_more, next_cursor}` -> a bare array): deploy the web
+  client that reads both shapes first.
 - **Hub-compatible repository lists** (#53, #54, #55). `GET /api/{models,datasets,spaces}` pages
   with `Link: <...>; rel="next"` (at most 1000 items per response), follows the Hub's sort names
   and `direction`, and supports `search`, `filter`, `pipeline_tag`, `library`, `language`,

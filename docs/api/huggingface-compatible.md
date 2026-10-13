@@ -140,6 +140,11 @@ incomplete. With `partial=ok` the source is skipped and the response says so in
 
 ---
 
+## Access Preflight and Tag Vocabularies
+
+- `GET /api/{models,datasets,spaces}/{namespace}/{name}/auth-check` (`HfApi.auth_check`): `200` when the caller can read the repository; otherwise `404` with `X-Error-Code: RepoNotFound`, the same answer for a private and a missing repository (the client raises `RepositoryNotFoundError`). A repository only a fallback source has is answered by that source, like the info route.
+- `GET /api/models-tags-by-type`, `GET /api/datasets-tags-by-type` (`get_model_tags`, `get_dataset_tags`): the tags **in use on this hub** among what the caller may read, grouped like the Hub's (`pipeline_tag`, `library`, `language`, `license`, `other`, ... for models; `task_categories`, `size_categories`, `language`, `license`, ... for datasets), each entry `{id, label, type}`. The Hub's lists are global and curated; this one is what the site indexed.
+
 ## File Operations
 
 ### File Download/Resolution
