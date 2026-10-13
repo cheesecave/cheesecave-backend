@@ -3,6 +3,7 @@
 import re
 from types import SimpleNamespace
 
+import httpx
 import pytest
 
 from kohakuhub.utils.lakefs import (
@@ -209,3 +210,35 @@ async def test_resolve_revision_raises_for_missing_revision():
 
     with pytest.raises(ValueError):
         await resolve_revision(lakefs, "m-owner-demo", "missing-ref")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status, expected", [(400, ValueError), (404, ValueError), (503, httpx.HTTPStatusError)])
+async def test_resolve_revision_reads_what_lakefs_says_of_a_ref_it_rejects(status, expected):
+    """LakeFS answers 400 for a ref id it does not accept (``main~1``, ``a..b``, a space): that is
+    a revision that does not exist, as on the Hub; only a failure of LakeFS itself is an error."""
+    request = httpx.Request("GET", "http://lakefs/x")
+
+    class Rejecting:
+        async def get_branch(self, **kwargs):
+            raise httpx.HTTPStatusError(
+                "LakeFS API error", request=request, response=httpx.Response(status, request=request)
+            )
+
+        async def get_commit(self, **kwargs):
+            raise httpx.HTTPStatusError(
+                "LakeFS API error", request=request, response=httpx.Response(status, request=request)
+            )
+
+    with pytest.raises(expected):
+        await resolve_revision(Rejecting(), "m-owner-demo", "main~1")
+
+
+@pytest.mark.asyncio
+async def test_resolve_revision_reads_a_url_httpx_refuses_as_a_missing_revision():
+    class Refusing:
+        async def get_branch(self, **kwargs):
+            raise httpx.InvalidURL("Invalid non-printable ASCII character in URL")
+
+    with pytest.raises(ValueError):
+        await resolve_revision(Refusing(), "m-owner-demo", "x\x00y")

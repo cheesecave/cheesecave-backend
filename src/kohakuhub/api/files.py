@@ -4,11 +4,13 @@ import asyncio
 import base64
 import hashlib
 import json
+import re
 from datetime import datetime
 from enum import Enum
 from typing import Optional
 from urllib.parse import quote
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import RedirectResponse, Response
 
@@ -49,7 +51,6 @@ from kohakuhub.api.repo.utils.hf import (
     hf_repo_not_found,
     hf_siblings_json,
     repo_info_fields,
-    ensure_revision_in_history,
     hf_revision_not_found,
     hf_server_error,
 )
@@ -408,6 +409,45 @@ async def get_revision(
 # ========== Download Endpoints ==========
 
 
+def _resolve_error(status: int, code: str, message: str) -> HTTPException:
+    """The Hub's error shape for ``resolve``: the code and the reason are headers."""
+    return HTTPException(
+        status_code=status,
+        detail={"error": message},
+        headers={"X-Error-Code": code, "X-Error-Message": message},
+    )
+
+
+_ETAG_ITEM = re.compile(r'(?:W/)?"[^"]*"|[^,\s]+')
+
+
+def etag_matches(if_none_match: str | None, etag: str) -> bool:
+    """RFC 9110 ``If-None-Match`` (weak comparison): ``*``, or a list in which an
+    entity tag, weak or not, quoted or not, equals ``etag``. The Hub answers 304
+    to the exact quoted ETag only; this accepts that and the rest of the RFC."""
+    if not if_none_match or not etag:
+        return False
+    wanted = etag.removeprefix("W/").strip('"')
+    for item in _ETAG_ITEM.findall(if_none_match):
+        if item == "*" or item.removeprefix("W/").strip('"') == wanted:
+            return True
+    return False
+
+
+def _not_modified(request: Request, headers: dict[str, str]) -> Response | None:
+    """304 with the validators when the request's ``If-None-Match`` names the file's
+    ETag (#59); ``None`` otherwise. No redirect, so no presigned URL is handed out."""
+    if not etag_matches(request.headers.get("if-none-match"), headers.get("ETag", "")):
+        return None
+    kept = {
+        name: headers[name]
+        for name in ("ETag", "X-Repo-Commit", "X-Linked-Etag")
+        if headers.get(name)
+    }
+    kept["Cache-Control"] = "no-store"
+    return Response(status_code=304, headers=kept)
+
+
 async def _get_file_metadata(
     repo_type: str,
     namespace: str,
@@ -438,7 +478,21 @@ async def _get_file_metadata(
 
     lakefs_repo = resolve_lakefs_repo(repo_row)
     client = get_lakefs_client()
-    await ensure_revision_in_history(client, repo_row, lakefs_repo, revision)
+
+    # A revision LakeFS does not know is not a missing file (#58), and neither
+    # is a LakeFS failure (#10): the Hub tells the three apart, and so do clients.
+    try:
+        commit_hash, _ = await resolve_revision(client, lakefs_repo, revision, repo_row)
+    except ValueError as e:
+        raise _resolve_error(
+            404,
+            HFErrorCode.REVISION_NOT_FOUND,
+            f"Revision '{revision}' not found in repository '{repo_id}'",
+        ) from e
+    except Exception as e:
+        raise _resolve_error(
+            500, HFErrorCode.SERVER_ERROR, f"Failed to resolve revision: {e}"
+        ) from e
 
     try:
         # Get object metadata from LakeFS
@@ -446,25 +500,15 @@ async def _get_file_metadata(
             repository=lakefs_repo, ref=revision, path=path
         )
     except Exception as e:
-        raise HTTPException(
-            status_code=404,
-            detail={"error": f"File '{path}' not found"},
-            headers={
-                "X-Error-Code": HFErrorCode.ENTRY_NOT_FOUND,
-                "X-Error-Message": (
-                    f"Entry '{path}' not found in repository '{repo_id}' "
-                    f"at revision '{revision}'"
-                ),
-            },
+        if not (isinstance(e, httpx.HTTPStatusError) and e.response.status_code == 404):
+            raise _resolve_error(
+                500, HFErrorCode.SERVER_ERROR, f"Failed to read '{path}': {e}"
+            ) from e
+        raise _resolve_error(
+            404,
+            HFErrorCode.ENTRY_NOT_FOUND,
+            f"Entry '{path}' not found in repository '{repo_id}' at revision '{revision}'",
         ) from e
-
-    # Get commit hash for the revision
-    try:
-        branch = await client.get_branch(repository=lakefs_repo, branch=revision)
-        commit_hash = branch["commit_id"]
-    except Exception:
-        # If not a branch, might be a commit hash already
-        commit_hash = revision
 
     # Parse physical address to get S3 bucket and key
     physical_address = obj_stat["physical_address"]
@@ -564,6 +608,8 @@ async def resolve_file_head(
     _, response_headers = await _get_file_metadata(
         repo_type, namespace, name, revision, path, user
     )
+    if (not_modified := _not_modified(request, response_headers)) is not None:
+        return not_modified
 
     # Return metadata headers only, NO redirect
     return Response(
@@ -592,6 +638,8 @@ async def resolve_file_get(
     presigned_url, file_headers = await _get_file_metadata(
         repo_type, namespace, name, revision, path, user
     )
+    if (not_modified := _not_modified(request, file_headers)) is not None:
+        return not_modified
 
     # Headers the huggingface_hub client reads off a 302 when
     # ``allow_redirects=False`` — must match what HEAD returns so that

@@ -205,6 +205,22 @@ sequenceDiagram
     Note over Client: No proxy - direct S3 download
 ```
 
+**Revisions and conditional requests on `resolve`:**
+
+- A revision that does not exist is `404 RevisionNotFound`; a file that does not exist in an
+  existing revision is `404 EntryNotFound`. A failure of LakeFS itself is `500 ServerError`, never
+  a 404. A revision LakeFS refuses as an id (`a..b`, `main~1`, a space) is `RevisionNotFound` too, as
+  "Invalid rev id" on the Hub. The reason is in `X-Error-Message`, which is where `huggingface_hub`
+  reads it.
+- A full ref name is accepted as the branch: `refs%2Fheads%2Fdev` (what the client sends for
+  `revision="refs/heads/dev"`) on `resolve`, `revision` and `tree`. As on the Hub, a literal
+  `refs/heads/dev` in the path is split at its slashes. Branch names that contain a slash are a
+  separate gap (#67).
+- `If-None-Match` equal to the file's ETag answers `304 Not Modified` (GET and HEAD) with `ETag`,
+  `X-Repo-Commit` and `X-Linked-Etag`, and no redirect. Beyond the Hub, which only accepts the
+  exact quoted ETag, the whole RFC 9110 form is accepted: a list, `W/` weak tags, quoted or not,
+  and `*`.
+
 ## Database Schema
 
 ```mermaid
@@ -983,8 +999,8 @@ HTTP Response Headers:
 |------|-------------|-------------|
 | `RepoNotFound` | 404 | Repository doesn't exist |
 | `RepoExists` | 400 | Repository already exists |
-| `RevisionNotFound` | 404 | Branch/commit not found |
-| `EntryNotFound` | 404 | File not found |
+| `RevisionNotFound` | 404 | Branch/commit not found (also on `resolve`) |
+| `EntryNotFound` | 404 | File not found in an existing revision |
 | `GatedRepo` | 403 | Need permission |
 | `BadRequest` | 400 | Invalid request |
 | `ServerError` | 500 | Internal error |

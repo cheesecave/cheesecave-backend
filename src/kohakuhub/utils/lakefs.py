@@ -126,9 +126,14 @@ async def resolve_revision(
             commit_info = None
         return commit_id, commit_info
     except Exception as branch_error:
+        status = getattr(getattr(branch_error, "response", None), "status_code", None)
+        if status == 400 or isinstance(branch_error, httpx.InvalidURL):
+            # An id LakeFS does not accept (``a..b``, a space, an expression such as ``main~1``,
+            # a URL httpx refuses): "Invalid rev id" on the Hub, not a failure of LakeFS
+            raise ValueError(f"Revision '{revision}' is not a valid ref") from branch_error
         # Check if it's a "not found" error (branch doesn't exist)
         error_str = str(branch_error).lower()
-        if "404" not in error_str and "not found" not in error_str:
+        if status != 404 and "404" not in error_str and "not found" not in error_str:
             # Some other error, re-raise
             raise branch_error
 

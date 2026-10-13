@@ -6,6 +6,7 @@ import asyncio
 import json
 from types import SimpleNamespace
 
+import httpx
 import pytest
 from fastapi import HTTPException
 
@@ -22,6 +23,7 @@ class _FakeClient:
         self.object_error = None
         self.branch_result = None
         self.branch_error = None
+        self.commit_result = None
 
     async def stat_object(self, **kwargs):
         if self.stat_error:
@@ -38,12 +40,25 @@ class _FakeClient:
             raise self.branch_error
         return self.branch_result
 
+    async def get_commit(self, **kwargs):
+        if self.commit_result is None:
+            raise _http_error(404)
+        return self.commit_result
+
+
+def _http_error(status):
+    request = httpx.Request("GET", "http://lakefs/x")
+    return httpx.HTTPStatusError(
+        f"{status} from LakeFS", request=request, response=httpx.Response(status, request=request)
+    )
+
 
 class _FakeRequest:
-    def __init__(self, body=None, error=None, cookies=None):
+    def __init__(self, body=None, error=None, cookies=None, headers=None):
         self._body = body
         self._error = error
         self.cookies = dict(cookies or {})
+        self.headers = dict(headers or {})
 
     async def json(self):
         if self._error:
@@ -509,11 +524,20 @@ async def test_metadata_and_resolve_routes_cover_storage_backend_fallback_and_xe
     monkeypatch.setattr(files_api, "get_repository", lambda repo_type, namespace, name: repo)
     monkeypatch.setattr(files_api, "check_repo_read_permission", lambda repo_row, user: None)
 
-    client.stat_error = RuntimeError("missing file")
+    client.branch_result = {"commit_id": "commit-sha"}
+    client.stat_error = _http_error(404)  # LakeFS: no such path (#58)
     with pytest.raises(HTTPException) as missing_file:
         await files_api._get_file_metadata("model", "alice", "demo", "main", "file.txt", None)
     assert missing_file.value.status_code == 404
     assert missing_file.value.headers["X-Error-Code"] == files_api.HFErrorCode.ENTRY_NOT_FOUND
+
+    # Anything else LakeFS does is not a missing file (#10)
+    for failure in (RuntimeError("missing file"), _http_error(503)):
+        client.stat_error = failure
+        with pytest.raises(HTTPException) as broken:
+            await files_api._get_file_metadata("model", "alice", "demo", "main", "file.txt", None)
+        assert broken.value.status_code == 500
+        assert broken.value.headers["X-Error-Code"] == files_api.HFErrorCode.SERVER_ERROR
 
     client.stat_error = None
     client.stat_result = {
@@ -522,13 +546,15 @@ async def test_metadata_and_resolve_routes_cover_storage_backend_fallback_and_xe
         "content_type": "text/plain",
         "mtime": 1,
     }
-    client.branch_error = RuntimeError("not a branch")
+    client.branch_error = _http_error(404)  # not a branch: a commit id
+    client.commit_result = {"id": "commit-sha"}
     with pytest.raises(HTTPException) as unsupported_backend:
         await files_api._get_file_metadata("model", "alice", "demo", "commit-sha", "file.txt", None)
     assert unsupported_backend.value.status_code == 500
 
     client.branch_error = None
     client.branch_result = {"commit_id": "commit-sha"}
+    client.commit_result = None
     client.stat_result = {
         "physical_address": "s3://bucket/key/path.txt",
         "size_bytes": 5,
