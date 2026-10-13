@@ -558,6 +558,11 @@ async def reconcile_lfs_references(payload: dict[str, Any], ctx: tasks.TaskConte
             if lost:
                 lost_shas = {sha for _, _, sha in lost}
                 heads = {link for link in heads if link[2] not in lost_shas}
+                # nor is the path "on the head" for restoring a deleted row, which would say the
+                # file is there just the same
+                default_paths = set(default_paths) - {
+                    path for path, value in default_head.items() if value[0] in lost_shas
+                }
                 default_head = {
                     path: value for path, value in default_head.items() if value[0] not in lost_shas
                 }

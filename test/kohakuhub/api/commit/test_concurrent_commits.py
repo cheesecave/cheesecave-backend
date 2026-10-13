@@ -622,3 +622,40 @@ async def test_the_reconciliation_reports_files_whose_content_is_already_gone(m,
     assert m.gc.tombstone_state(oid) is None
     assert _file_paths(m, repo) == {"w.bin"}
     assert m.gc.retention_reason(oid, now=m.db.utcnow() + timedelta(hours=25)) == "head"
+
+
+async def test_the_reconciliation_does_not_restore_the_row_of_a_lost_file(m, owner_client):
+    """A row marked deleted whose path is on the branch head is normally made active again. For a
+    file whose object is already gone that would say the file is there, and its upload would be
+    "unchanged" from then on."""
+    repo = await _new(m, owner_client, "heal-gone-deleted")
+    content = b"collected, row deleted, still on the head " * 20
+    oid = hashlib.sha256(content).hexdigest()
+    await repo.commit(lfs("w.bin", content))
+    await _damage(m, repo)
+    m.s3.delete_object(Bucket=m.cfg.s3.bucket, Key=f"lfs/{oid[:2]}/{oid[2:4]}/{oid}")
+    m.db.LfsObjectTombstone.create(sha256=oid, state=m.gc.DELETED)
+    m.db.File.create(
+        repository=_row(m, repo), branch="main", path_in_repo="w.bin", sha256=oid,
+        size=len(content), lfs=True, is_deleted=True, owner=_row(m, repo).owner_id,
+    )
+
+    ctx = _reconcile_context()
+    await m.cleanup.reconcile_lfs_references({}, ctx)
+
+    assert ctx.checkpoint_state["stats"]["linked_objects_collected"] == 1
+    assert _file_paths(m, repo) == set()  # still deleted: the file cannot be downloaded
+    # a re-upload restores it, as it always did for a deleted file
+    again = await _post(m, repo, [lfs("w.bin", content)])
+    assert again.status_code == 200, again.text
+    assert _file_paths(m, repo) == {"w.bin"} and _in_storage(m, oid)
+
+
+async def test_a_branch_name_that_cannot_exist_is_a_missing_revision(m, owner_client):
+    repo = await _new(m, owner_client, "serial-long-branch")
+
+    response = await _post(m, repo, [_file("a.txt", "a")], branch="b" * 300)
+
+    assert response.status_code == 404, response.text
+    assert response.headers["x-error-code"] == "RevisionNotFound"
+    assert m.db.BranchCommitLock.select().count() == 0

@@ -1103,12 +1103,27 @@ async def commit(
         if op["key"] in CREATING and too_long(op["value"].get("path") or ""):
             raise _path_too_long(op["value"]["path"])
 
+    if len(revision) > BRANCH_NAME_MAX:  # no branch has such a name: refuse before keeping it anywhere
+        raise _revision_not_found(repo_id, revision)
+
     # One commit at a time per branch: LakeFS commits whatever is staged on a branch, so
     # another request staging meanwhile would have its files committed by this one (#56)
     async with branch_lock.holding(repo_row, revision) as lease:
         return await _commit_on_leased_branch(
             lease, header, operations, repo_type, repo_row, lakefs_repo, revision, user, client
         )
+
+
+BRANCH_NAME_MAX = 255  # the width of the column the lease and the File rows keep it in
+
+
+def _revision_not_found(repo_id: str, branch: str) -> HTTPException:
+    message = f"Revision '{branch[:100]}' not found in repository '{repo_id}'"
+    return HTTPException(
+        status_code=404,
+        detail={"error": message},
+        headers={"X-Error-Code": HFErrorCode.REVISION_NOT_FOUND, "X-Error-Message": message},
+    )
 
 
 async def _require_parent(client, lakefs_repo: str, repo_id: str, branch: str, parent) -> None:
@@ -1121,12 +1136,7 @@ async def _require_parent(client, lakefs_repo: str, repo_id: str, branch: str, p
     except httpx.HTTPStatusError as error:
         if error.response.status_code != 404:
             raise HTTPException(500, detail={"error": f"Commit failed: {error}"}) from error
-        message = f"Revision '{branch}' not found in repository '{repo_id}'"
-        raise HTTPException(
-            status_code=404,
-            detail={"error": message},
-            headers={"X-Error-Code": HFErrorCode.REVISION_NOT_FOUND, "X-Error-Message": message},
-        ) from error
+        raise _revision_not_found(repo_id, branch) from error
     if not head.startswith(parent):
         raise HTTPException(
             412, detail={"error": "A commit has happened since. Please refresh and try again."}

@@ -155,4 +155,7 @@ async def holding(repo: Repository, branch: str):
         yield Lease(repo.id, branch, token)
     finally:
         renewing.cancel()
-        release(repo.id, branch, token)
+        try:
+            release(repo.id, branch, token)
+        except Exception as e:  # the lease lapses by itself; what failed in the block matters more
+            logger.warning(f"Could not give back the lease on {repo.full_id}@{branch}: {e}")

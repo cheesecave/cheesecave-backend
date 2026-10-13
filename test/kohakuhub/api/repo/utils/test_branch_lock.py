@@ -158,3 +158,21 @@ async def test_a_failed_renewal_is_tried_again(repo, monkeypatch):
         await asyncio.sleep(0.4)
         assert len(calls) >= 2
         assert _row(repo).until > utcnow() + timedelta(seconds=30)
+
+
+async def test_a_lease_that_cannot_be_given_back_hides_nothing(repo, monkeypatch):
+    # A deliberate database failure (an outage while releasing), so the one targeted mock
+    def unavailable(*args):
+        raise RuntimeError("database unavailable")
+
+    monkeypatch.setattr(branch_lock, "release", unavailable)
+    with pytest.raises(ValueError, match="the commit failed"):
+        async with branch_lock.holding(repo, "main"):
+            raise ValueError("the commit failed")  # the error that matters, not the outage
+
+    async with branch_lock.holding(repo, "other"):  # and a block that succeeded still succeeds
+        pass
+    monkeypatch.undo()
+    # the leases lapse by themselves
+    BranchCommitLock.update(until=utcnow() - timedelta(seconds=1)).execute()
+    assert branch_lock.acquire(repo.id, "main") and branch_lock.acquire(repo.id, "other")
