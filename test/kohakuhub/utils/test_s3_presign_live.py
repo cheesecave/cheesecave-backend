@@ -22,10 +22,12 @@ from urllib.parse import urlsplit, urlunsplit
 import boto3
 import httpx
 import pytest
+from botocore.exceptions import ClientError
 
 import kohakuhub.utils.s3 as s3_module
 
 PART = 5 * 1024 * 1024  # the smallest part a store accepts, except the last
+RUN = uuid.uuid4().hex[:10]  # in every key the tests write, so a bucket they only borrowed can be cleaned
 
 
 def other_host(endpoint: str) -> str:
@@ -39,7 +41,11 @@ def other_host(endpoint: str) -> str:
 
 @pytest.fixture(scope="module")
 def store():
-    """A real bucket on the configured MinIO, removed afterwards."""
+    """A real bucket on the configured MinIO, cleaned afterwards.
+
+    The bucket is created and removed here. A key scoped to one bucket (the CI job that
+    runs the suite with the bucket in the endpoint's path) cannot create one: the bucket
+    the endpoint names is borrowed then, and only the objects of this run are removed."""
     cfg = s3_module.cfg.s3
     parts = urlsplit(cfg.endpoint)  # the suite also runs with the bucket in the endpoint's path: use the server's root
     root = urlunsplit((parts.scheme, parts.netloc, "", "", ""))
@@ -50,15 +56,23 @@ def store():
         aws_secret_access_key=cfg.secret_key,
         region_name=cfg.region,
     )
-    bucket = f"presign-live-{uuid.uuid4().hex[:10]}"
-    admin.create_bucket(Bucket=bucket)
+    bucket, owned = f"presign-live-{RUN}", True
+    try:
+        admin.create_bucket(Bucket=bucket)
+    except ClientError as error:
+        named = parts.path.strip("/").split("/")[0]
+        if error.response["Error"]["Code"] != "AccessDenied" or not named:
+            raise
+        bucket, owned = named, False
     try:
         yield {"endpoint": root, "bucket": bucket, "admin": admin}
     finally:
         for page in admin.get_paginator("list_objects_v2").paginate(Bucket=bucket):
             for item in page.get("Contents", []):
-                admin.delete_object(Bucket=bucket, Key=item["Key"])
-        admin.delete_bucket(Bucket=bucket)
+                if owned or RUN in item["Key"]:
+                    admin.delete_object(Bucket=bucket, Key=item["Key"])
+        if owned:
+            admin.delete_bucket(Bucket=bucket)
 
 
 @pytest.fixture(params=[None, "s3v4"], ids=["default-signing", "sigv4"])
@@ -90,7 +104,7 @@ def configured(monkeypatch, store, signature_version, address, layout):
     monkeypatch.setattr(s3_module.cfg.s3, "bucket", name)
     monkeypatch.setattr(s3_module.cfg.s3, "signature_version", signature_version)
     monkeypatch.setattr(s3_module.cfg.s3, "force_path_style", True)
-    return {"bucket": name, "prefix": uuid.uuid4().hex[:8]}
+    return {"bucket": name, "prefix": f"{RUN}-{uuid.uuid4().hex[:8]}"}
 
 
 @pytest.fixture
@@ -141,7 +155,7 @@ def test_the_store_refuses_a_url_signed_for_another_host(monkeypatch, store, htt
     monkeypatch.setattr(s3_module.cfg.s3, "bucket", store["bucket"])
     monkeypatch.setattr(s3_module.cfg.s3, "signature_version", "s3v4")
     signed_for_endpoint = s3_module.get_s3_client().generate_presigned_url(
-        "put_object", Params={"Bucket": store["bucket"], "Key": "wrong-host.bin"}, ExpiresIn=300
+        "put_object", Params={"Bucket": store["bucket"], "Key": f"{RUN}-wrong-host.bin"}, ExpiresIn=300
     )
 
     at_its_own_address = http.put(signed_for_endpoint, content=b"x")
@@ -207,7 +221,7 @@ def test_a_proxy_mounted_on_a_path_works_when_it_keeps_the_host(monkeypatch, sto
 
     with Proxy(store["endpoint"], keep_host) as proxy:
         monkeypatch.setattr(s3_module.cfg.s3, "public_endpoint", proxy.url)
-        key = f"proxied-{keep_host}.bin"
+        key = f"{RUN}-proxied-{keep_host}.bin"
         put = http.put(s3_module._generate_upload_presigned_url_sync(name, key)["url"], content=content)
         got = http.get(s3_module._generate_download_presigned_url_sync(name, key))
 
