@@ -15,6 +15,7 @@ import pytest
 from huggingface_hub import CommitOperationAdd, HfApi, hf_hub_download
 from huggingface_hub.utils import HfHubHTTPError
 
+from test.kohakuhub.support.db import concurrent_writers_need_postgres
 from test.kohakuhub.api.commit.test_concurrent_commits import (  # noqa: F401 - m is the fixture
     _added_by,
     _collect_a_day_later,
@@ -53,6 +54,7 @@ def _path(i, content):
     return f"par/{i}.bin" if len(content) > 100 else f"par/{i}.txt"
 
 
+@concurrent_writers_need_postgres
 async def test_parallel_uploads_to_one_branch(
     m, owner_client, live_server_url, hf_api_token, tmp_path
 ):
@@ -97,6 +99,7 @@ async def test_parallel_uploads_to_one_branch(
             assert _in_storage(m, hashlib.sha256(contents[i]).hexdigest())
 
 
+@concurrent_writers_need_postgres
 async def test_parallel_uploads_that_try_again_all_land(
     m, owner_client, live_server_url, hf_api_token
 ):
