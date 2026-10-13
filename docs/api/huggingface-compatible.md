@@ -78,9 +78,28 @@ KohakuHub implements HuggingFace Hub API for compatibility with `huggingface_hub
 
 **Query Parameters:**
 - `author` (optional): Filter by namespace
-- `limit` (optional): Max results (default: 50, max: 100000)
-- `sort` (optional): `recent` | `likes` | `downloads` | `trending` (default: recent)
+- `limit` (optional): Items per response (default and maximum: 1000, like the Hub; a larger value is cut to 1000)
+- `sort` (optional): `trending` | `recent` | `updated` | `likes` | `downloads` (default: `trending`). The Hub's names work too: `trendingScore`, `createdAt`, `lastModified` (and their snake_case forms)
+- `direction` (optional): `-1` (descending, default) or `1`
+- `search` (optional): case-insensitive substring of the repository id
+- `filter` (repeatable), `pipeline_tag`, `library`, `language`, `task_categories`, `size_categories` (optional): match the indexed facets of the repository; a tag with a prefix this hub does not index (`base_model:`, ...) matches nothing
 - `fallback` (optional): Enable external sources (default: true)
+- `partial` (optional): `ok` to skip an external source that cannot answer instead of failing (see below)
+- `cursor`: opaque, only ever taken from a `Link` header
+
+Unknown parameters are ignored.
+
+**Paging.** The body is a bare array. When more follows, the response carries
+`Link: <https://hub.example/api/models?...&cursor=...>; rel="next"` (RFC 8288, the format the Hub
+uses); the last page has no `Link`. `huggingface_hub` follows it by itself, so `list_models()` with
+no `limit` reads everything. The list is one ordered stream: this hub's repositories first, then
+each fallback source in priority order. A `cursor` is signed, bound to the query that made it
+(another query's cursor is a 400) and carries no URL.
+
+**When an external source fails.** It is retried; if it still cannot answer, the response is
+`503` with `Retry-After` (clients retry on it), because a list that silently lacks a source is
+incomplete. With `partial=ok` the source is skipped and the response says so in
+`X-Cheesecave-Incomplete: <source names>`. Both headers are exposed to browsers by CORS.
 
 **Response:**
 ```json

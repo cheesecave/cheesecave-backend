@@ -7,6 +7,7 @@ import pytest
 
 from kohakuhub import repository_discovery
 from kohakuhub.api.repo.routers import discovery, info
+from kohakuhub.api.repo.utils import listing
 from kohakuhub.api.utils import trending
 from kohakuhub.auth.permissions import (
     RepoReadDeniedError,
@@ -24,6 +25,7 @@ from kohakuhub.db import (
     UserOrganization,
     utcnow,
 )
+from test.kohakuhub.support.list_local import list_local
 from test.kohakuhub.test_social import STAMP, catalog, commit, feed, repository
 
 
@@ -82,7 +84,7 @@ async def test_ordinary_discovery_detail_feed_share_owner_policy(
     user = getattr(catalog, viewer_name) if viewer_name else None
     catalog.auth["user"] = user
     expected = {catalog.rows[key].full_id for key in keys}
-    ordinary = await info._list_repos_internal("model", user=user, fallback=False)
+    ordinary = await list_local("model", user=user)
     assert {row["id"] for row in ordinary} == expected
     response = catalog.session.get("/api/models/discover", params={"sort": "recent"})
     assert response.status_code == 200
@@ -124,9 +126,7 @@ async def test_member_exit_and_namespace_author_filter_remain_live(visible_catal
     # Build once, execute twice: membership is a live subquery, not a cached Python list.
     query = filter_readable_repositories(Repository.select(), catalog.viewer)
     assert catalog.rows["org"].id in {row.id for row in query}
-    author_rows = await info._list_repos_internal(
-        "model", author="author", user=catalog.viewer, fallback=False
-    )
+    author_rows = await list_local("model", author="author", user=catalog.viewer)
     assert {row["id"] for row in author_rows} == {"author/public", "author/own"}
     overview = await info.list_user_repos.__wrapped__(
         "viewer", request=None, user=catalog.viewer, limit=100, sort="recent", fallback=False
@@ -182,23 +182,24 @@ async def test_public_trending_filters_author_and_visibility_before_limit(
     catalog = visible_catalog
     other = repository(catalog, owner=catalog.outsider, name="popular")
     commit(catalog, other)
-    monkeypatch.setattr(
-        trending,
-        "calculate_trending_scores",
-        lambda rt, days=7: {
-            catalog.rows["impostor"].id: 1000,
-            other.id: 900,
-            catalog.rows["own"].id: 800,
-            catalog.rows["public"].id: 1,
-        },
+    scores = {
+        catalog.rows["impostor"].id: 1000,
+        other.id: 900,
+        catalog.rows["own"].id: 800,
+        catalog.rows["public"].id: 1,
+    }
+    monkeypatch.setattr(trending, "calculate_trending_scores", lambda rt, days=7: scores)
+    monkeypatch.setattr(listing, "calculate_trending_scores", lambda rt, days=7: scores)
+    result = await list_local(
+        "model", author="author", user=catalog.viewer, limit=1, sort="trending"
     )
-    result = await info._list_repos_internal(
-        "model", author="author", user=catalog.viewer, limit=1, sort="trending", fallback=False
-    )
-    assert [row["id"] for row in result] == ["author/public"]
+    # Every readable repository ranks, the viewer's own private one included.
+    assert [row["id"] for row in result] == ["author/own"]
     assert trending.get_trending_repositories("model", limit=1)[0].id == other.id
     monkeypatch.setattr(trending, "calculate_trending_scores", lambda rt, days=7: {})
-    result = await info._list_repos_internal(
-        "model", author="author", user=catalog.viewer, limit=1, sort="trending", fallback=False
+    monkeypatch.setattr(listing, "calculate_trending_scores", lambda rt, days=7: {})
+    result = await list_local(
+        "model", author="author", user=catalog.viewer, limit=1, sort="trending"
     )
-    assert [row["id"] for row in result] == ["author/public"]
+    # Without scores everything ties and the newest readable repository leads.
+    assert [row["id"] for row in result] == ["author/own"]
