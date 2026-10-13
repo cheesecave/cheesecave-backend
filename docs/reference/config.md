@@ -33,7 +33,7 @@ By default, the application looks for `config.toml` in the current working direc
 
 | Variable | Description | Default |
 | --- | --- | --- |
-| `KOHAKU_HUB_S3_PUBLIC_ENDPOINT` | The public-facing S3 endpoint, used for client downloads. | `http://localhost:9000` |
+| `KOHAKU_HUB_S3_PUBLIC_ENDPOINT` | The address clients reach the S3 service at: every presigned URL (download, upload, multipart part) is **signed for this address** and points to it. It is the same service as `KOHAKU_HUB_S3_ENDPOINT` under another name (the compose file's `minio:9000` inside, `127.0.0.1:29001` outside). A proxy in front of it must pass the `Host` header through unchanged (SigV4 signs it); a path on this address that the endpoint does not have is the proxy's mount point and is removed again by the proxy. For R2 and AWS S3 set it to the endpoint itself (Cloudflare documents R2 presigned URLs for the S3 API domain only, not for a custom domain). | `http://localhost:9000` |
 | `KOHAKU_HUB_S3_ENDPOINT` | The internal S3 endpoint for the application. A path after the host names the real bucket: with `https://<account>.r2.cloudflarestorage.com/<bucket>`, `KOHAKU_HUB_S3_BUCKET` is a key prefix inside `<bucket>`, after any further path. The first path segment is always taken as the bucket, so an S3 service mounted under a sub-path of a proxy is not supported. LakeFS's `blockstore.s3.endpoint` must be the same, and `KOHAKU_HUB_S3_PUBLIC_ENDPOINT` must end with the same bucket. | `http://localhost:9000` |
 | `KOHAKU_HUB_S3_ACCESS_KEY` | The access key for the S3 bucket. | `test-access-key` |
 | `KOHAKU_HUB_S3_SECRET_KEY` | The secret key for the S3 bucket. | `test-secret-key` |

@@ -4,7 +4,7 @@ import hashlib
 import atexit
 from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime, timedelta, timezone
-from urllib.parse import quote, urlparse
+from urllib.parse import quote, urlparse, urlunparse
 
 import boto3
 from botocore.config import Config as BotoConfig
@@ -34,46 +34,22 @@ def _generate_single_part_url(args: tuple) -> dict:
     Generate presigned URL for a single part (picklable for multiprocessing).
 
     Args:
-        args: Tuple of (bucket, key, upload_id, part_number, expires_in, s3_config)
+        args: Tuple of (bucket, key, upload_id, part_number, expires_in, s3_config),
+            ``s3_config`` being ``_presign_settings()``
 
     Returns:
         Dict with part_number and url
     """
     bucket, key, upload_id, part_number, expires_in, s3_config = args
 
-    # Create S3 client (must be done in each process)
-    s3 = boto3.client(
-        "s3",
-        endpoint_url=s3_config["endpoint"],
-        aws_access_key_id=s3_config["access_key"],
-        aws_secret_access_key=s3_config["secret_key"],
-        region_name=s3_config.get("region", "us-east-1"),
-        config=BotoConfig(
-            signature_version=s3_config.get("signature_version") or "s3v4",
-            s3=(
-                {"addressing_style": "path"}
-                if s3_config.get("force_path_style")
-                else {}
-            ),
-        ),
-    )
-
-    # Generate presigned URL (local computation, no network call)
-    url = s3.generate_presigned_url(
+    # The client is built in each process, the way every other presigned URL is
+    url = _presigned_url(
+        _presign_client(s3_config),
+        s3_config,
         "upload_part",
-        Params={
-            "Bucket": bucket,
-            "Key": key,
-            "UploadId": upload_id,
-            "PartNumber": part_number,
-        },
-        ExpiresIn=expires_in,
+        {"Bucket": bucket, "Key": key, "UploadId": upload_id, "PartNumber": part_number},
+        expires_in,
     )
-
-    # Replace endpoint if needed
-    if s3_config.get("public_endpoint") != s3_config.get("endpoint"):
-        url = url.replace(s3_config["endpoint"], s3_config["public_endpoint"])
-
     return {"part_number": part_number, "url": url}
 
 
@@ -188,28 +164,29 @@ def readdress(client, bucket: str, layout: tuple[str, str, str]):
     return client
 
 
-def get_s3_client():
-    """Create configured S3 client with configurable signature version.
+def _client_settings() -> dict:
+    """What a client needs, from the configuration (picklable)."""
+    return {
+        "access_key": cfg.s3.access_key,
+        "secret_key": cfg.s3.secret_key,
+        "region": cfg.s3.region,
+        "signature_version": cfg.s3.signature_version,
+        "force_path_style": cfg.s3.force_path_style,
+        "bucket": cfg.s3.bucket,
+    }
 
-    Signature versions:
-    - None: Use default (s3v2 for MinIO compatibility)
-    - "s3v4": AWS S3, Cloudflare R2 (required for these services)
 
-    Set via KOHAKU_HUB_S3_SIGNATURE_VERSION environment variable. An endpoint
-    with a path names the real bucket (``bucket_in_endpoint``): the client then
-    talks to the root endpoint and keeps ``cfg.s3.bucket`` as a key prefix.
-
-    Returns:
-        Configured boto3 S3 client.
-    """
+def _build_client(endpoint: str, settings: dict):
+    """A client of ``endpoint`` (a path in it names the real bucket, see
+    ``bucket_in_endpoint``) for ``settings`` (``_client_settings()``)."""
     # Build S3-specific config
     s3_config = {}
 
-    if cfg.s3.force_path_style:
+    if settings["force_path_style"]:
         s3_config["addressing_style"] = "path"
 
     # Use configured signature version
-    sig_version = cfg.s3.signature_version
+    sig_version = settings["signature_version"]
     if sig_version:
         logger.debug(f"Using S3 signature version: {sig_version}")
         boto_config = BotoConfig(
@@ -222,16 +199,74 @@ def get_s3_client():
             s3=s3_config,
         )
 
-    layout = bucket_in_endpoint()
+    layout = bucket_in_endpoint(endpoint, settings["bucket"])
     client = boto3.client(
         "s3",
-        endpoint_url=layout[0] if layout else cfg.s3.endpoint,
-        aws_access_key_id=cfg.s3.access_key,
-        aws_secret_access_key=cfg.s3.secret_key,
-        region_name=cfg.s3.region,
+        endpoint_url=layout[0] if layout else endpoint,
+        aws_access_key_id=settings["access_key"],
+        aws_secret_access_key=settings["secret_key"],
+        region_name=settings["region"],
         config=boto_config,
     )
-    return readdress(client, cfg.s3.bucket, layout) if layout else client
+    return readdress(client, settings["bucket"], layout) if layout else client
+
+
+def get_s3_client():
+    """Create configured S3 client with configurable signature version.
+
+    Signature versions:
+    - None: Use default (s3v2 for MinIO compatibility)
+    - "s3v4": AWS S3, Cloudflare R2 (required for these services)
+
+    Set via KOHAKU_HUB_S3_SIGNATURE_VERSION environment variable. An endpoint
+    with a path names the real bucket (``bucket_in_endpoint``): the client then
+    talks to the root endpoint and keeps ``cfg.s3.bucket`` as a key prefix.
+
+    This client is the API's own, for the endpoint it reaches the store at;
+    presigned URLs for clients are made with ``_presign_client``.
+
+    Returns:
+        Configured boto3 S3 client.
+    """
+    return _build_client(cfg.s3.endpoint, _client_settings())
+
+
+def _signing_endpoint(endpoint: str, public_endpoint: str | None) -> str:
+    """The endpoint a presigned URL is signed for: the public address, in the
+    shape of the internal endpoint (its path names the real bucket).
+
+    The store checks a signature against the ``Host`` the request carries, and
+    SigV4 signs it, so a URL signed for the internal address and then pointed at
+    the public one is refused (``SignatureDoesNotMatch``). A path on the public
+    address that the internal one does not have is a proxy's mount point: it is
+    added after signing (``_presigned_url``), as the proxy removes it again.
+    """
+    if not public_endpoint or public_endpoint.rstrip("/") == endpoint.rstrip("/"):
+        return endpoint
+    internal, public = urlparse(endpoint), urlparse(public_endpoint)
+    return urlunparse((public.scheme, public.netloc, internal.path.rstrip("/"), "", "", ""))
+
+
+def _presign_settings() -> dict:
+    """What presigning needs from the configuration (picklable, for the process pool)."""
+    return {
+        **_client_settings(),
+        "endpoint": cfg.s3.endpoint,
+        "public_endpoint": cfg.s3.public_endpoint,
+    }
+
+
+def _presign_client(settings: dict):
+    """The client every presigned URL is made with, whatever its kind or part
+    count: it signs for the public address."""
+    return _build_client(_signing_endpoint(settings["endpoint"], settings["public_endpoint"]), settings)
+
+
+def _presigned_url(client, settings: dict, operation: str, params: dict, expires_in: int, **extra) -> str:
+    """``operation``'s URL for a client of the public endpoint."""
+    url = client.generate_presigned_url(operation, Params=params, ExpiresIn=expires_in, **extra)
+    signed_for = _signing_endpoint(settings["endpoint"], settings["public_endpoint"])
+    return url.replace(signed_for, (settings["public_endpoint"] or settings["endpoint"]).rstrip("/"))
 
 
 def init_storage():
@@ -273,19 +308,13 @@ def _generate_download_presigned_url_sync(
     bucket: str, key: str, expires_in: int = 3600, filename: str = None
 ) -> str:
     """Synchronous implementation of generate_download_presigned_url."""
-    s3 = get_s3_client()
+    settings = _presign_settings()
     params = {"Bucket": bucket, "Key": key}
 
     if filename:
         params["ResponseContentDisposition"] = f'attachment; filename="{filename}";'
 
-    url = s3.generate_presigned_url(
-        "get_object",
-        Params=params,
-        ExpiresIn=expires_in,
-    )
-
-    return url.replace(cfg.s3.endpoint, cfg.s3.public_endpoint)
+    return _presigned_url(_presign_client(settings), settings, "get_object", params, expires_in)
 
 
 async def generate_download_presigned_url(
@@ -315,7 +344,7 @@ def _generate_upload_presigned_url_sync(
     checksum_sha256: str = None,
 ) -> dict:
     """Synchronous implementation of generate_upload_presigned_url."""
-    s3 = get_s3_client()
+    settings = _presign_settings()
 
     params = {
         "Bucket": bucket,
@@ -327,11 +356,8 @@ def _generate_upload_presigned_url_sync(
     if content_type:
         params["ContentType"] = content_type
 
-    url = s3.generate_presigned_url(
-        "put_object",
-        Params=params,
-        ExpiresIn=expires_in,
-        HttpMethod="PUT",
+    url = _presigned_url(
+        _presign_client(settings), settings, "put_object", params, expires_in, HttpMethod="PUT"
     )
 
     expires_at = (datetime.now(timezone.utc) + timedelta(seconds=expires_in)).strftime(
@@ -345,7 +371,7 @@ def _generate_upload_presigned_url_sync(
         headers["Content-Type"] = content_type
 
     return {
-        "url": url.replace(cfg.s3.endpoint, cfg.s3.public_endpoint),
+        "url": url,
         "expires_at": expires_at,
         "method": "PUT",
         "headers": headers,
@@ -389,10 +415,9 @@ def _generate_multipart_upload_urls_sync(
     expires_in: int = 3600,
 ) -> dict:
     """Synchronous implementation of generate_multipart_upload_urls."""
-    s3 = get_s3_client()
-
     if not upload_id:
-        response = s3.create_multipart_upload(
+        # The API opens the upload at the internal endpoint
+        response = get_s3_client().create_multipart_upload(
             Bucket=bucket,
             Key=key,
             ContentType="application/octet-stream",
@@ -400,15 +425,7 @@ def _generate_multipart_upload_urls_sync(
         upload_id = response["UploadId"]
 
     # Prepare S3 config for multiprocessing (must be picklable)
-    s3_config = {
-        "endpoint": cfg.s3.endpoint,
-        "public_endpoint": cfg.s3.public_endpoint,
-        "access_key": cfg.s3.access_key,
-        "secret_key": cfg.s3.secret_key,
-        "region": cfg.s3.region,
-        "signature_version": cfg.s3.signature_version,
-        "force_path_style": cfg.s3.force_path_style,
-    }
+    s3_config = _presign_settings()
 
     # For large part counts (>10), use multiprocessing for parallel signature generation
     if part_count > 10:
@@ -429,24 +446,25 @@ def _generate_multipart_upload_urls_sync(
         logger.success(f"Generated {part_count} presigned URLs in parallel")
     else:
         # For small part counts, use sequential generation (faster due to no overhead)
-        part_urls = []
-        for part_number in range(1, part_count + 1):
-            url = s3.generate_presigned_url(
-                "upload_part",
-                Params={
-                    "Bucket": bucket,
-                    "Key": key,
-                    "UploadId": upload_id,
-                    "PartNumber": part_number,
-                },
-                ExpiresIn=expires_in,
-            )
-            part_urls.append(
-                {
-                    "part_number": part_number,
-                    "url": url.replace(cfg.s3.endpoint, cfg.s3.public_endpoint),
-                }
-            )
+        client = _presign_client(s3_config)
+        part_urls = [
+            {
+                "part_number": part_number,
+                "url": _presigned_url(
+                    client,
+                    s3_config,
+                    "upload_part",
+                    {
+                        "Bucket": bucket,
+                        "Key": key,
+                        "UploadId": upload_id,
+                        "PartNumber": part_number,
+                    },
+                    expires_in,
+                ),
+            }
+            for part_number in range(1, part_count + 1)
+        ]
 
     expires_at = (datetime.now(timezone.utc) + timedelta(seconds=expires_in)).strftime(
         "%Y-%m-%dT%H:%M:%S.%fZ"
