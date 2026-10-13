@@ -545,6 +545,7 @@ async def test_huggingface_hub_list_models_supported_sort_modes(
     Every ``HfApi`` sort mode, translated or not, must be answered: the endpoint
     accepts the Hub's names (``lastModified``, ``createdAt``, ``trendingScore``)
     next to its own."""
+    from huggingface_hub import HfApi
 
     api = HfApi(endpoint=live_server_url, token=hf_api_token)
 
