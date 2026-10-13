@@ -3,8 +3,9 @@
 import asyncio
 import time
 from collections import defaultdict
+from dataclasses import dataclass
 from typing import Optional
-from urllib.parse import urljoin
+from urllib.parse import parse_qsl, urljoin, urlsplit
 
 import httpx
 from fastapi.responses import JSONResponse, RedirectResponse, Response
@@ -1203,69 +1204,91 @@ async def try_fallback_paths_info(
     )
 
 
-async def fetch_external_list(
-    source: dict, repo_type: str, query_params: dict
-) -> list[dict]:
-    """Fetch repository list from external source.
+LIST_RETRIES = 2  # more tries after the first, for a source that failed or did not answer
+LIST_RETRY_WAIT = 0.25  # seconds before the first retry, doubled for each one after it
+_RETRY_STATUSES = frozenset({429, 500, 502, 503, 504})
 
-    Args:
-        source: Source config dict
-        repo_type: "model", "dataset", or "space"
-        query_params: Query parameters (author, limit, sort, etc.)
 
-    Returns:
-        List of repository dicts with _source and _source_url added
+class ExternalListError(Exception):
+    """A source could not give its part of a repository list (after the retries)."""
+
+    def __init__(self, source: str, reason: str):
+        super().__init__(f"{source}: {reason}")
+        self.source = source
+        self.reason = reason
+
+
+@dataclass
+class ExternalPage:
+    """One page of a source's list, and the query string it gave for the next page."""
+
+    items: list[dict]
+    next_query: str | None
+
+
+async def fetch_external_page(
+    source: dict,
+    repo_type: str,
+    params: list[tuple[str, str]],
+    *,
+    limit: int,
+    next_query: str | None = None,
+) -> ExternalPage:
+    """Ask one external source for a page of ``/api/{repo_type}s``.
+
+    The first page is asked with ``params``; later ones with the query string the source gave
+    in its ``Link: <...>; rel="next"`` (its own cursor included), only ``limit`` replaced. A
+    source that failed, timed out or answered something that is no list is asked again; if it
+    still cannot answer this raises ``ExternalListError``, because skipping it would leave the
+    list incomplete without saying so. A source that refuses the query (a 4xx) has nothing to
+    list for it. No credentials are sent: what a source lists for this hub must not depend on
+    whose token the hub holds.
     """
-    try:
-        # Construct API path
-        kohaku_path = f"/api/{repo_type}s"
+    client = FallbackClient(
+        source_url=source["url"],
+        source_type=source["source_type"],
+        token=source.get("token"),
+    )
+    url = client.map_url(f"/api/{repo_type}s", repo_type)
+    if next_query:
+        query = [(name, value) for name, value in parse_qsl(next_query, keep_blank_values=True) if name != "limit"]
+    else:
+        query = list(params)
+    query.append(("limit", str(limit)))
 
-        # Build query string
-        params = {}
-        if query_params.get("author"):
-            params["author"] = query_params["author"]
-            logger.debug(f"Fetching {repo_type}s with author={params['author']}")
-        if query_params.get("limit"):
-            params["limit"] = query_params["limit"]
-        # Don't send sort to HuggingFace - they don't support it
-        # HF returns models sorted by downloads by default
+    reason = "no answer"
+    for attempt in range(LIST_RETRIES + 1):
+        if attempt:
+            await asyncio.sleep(LIST_RETRY_WAIT * 2 ** (attempt - 1))
+        try:
+            async with httpx.AsyncClient(timeout=client.timeout) as http_client:
+                response = await http_client.get(url, params=query)
+        except httpx.HTTPError as error:
+            reason = f"{type(error).__name__}: {error}"
+            continue
+        if response.status_code in _RETRY_STATUSES:
+            reason = f"HTTP {response.status_code}"
+            continue
+        if response.status_code != 200:
+            logger.warning(
+                f"{source['name']} cannot list {repo_type}s for this query: {response.status_code}"
+            )
+            return ExternalPage([], None)
+        try:
+            body = response.json()
+        except ValueError:
+            body = None
+        if not isinstance(body, list):
+            reason = "the answer is not a list"
+            continue
 
-        client = FallbackClient(
-            source_url=source["url"],
-            source_type=source["source_type"],
-            token=source.get("token"),
-        )
-
-        # Make request with query params
-        external_url = client.map_url(kohaku_path, repo_type)
-
-        async with httpx.AsyncClient(timeout=client.timeout) as http_client:
-            response = await http_client.get(external_url, params=params)
-
-        if response.status_code == 200:
-            results = response.json()
-
-            # Add source tags to each item
-            if isinstance(results, list):
-                for item in results:
-                    item["_source"] = source["name"]
-                    item["_source_url"] = source["url"]
-
-                logger.info(
-                    f"Fetched {len(results)} {repo_type}s from {source['name']}"
-                )
-                return results
-
-        logger.warning(
-            f"Failed to fetch list from {source['name']}: {response.status_code}"
-        )
-        logger.debug(f"Request URL: {response.url}")
-        logger.debug(f"Response: {response.text[:200]}")
-        return []
-
-    except Exception as e:
-        logger.warning(f"Failed to fetch list from {source['name']}: {e}")
-        return []
+        items = [item for item in body if isinstance(item, dict)]
+        for item in items:
+            item["_source"] = source["name"]
+            item["_source_url"] = source["url"]
+        following = response.links.get("next", {}).get("url")
+        return ExternalPage(items, urlsplit(following).query or None if following else None)
+    raise ExternalListError(source["name"], reason)
 
 
 async def try_fallback_user_profile(

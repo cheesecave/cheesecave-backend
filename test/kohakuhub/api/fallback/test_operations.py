@@ -787,62 +787,6 @@ async def test_try_fallback_info_tree_and_paths_info_cover_success_paths(monkeyp
 
 
 @pytest.mark.asyncio
-async def test_fetch_external_list_tags_results_and_handles_errors(monkeypatch):
-    source = {"url": "https://source.local", "name": "Source", "source_type": "huggingface"}
-
-    class SimpleClient:
-        def __init__(self, source_url: str, source_type: str, token: str | None = None):
-            self.timeout = 9
-            self.source_url = source_url
-
-        def map_url(self, kohaku_path: str, repo_type: str) -> str:
-            return f"{self.source_url}{kohaku_path}"
-
-    class FakeAsyncHTTPClient:
-        calls: list[tuple[str, dict]] = []
-
-        def __init__(self, timeout: int):
-            self.timeout = timeout
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, exc_type, exc, tb):
-            return None
-
-        async def get(self, url: str, params: dict):
-            self.calls.append((url, params))
-            return _json_response(200, [{"id": "owner/demo"}], url=url)
-
-    monkeypatch.setattr(fallback_ops, "FallbackClient", SimpleClient)
-    monkeypatch.setattr(fallback_ops.httpx, "AsyncClient", FakeAsyncHTTPClient)
-
-    results = await fallback_ops.fetch_external_list(
-        source,
-        "model",
-        {"author": "owner", "limit": 5, "sort": "updated"},
-    )
-
-    assert results == [
-        {
-            "id": "owner/demo",
-            "_source": "Source",
-            "_source_url": "https://source.local",
-        }
-    ]
-    assert FakeAsyncHTTPClient.calls == [
-        ("https://source.local/api/models", {"author": "owner", "limit": 5})
-    ]
-
-    class FailingHTTPClient(FakeAsyncHTTPClient):
-        async def get(self, url: str, params: dict):
-            raise RuntimeError("network down")
-
-    monkeypatch.setattr(fallback_ops.httpx, "AsyncClient", FailingHTTPClient)
-    assert await fallback_ops.fetch_external_list(source, "model", {"author": "owner"}) == []
-
-
-@pytest.mark.asyncio
 async def test_try_fallback_user_profile_supports_hf_user_hf_org_and_kohakuhub(monkeypatch):
     monkeypatch.setattr(
         fallback_ops,
@@ -1547,37 +1491,6 @@ async def test_try_fallback_info_tree_and_paths_info_cover_cached_and_failure_pa
     )
     assert paths_resp_502 is not None
     assert paths_resp_502.status_code == 502
-
-
-@pytest.mark.asyncio
-async def test_fetch_external_list_returns_empty_for_non_success_status(monkeypatch):
-    source = {"url": "https://source.local", "name": "Source", "source_type": "huggingface"}
-
-    class SimpleClient:
-        def __init__(self, source_url: str, source_type: str, token: str | None = None):
-            self.timeout = 9
-            self.source_url = source_url
-
-        def map_url(self, kohaku_path: str, repo_type: str) -> str:
-            return f"{self.source_url}{kohaku_path}"
-
-    class FailingStatusHTTPClient:
-        def __init__(self, timeout: int):
-            self.timeout = timeout
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, exc_type, exc, tb):
-            return None
-
-        async def get(self, url: str, params: dict):
-            return _content_response(500, b"upstream failure", url=url)
-
-    monkeypatch.setattr(fallback_ops, "FallbackClient", SimpleClient)
-    monkeypatch.setattr(fallback_ops.httpx, "AsyncClient", FailingStatusHTTPClient)
-
-    assert await fallback_ops.fetch_external_list(source, "model", {"author": "owner"}) == []
 
 
 @pytest.mark.asyncio

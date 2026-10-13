@@ -16,6 +16,7 @@ import pytest
 import kohakuhub.api.repo.routers.info as repo_info
 from kohakuhub.auth.permissions import RepoReadDeniedError
 from test.kohakuhub.support.factories import make_daily_stats, make_repo, make_user
+from test.kohakuhub.support.list_local import list_local
 
 pytestmark = pytest.mark.usefixtures("db_scope")
 
@@ -249,31 +250,10 @@ async def test_trending_list_uses_real_stats_and_falls_back_to_lakefs(lakefs):
     lakefs.commit_error = RuntimeError("commit fail")
     make_daily_stats(repo, datetime.now(timezone.utc).date() - timedelta(days=1), download_sessions=4)
 
-    trending = await repo_info._list_repos_internal("model", sort="trending", user=None)
+    trending = await list_local("model", sort="trending")
 
     assert [item["id"] for item in trending] == ["alice/demo"]
     assert trending[0]["lastModified"] is None
-
-
-@pytest.mark.asyncio
-async def test_list_routes_dispatch_by_path_and_reject_unknown_types(monkeypatch):
-    async def _models(*args, **kwargs):
-        return ["models"]
-
-    async def _datasets(*args, **kwargs):
-        return ["datasets"]
-
-    async def _spaces(*args, **kwargs):
-        return ["spaces"]
-
-    monkeypatch.setattr(repo_info, "_list_models_with_aggregation", _models)
-    monkeypatch.setattr(repo_info, "_list_datasets_with_aggregation", _datasets)
-    monkeypatch.setattr(repo_info, "_list_spaces_with_aggregation", _spaces)
-
-    assert await repo_info.list_repos(request=_request("/api/models")) == ["models"]
-    assert await repo_info.list_repos(request=_request("/api/datasets")) == ["datasets"]
-    assert await repo_info.list_repos(request=_request("/api/spaces")) == ["spaces"]
-    assert (await repo_info.list_repos(request=_request("/api/unknown"))).status_code == 404
 
 
 @pytest.mark.asyncio
@@ -305,3 +285,14 @@ async def test_user_repo_listing_404s_unknown_names_and_sorts_real_rows(lakefs):
         "alice", request=None, limit=10, sort="recent", user=owner
     )
     assert {item["id"] for item in recent["models"]} == {"alice/small", "alice/big"}
+
+
+@pytest.mark.asyncio
+async def test_a_repository_deleted_after_the_order_was_read_is_left_out(lakefs):
+    owner = make_user("alice")
+    kept = make_repo(owner, "kept")
+
+    items = await repo_info._render_local([kept.id + 1000, kept.id], tag_source=False)
+
+    assert [item["id"] for item in items] == ["alice/kept"]
+    assert await repo_info._render_local([], tag_source=False) == []

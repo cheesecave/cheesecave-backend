@@ -192,6 +192,10 @@ app.add_middleware(
         # huggingface_hub clients, which ignore unknown headers.
         "X-Chain-Trace",
         "X-Site-Branding-Fallback",
+        # Repository lists page through Link (RFC 8288); the SPA follows it and
+        # shows X-Cheesecave-Incomplete when a fallback source was skipped.
+        "Link",
+        "X-Cheesecave-Incomplete",
     ],
 )
 

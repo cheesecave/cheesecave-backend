@@ -542,25 +542,14 @@ async def test_huggingface_hub_list_models_supported_sort_modes(
     server unchanged (``"likes"``, ``"downloads"``), others get translated
     (``"last_modified"`` → ``"lastModified"``, etc.).
 
-    KohakuHub's list endpoint only accepts ``recent | updated | likes |
-    downloads | trending``. So:
-
-    - ``sort=None`` (default) → no sort param → server defaults to ``recent``
-    - ``sort="downloads"`` → passes through → server accepts ``downloads``
-    - ``sort="likes"`` → passes through → server accepts ``likes``
-
-    The other HF sort modes (``last_modified``, ``trending_score``,
-    ``created_at``) translate to camelCase param values that KohakuHub's
-    endpoint does NOT yet accept — that's a pre-existing alignment gap
-    tracked separately, not introduced by this fix.
-
-    This test pins the **supported** sort modes so the fix can't regress
-    them, and documents the gap inline for future readers."""
+    Every ``HfApi`` sort mode, translated or not, must be answered: the endpoint
+    accepts the Hub's names (``lastModified``, ``createdAt``, ``trendingScore``)
+    next to its own."""
     from huggingface_hub import HfApi
 
     api = HfApi(endpoint=live_server_url, token=hf_api_token)
 
-    for sort in (None, "downloads", "likes"):
+    for sort in (None, "downloads", "likes", "last_modified", "created_at", "trending_score"):
         models = await asyncio.to_thread(
             lambda s=sort: list(api.list_models(author="owner", limit=10, sort=s))
         )

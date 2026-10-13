@@ -1,15 +1,18 @@
 """Repository information and listing endpoints."""
 
 from datetime import datetime
+from urllib.parse import urlencode
 from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, Query, Request
+from fastapi.responses import JSONResponse
 from peewee import JOIN, fn
 
 from kohakuhub.config import cfg
 from kohakuhub.constants import DATETIME_FORMAT_ISO
 from kohakuhub.db import Commit, Repository, User
 from kohakuhub.db_operations import (
+    get_merged_external_tokens,
     get_organization,
     get_repository,
     get_user_by_username,
@@ -22,11 +25,10 @@ from kohakuhub.auth.permissions import (
     filter_readable_repositories,
 )
 from kohakuhub.utils.lakefs import get_lakefs_client, resolve_lakefs_repo
-from kohakuhub.api.fallback import (
-    with_list_aggregation,
-    with_repo_fallback,
-    with_user_fallback,
-)
+from kohakuhub.api.fallback import with_repo_fallback, with_user_fallback
+from kohakuhub.api.fallback.config import get_enabled_sources
+from kohakuhub.api.fallback.operations import ExternalListError
+from kohakuhub.api.repo.utils import listing
 from kohakuhub.utils.datetime_utils import safe_strftime
 from kohakuhub.api.repo.utils.hf import (
     HFErrorCode,
@@ -285,145 +287,130 @@ def _filter_repos_by_privacy(q, user: Optional[User], author: Optional[str] = No
     return filter_readable_repositories(q, user, author)
 
 
-async def _list_repos_internal(
-    rt: str,
-    author: Optional[str] = None,
-    limit: int = 50,
-    sort: str = "recent",
-    user: User | None = None,
-    fallback: bool = True,
-) -> list[dict]:
-    """Internal function to list repositories (called by decorated versions).
+async def _render_local(ids: list[int], tag_source: bool) -> list[dict]:
+    """The list items of the repositories ``ids``, in that order.
 
-    Args:
-        rt: Repository type ("model", "dataset", or "space")
-        author: Filter by author/namespace
-        limit: Maximum number of results
-        sort: Sort order
-        user: Current authenticated user (optional)
-        fallback: Enable fallback to external sources (default: True)
-
-    Returns:
-        List of repositories
+    sha + lastModified come from one SQL aggregate; LakeFS answers only for repos missing
+    from the Commit table (issue #62).
     """
-    # Query database
-    q = Repository.select().where(Repository.repo_type == rt)
-
-    # Filter by author if specified
-    if author:
-        q = q.where(Repository.namespace == author)
-
-    # Apply privacy filtering
-    q = filter_readable_repositories(q, user)
-
-    # Apply sorting
-    if sort == "trending":
-        # Use trending algorithm (recent activity with decay)
-        from kohakuhub.api.utils.trending import get_trending_repositories
-
-        rows = get_trending_repositories(rt, limit=limit, days=7, scope=q)
-    else:
-        rows = list(_apply_repo_sorting(q, rt, sort).limit(limit))
-
-    # Resolve sha + lastModified in one SQL aggregate. Falls back to LakeFS
-    # only for repos missing from the Commit table — see issue #62.
-    heads = _latest_main_commits([r.id for r in rows])
+    if not ids:
+        return []
+    by_id = {r.id: r for r in Repository.select().where(Repository.id.in_(ids))}
+    heads = _latest_main_commits(ids)
     client = get_lakefs_client()
     result = []
-
-    for r in rows:
+    for repo_id in ids:
+        r = by_id.get(repo_id)
+        if r is None:  # deleted since the order was read
+            continue
         head = heads.get(r.id)
         if head is not None:
             sha, last_at = head
             last_modified = safe_strftime(last_at, DATETIME_FORMAT_ISO)
         else:
-            lakefs_repo = resolve_lakefs_repo(r)
             sha, last_modified = await _resolve_main_head_via_lakefs(
-                client, lakefs_repo
+                client, resolve_lakefs_repo(r)
             )
-
-        result.append(
-            {
-                "id": r.full_id,
-                "author": r.namespace,
-                "private": r.private,
-                "sha": sha,
-                "lastModified": last_modified,
-                "createdAt": safe_strftime(r.created_at, DATETIME_FORMAT_ISO),
-                "downloads": r.downloads,
-                "likes": r.likes_count,
-                "gated": False,
-                "tags": [],
-            }
-        )
-
-    # Sorting already applied by database query
+        item = {
+            "id": r.full_id,
+            "author": r.namespace,
+            "private": r.private,
+            "sha": sha,
+            "lastModified": last_modified,
+            "createdAt": safe_strftime(r.created_at, DATETIME_FORMAT_ISO),
+            "downloads": r.downloads,
+            "likes": r.likes_count,
+            "gated": False,
+            "tags": [],
+        }
+        if tag_source:
+            item["_source"] = "local"
+            item["_source_url"] = cfg.app.base_url
+        result.append(item)
     return result
 
 
-# Create decorated versions for each repo type
-@with_list_aggregation("model")
-async def _list_models_with_aggregation(author, limit, sort, user, fallback=True):
-    return await _list_repos_internal("model", author, limit, sort, user, fallback)
-
-
-@with_list_aggregation("dataset")
-async def _list_datasets_with_aggregation(author, limit, sort, user, fallback=True):
-    return await _list_repos_internal("dataset", author, limit, sort, user, fallback)
-
-
-@with_list_aggregation("space")
-async def _list_spaces_with_aggregation(author, limit, sort, user, fallback=True):
-    return await _list_repos_internal("space", author, limit, sort, user, fallback)
+def _next_link(request: Request, cursor: str) -> str:
+    """Absolute URL of the same request with ``cursor`` replaced (repeated params kept)."""
+    kept = [(n, v) for n, v in request.query_params.multi_items() if n != "cursor"]
+    kept.append(("cursor", cursor))
+    return f"{cfg.app.base_url.rstrip('/')}{request.url.path}?{urlencode(kept)}"
 
 
 @router.get("/models")
 @router.get("/datasets")
 @router.get("/spaces")
 async def list_repos(
+    request: Request,
     author: Optional[str] = None,
-    limit: int = Query(
-        50, ge=1, le=100000
-    ),  # Very high limit to support "get all repos"
-    sort: str = Query("recent", pattern="^(recent|updated|likes|downloads|trending)$"),
+    limit: Optional[int] = Query(None, ge=1),
+    sort: Optional[str] = None,
+    direction: Optional[int] = None,
+    search: Optional[str] = None,
+    cursor: Optional[str] = None,
+    partial: Optional[str] = None,
     fallback: bool = Query(True, description="Enable fallback to external sources"),
-    request: Request = None,
     user: User | None = Depends(get_optional_user),
 ):
-    """List repositories of a specific type.
+    """List repositories like the Hub: a bare array, the next page in ``Link``.
 
-    Args:
-        author: Filter by author/namespace
-        limit: Maximum number of results
-        sort: Sort order (recent, updated, likes, downloads, trending) - default: recent
-        fallback: Enable fallback to external sources (default: True)
-        request: FastAPI request object
-        user: Current authenticated user (optional)
-
-    Returns:
-        List of repositories (respects privacy settings, aggregated from local + external sources)
+    Unknown parameters are ignored. See ``kohakuhub.api.repo.utils.listing`` for the model.
     """
-    path = request.url.path
+    repo_type = request.url.path.rsplit("/", 1)[-1].removesuffix("s")
+    params = request.query_params
+    try:
+        query = listing.ListQuery(
+            repo_type=repo_type,
+            author=author,
+            sort=listing.parse_sort(sort),
+            ascending=listing.parse_direction(direction),
+            search=search or None,
+            tags=tuple(params.getlist("filter")),
+            pipeline_tag=tuple(params.getlist("pipeline_tag")),
+            library=tuple(params.getlist("library")),
+            language=tuple(params.getlist("language")),
+            task_categories=tuple(params.getlist("task_categories")),
+            size_categories=tuple(params.getlist("size_categories")),
+            page_size=listing.page_size_for(limit),
+            partial=partial == "ok",
+        )
+        state = listing.decode_cursor(cursor, query.fingerprint()) if cursor else None
+    except (listing.ListParamError, listing.CursorError) as error:
+        return hf_error_response(400, HFErrorCode.BAD_REQUEST, str(error))
 
-    match path:
-        case _ if "models" in path:
-            return await _list_models_with_aggregation(
-                author, limit, sort, user, fallback
-            )
-        case _ if "datasets" in path:
-            return await _list_datasets_with_aggregation(
-                author, limit, sort, user, fallback
-            )
-        case _ if "spaces" in path:
-            return await _list_spaces_with_aggregation(
-                author, limit, sort, user, fallback
-            )
-        case _:
-            return hf_error_response(
-                404,
-                HFErrorCode.INVALID_REPO_TYPE,
-                "Unknown repository type",
-            )
+    sources = []
+    if cfg.fallback.enabled and fallback:
+        header_tokens = getattr(request.state, "external_tokens", {})
+        sources = get_enabled_sources(
+            namespace=author or "",
+            user_tokens=get_merged_external_tokens(user, header_tokens),
+        )
+
+    try:
+        page = await listing.build_page(
+            query,
+            user,
+            state=state,
+            sources=sources,
+            render_local=lambda ids: _render_local(ids, tag_source=bool(sources)),
+        )
+    except listing.CursorError as error:
+        return hf_error_response(400, HFErrorCode.BAD_REQUEST, str(error))
+    except ExternalListError as error:
+        return hf_error_response(
+            503,
+            HFErrorCode.SERVER_ERROR,
+            f"{error.source} could not list {repo_type}s ({error.reason}); retry, or pass partial=ok to skip it",
+            headers={"Retry-After": "2"},
+        )
+
+    headers = {}
+    if page.next_state is not None:
+        token = listing.encode_cursor(page.next_state, query.fingerprint())
+        headers["Link"] = f'<{_next_link(request, token)}>; rel="next"'
+    if page.incomplete:
+        headers["X-Cheesecave-Incomplete"] = ", ".join(page.incomplete)
+    return JSONResponse(page.items, headers=headers)
 
 
 @router.get("/users/{username}/repos")

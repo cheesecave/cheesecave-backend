@@ -285,61 +285,6 @@ async def test_with_repo_fallback_forwards_tree_and_paths_info_expand_parameters
 
 
 @pytest.mark.asyncio
-async def test_with_list_aggregation_merges_local_and_external_results(monkeypatch):
-    monkeypatch.setattr(
-        fallback_decorators,
-        "get_merged_external_tokens",
-        lambda user, header_tokens: {"https://hf.local": "token"},
-    )
-    monkeypatch.setattr(
-        fallback_decorators,
-        "get_enabled_sources",
-        lambda namespace="", user_tokens=None: [
-            {"url": "https://hf.local", "name": "HF", "source_type": "huggingface"}
-        ],
-    )
-
-    async def fake_fetch_external_list(source, repo_type, query_params):
-        assert query_params == {"author": "owner", "limit": 3, "sort": "updated"}
-        return [
-            {"id": "owner/model-b", "lastModified": "2025-01-03T00:00:00Z"},
-            {"id": "owner/model-a", "lastModified": "2025-01-02T00:00:00Z"},
-        ]
-
-    monkeypatch.setattr(fallback_decorators, "fetch_external_list", fake_fetch_external_list)
-
-    @fallback_decorators.with_list_aggregation("model")
-    async def handler(author=None, limit=50, sort="recent", user=None, request=None, fallback=True):
-        return [{"id": "owner/model-a", "lastModified": "2025-01-01T00:00:00Z"}]
-
-    request = _request("/api/models", external_tokens={"https://hf.local": "header-token"})
-    result = await handler("owner", 3, "updated", "owner-user", request=request)
-
-    assert result == [
-        {
-            "id": "owner/model-b",
-            "lastModified": "2025-01-03T00:00:00Z",
-        },
-        {
-            "id": "owner/model-a",
-            "lastModified": "2025-01-01T00:00:00Z",
-            "_source": "local",
-            "_source_url": "https://hub.local",
-        },
-    ]
-
-
-@pytest.mark.asyncio
-async def test_with_list_aggregation_bypasses_when_disabled_or_non_list(monkeypatch):
-    @fallback_decorators.with_list_aggregation("dataset")
-    async def handler(author=None, limit=50, sort="recent", user=None, request=None, fallback=True):
-        return {"local": True}
-
-    monkeypatch.setattr(fallback_decorators.cfg.fallback, "enabled", False)
-    assert await handler("owner") == {"local": True}
-
-
-@pytest.mark.asyncio
 async def test_with_user_fallback_supports_profile_repos_and_avatar(monkeypatch):
     monkeypatch.setattr(
         fallback_decorators,

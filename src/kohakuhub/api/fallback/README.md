@@ -44,7 +44,7 @@ bounds the recovery window. See [Cache](#cache) for tuning.
 | `config.py` | `get_enabled_sources(namespace, user)` — DB + global config resolution, returns priority-ordered list with per-source token already filled in. |
 | `cache.py` | `RepoSourceCache` — TTL+LRU cache mapping `(repo_type, namespace, name) → bound source`. |
 | `operations.py` | `_run_cached_then_chain` orchestrator + per-op wrappers `try_fallback_resolve` / `try_fallback_info` / `try_fallback_tree` / `try_fallback_paths_info`. Owns the binding lock registry. |
-| `decorators.py` | `@with_repo_fallback`, `@with_user_fallback`, `@with_list_aggregation` — wrap FastAPI endpoints. |
+| `decorators.py` | `@with_repo_fallback`, `@with_user_fallback` — wrap FastAPI endpoints. |
 
 ## Request lifecycle
 
