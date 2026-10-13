@@ -11,7 +11,7 @@ not know. Tests steer it through ``app.state``:
   ``"garbage"`` answer 200 with a body that is no list, ``"mixed"`` a list with entries
   that are no repositories)
 * ``delay``     seconds to wait before answering
-* ``calls``     ``[{"plural": "models", "query": [(name, value), ...]}]``, one per request
+* ``calls``     ``[{"plural": "models", "query": [(name, value), ...], "authorization": ...}]``, one per request
 * ``ignore_limit``  answer ``page_cap`` items whatever ``limit`` says
 """
 
@@ -67,7 +67,7 @@ def build_list_hf_app(items: dict[str, list[dict]] | None = None, page_cap: int 
     @app.get("/api/{plural}")
     async def listing(plural: str, request: Request):
         query = list(request.query_params.multi_items())
-        app.state.calls.append({"plural": plural, "query": query})
+        app.state.calls.append({"plural": plural, "query": query, "authorization": request.headers.get("authorization")})
         if app.state.delay:
             await asyncio.sleep(app.state.delay)
         if app.state.failures:
