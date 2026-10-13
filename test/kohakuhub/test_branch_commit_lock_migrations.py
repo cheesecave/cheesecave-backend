@@ -5,6 +5,8 @@ Each test starts from an emptied ``db_dual`` database (SQLite and PostgreSQL) ho
 """
 
 import importlib.util
+import threading
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -164,3 +166,37 @@ def test_it_migrates_a_database_without_the_state_table(migration, db_dual):
     db_dual.drop_tables([LfsGcState])
     assert migration.run() is True
     assert db_dual.table_exists("branch_commit_lock")
+
+
+def _second_connection(database):
+    other = type(database)(database.database, **database.connect_params)
+    other.connect()
+    return other
+
+
+def test_runners_started_together_take_turns(migration, db_dual, capsys):
+    """Two containers starting at once would both run CREATE TABLE IF NOT EXISTS, which PostgreSQL
+    does not make safe (a unique violation on its catalog; seen on the rehearsal stack). The
+    runners take an advisory lock, and the one that waited finds the work done."""
+    if isinstance(db_dual, SqliteDatabase):
+        pytest.skip("advisory locks are PostgreSQL's; SQLite serialises writers itself")
+    other = _second_connection(db_dual)
+    results = []
+    try:
+        other.execute_sql("BEGIN")
+        other.execute_sql(f"SELECT pg_advisory_xact_lock({migration.LOCK_KEY})")  # a runner is at work
+        thread = threading.Thread(target=lambda: results.append(migration.run()))
+        thread.start()
+        time.sleep(0.5)
+        assert thread.is_alive()  # the second runner waits for the first
+        assert results == []
+        other.execute_sql(
+            'CREATE TABLE "branch_commit_lock" ("id" SERIAL NOT NULL PRIMARY KEY, "repository_id" INTEGER NOT NULL, '
+            '"branch" VARCHAR(255) NOT NULL, "token" VARCHAR(64) NOT NULL, "until" TIMESTAMP NOT NULL)'
+        )
+        other.execute_sql("COMMIT")  # the first runner is done
+        thread.join(timeout=30)
+    finally:
+        other.close()
+    assert results == [True]
+    assert "Already applied (by another run)" in capsys.readouterr().out

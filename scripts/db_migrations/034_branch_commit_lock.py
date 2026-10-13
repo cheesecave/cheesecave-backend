@@ -37,6 +37,9 @@ from _migration_utils import check_table_exists, should_skip_due_to_future_migra
 
 MIGRATION_NUMBER = 34
 TABLE = "branch_commit_lock"
+# Two containers starting together would both run CREATE TABLE IF NOT EXISTS, which PostgreSQL does not make safe
+# (a unique violation on its catalog), so the runners take turns on this advisory lock
+LOCK_KEY = 20261013034
 
 
 def _predecessor_applied(database, config) -> bool:
@@ -104,6 +107,11 @@ def run():
         print("=" * 70)
         with db.atomic():
             if cfg.app.db_backend == "postgres":
+                # held until the transaction ends; a runner that waited finds the work done
+                db.execute_sql("SELECT pg_advisory_xact_lock(%s)", (LOCK_KEY,))
+                if is_applied(db, cfg):
+                    print(f"Migration {MIGRATION_NUMBER}: Already applied (by another run)")
+                    return True
                 _migrate("TIMESTAMP", "SERIAL")
             else:
                 _migrate("DATETIME", "INTEGER")
