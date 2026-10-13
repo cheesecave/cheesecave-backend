@@ -82,6 +82,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Restores the user-stated guarantee that a local repo wins absolutely on
   its namespace, regardless of upstream state. ([#77](https://github.com/deepghs/KohakuHub/pull/77))
 
+### Fixed
+
+- **Presigned S3 URLs are signed for the public address** ([#70](https://github.com/cheesecave/cheesecave-backend/issues/70)).
+  Every presigned URL (download, upload, multipart part) was signed for
+  `KOHAKU_HUB_S3_ENDPOINT` and then pointed at `KOHAKU_HUB_S3_PUBLIC_ENDPOINT`; SigV4
+  signs the `Host`, so a store reached under two names refused them
+  (`SignatureDoesNotMatch`). With the default MinIO signing it only showed for more than
+  10 parts, because that path forced SigV4: the example compose could not upload an LFS
+  file above about 500 MB. One client now makes all of them, signed for the public
+  address; equal addresses (R2, AWS, production) are unchanged. A proxy in front of the
+  store has to pass `Host` through (see `docs/deployment/production.md`), and the R2
+  example there no longer uses an `r2.dev` public endpoint.
+
 ### Security
 
 - **Authorization hardening on five routes.**

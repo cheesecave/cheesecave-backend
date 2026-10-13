@@ -78,7 +78,7 @@ Comprehensive S3-compatible storage utilities with async support.
 - **`generate_download_presigned_url(bucket, key, expires_in=3600, filename=None) -> str`**
   - Generates time-limited download URLs
   - Optional Content-Disposition header for custom filenames
-  - Returns public endpoint URL (supports endpoint URL translation)
+  - Returns a URL signed for, and pointing to, the public endpoint (`KOHAKU_HUB_S3_PUBLIC_ENDPOINT`)
 
 - **`generate_upload_presigned_url(bucket, key, expires_in=3600, content_type=None, checksum_sha256=None) -> dict`**
   - Generates time-limited upload URLs with PUT method
@@ -287,4 +287,4 @@ print(f"Deleted {count} objects")
 - Presigned URLs are time-limited (default 1 hour)
 - S3 credentials managed through configuration, never hardcoded
 - LakeFS client uses configured authentication
-- Public endpoint translation supports proxying/CDN setups
+- Every presigned URL (download, upload, multipart part, whatever the part count) is signed for the public endpoint by one client (`_presign_client`), because SigV4 signs the `Host` the request carries; a proxy must pass `Host` through unchanged

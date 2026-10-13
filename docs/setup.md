@@ -97,7 +97,7 @@ openssl rand -base64 48
 | Variable | Default | When to Change |
 |----------|---------|----------------|
 | `KOHAKU_HUB_BASE_URL` | http://localhost:28080 | Deploying to domain |
-| `KOHAKU_HUB_S3_PUBLIC_ENDPOINT` | http://localhost:29001 | Using external S3 |
+| `KOHAKU_HUB_S3_PUBLIC_ENDPOINT` | http://localhost:29001 | The address clients reach S3 at (see [config](reference/config.md)) |
 | `KOHAKU_HUB_LFS_THRESHOLD_BYTES` | 10000000 (10MB) | Adjust LFS threshold |
 | `KOHAKU_HUB_REQUIRE_EMAIL_VERIFICATION` | false | Enable email verification |
 | `KOHAKU_HUB_LFS_KEEP_VERSIONS` | 5 | Change version retention |
@@ -182,7 +182,7 @@ curl http://localhost:28080/api/version
 If deploying on a server:
 
 1. Update `KOHAKU_HUB_BASE_URL` to your domain
-2. Update `KOHAKU_HUB_S3_PUBLIC_ENDPOINT` if using external S3
+2. Set `KOHAKU_HUB_S3_PUBLIC_ENDPOINT` to the address clients reach S3 at (for an external S3 such as R2 or AWS, the same as `KOHAKU_HUB_S3_ENDPOINT`)
 3. Add reverse proxy with HTTPS (nginx/traefik/caddy)
 4. Only expose port 28080 (or 443 with HTTPS)
 

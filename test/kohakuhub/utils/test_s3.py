@@ -47,21 +47,24 @@ def test_get_presigned_url_process_pool_is_cached(monkeypatch):
     assert registrations == [pool1.shutdown]
 
 
-def test_generate_single_part_url_builds_client_and_rewrites_public_endpoint(monkeypatch):
+def test_generate_single_part_url_signs_for_the_public_endpoint(monkeypatch):
     captured = {}
 
     class RecordingClient:
+        def __init__(self, endpoint_url):
+            self.endpoint_url = endpoint_url
+
         def generate_presigned_url(self, operation_name, Params, ExpiresIn):
             captured["operation_name"] = operation_name
             captured["params"] = Params
             captured["expires_in"] = ExpiresIn
-            return "https://internal-s3.local/bucket/object.bin?upload=1"
+            return f"{self.endpoint_url}/bucket/object.bin?upload=1"
 
     monkeypatch.setattr(s3_module, "BotoConfig", lambda **kwargs: kwargs)
 
     def fake_boto3_client(service_name, **kwargs):
         captured["client_kwargs"] = kwargs
-        return RecordingClient()
+        return RecordingClient(kwargs["endpoint_url"])
 
     monkeypatch.setattr(s3_module.boto3, "client", fake_boto3_client)
 
@@ -80,6 +83,7 @@ def test_generate_single_part_url_builds_client_and_rewrites_public_endpoint(mon
                 "region": "us-east-1",
                 "signature_version": "s3v4",
                 "force_path_style": True,
+                "bucket": "kohaku-test",
             },
         )
     )
@@ -94,6 +98,8 @@ def test_generate_single_part_url_builds_client_and_rewrites_public_endpoint(mon
         "signature_version": "s3v4",
         "s3": {"addressing_style": "path"},
     }
+    # signed for the address the URL is used at, so no host is swapped afterwards
+    assert captured["client_kwargs"]["endpoint_url"] == "https://public-s3.local"
 
 
 def test_get_multipart_limits_read_current_config():
@@ -234,9 +240,9 @@ def test_generate_download_and_upload_presigned_urls(monkeypatch):
                     "http_method": HttpMethod,
                 }
             )
-            return f"https://internal-s3.local/{Params['Bucket']}/{Params['Key']}?op={operation_name}"
+            return f"https://public-s3.local/{Params['Bucket']}/{Params['Key']}?op={operation_name}"
 
-    monkeypatch.setattr(s3_module, "get_s3_client", lambda: RecordingClient())
+    monkeypatch.setattr(s3_module, "_presign_client", lambda settings: RecordingClient())
 
     download_url = s3_module._generate_download_presigned_url_sync(
         "bucket",
