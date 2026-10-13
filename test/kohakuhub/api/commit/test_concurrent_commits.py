@@ -464,6 +464,69 @@ async def test_committing_content_again_restores_the_links_of_an_lfs_file(m, own
     assert _in_storage(m, oid)
 
 
+async def test_unchanged_lfs_content_is_linked_again(m, owner_client):
+    """A file whose row survives (a read puts a missing row back) but whose links were lost: the
+    same content committed again links it, with nothing else changing."""
+    repo = await _new(m, owner_client, "heal-linked")
+    content = b"links lost, row kept " * 30
+    oid = hashlib.sha256(content).hexdigest()
+    first = await repo.commit(lfs("w.bin", content))
+    row = _row(m, repo)
+    m.db.LfsHeadRef.delete().where(m.db.LfsHeadRef.repository == row).execute()
+    m.db.LFSObjectHistory.delete().where(m.db.LFSObjectHistory.repository == row).execute()
+    m.db.File.update(is_deleted=False).where(m.db.File.repository == row).execute()  # the row stays
+    later = m.db.utcnow() + timedelta(hours=25)
+    assert m.gc.retention_reason(oid, now=later) == "file"  # only the row keeps it
+
+    response = await _post(m, repo, [lfs("w.bin", content)])
+
+    assert response.status_code == 200 and response.json()["commitOid"] == first
+    assert m.gc.retention_reason(oid, now=later) == "head"
+
+
+async def test_unchanged_lfs_content_uploaded_again_revives_what_was_collected(m, owner_client):
+    """The object was collected, the row came back with a read, and the file is uploaded again: the
+    commit has nothing to change, but the object is claimed (its tombstone goes), so the
+    reconciliation stops counting the file as lost."""
+    repo = await _new(m, owner_client, "heal-revive")
+    content = b"collected, row healed, uploaded again " * 20
+    oid = hashlib.sha256(content).hexdigest()
+    first = await repo.commit(lfs("w.bin", content))
+    row = _row(m, repo)
+    m.db.LfsHeadRef.delete().where(m.db.LfsHeadRef.repository == row).execute()
+    m.s3.delete_object(Bucket=m.cfg.s3.bucket, Key=f"lfs/{oid[:2]}/{oid[2:4]}/{oid}")
+    m.db.LfsObjectTombstone.create(sha256=oid, state=m.gc.DELETED)
+    assert not _in_storage(m, oid)
+
+    # the client uploads the bytes again, then commits the same content
+    response = await _post(m, repo, [lfs("w.bin", content)])
+
+    assert response.status_code == 200, response.text
+    assert response.json()["commitOid"] == first
+    assert _in_storage(m, oid)
+    assert m.gc.tombstone_state(oid) is None
+    assert m.gc.retention_reason(oid, now=m.db.utcnow() + timedelta(hours=25)) == "head"
+
+
+async def test_unchanged_lfs_content_that_is_gone_must_be_uploaded_again(m, owner_client):
+    """A tombstoned object that is not in storage: the commit says so (409) instead of reporting
+    "no changes" for a file nobody can download."""
+    repo = await _new(m, owner_client, "heal-gone-unchanged")
+    content = b"collected and not uploaded again " * 20
+    oid = hashlib.sha256(content).hexdigest()
+    await repo.commit(lfs("w.bin", content))
+    m.s3.delete_object(Bucket=m.cfg.s3.bucket, Key=f"lfs/{oid[:2]}/{oid[2:4]}/{oid}")
+    m.db.LfsObjectTombstone.create(sha256=oid, state=m.gc.DELETED)
+    op = lfs("w.bin", content)
+    op["value"].pop("_content")  # nothing is uploaded
+
+    response = await _post(m, repo, [op])
+
+    assert response.status_code == 409, response.text
+    assert "Upload it again" in response.json()["detail"]["error"]
+    assert m.db.BranchCommitLock.select().count() == 0
+
+
 async def test_a_commit_that_changes_nothing_still_answers_the_head(m, owner_client):
     repo = await _new(m, owner_client, "heal-unchanged")
     first = await repo.commit(_file("a.txt", "same"))

@@ -37,6 +37,7 @@ from kohakuhub.lfs_gc import (
     claim_for_commit,
     lfs_oid,
     record_evicted_versions,
+    tombstone_state,
 )
 from kohakuhub.storage_cleanup import enqueue_lfs_collection, record_head_change
 from kohakuhub.api.repo.utils.hf import HFErrorCode, ensure_revision_in_history
@@ -318,6 +319,11 @@ async def process_lfs_file(
                 f"- WILL TRACK in LFSObjectHistory"
             )
             # File exists and is active - normal case
+            # A tombstone says the object was collected while the file's row came back (a
+            # read puts a missing row back): the same content committed again claims it, so it
+            # is revived if it was uploaded again and refused (409) if it was not (#56)
+            if tombstone_state(oid) is not None:
+                await _claim_lfs_object(oid, f"lfs/{oid[:2]}/{oid[2:4]}/{oid}")
             # Still return tracking info for new commit
             return False, {
                 "path": path,
@@ -1177,6 +1183,12 @@ async def _commit_on_leased_branch(
 
     # If no files changed, return early
     if not files_changed:
+        # The branch holds this content already. Its LFS files are linked all the same, so a
+        # file whose links an earlier version lost is linked by uploading it again (#56)
+        if pending_lfs_tracking:
+            record_head_change(
+                repo_row, revision, {info["path"]: info["sha256"] for info in pending_lfs_tracking}, []
+            )
         return await _no_change_response(client, lakefs_repo, revision, repo_type, repo_id)
 
     # Create commit in LakeFS
