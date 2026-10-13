@@ -118,10 +118,33 @@ NDJSON (Newline-Delimited JSON) - one JSON object per line:
   "key": "header",
   "value": {
     "summary": "Commit message",
-    "description": "Optional detailed description"
+    "description": "Optional detailed description",
+    "parentCommit": "Optional commit id the branch must still point at"
   }
 }
 ```
+
+**`parentCommit`** (what `create_commit(parent_commit=...)` sends) is the commit id the client
+expects the branch to point at, or its first characters. If the branch has moved on, nothing is
+committed and the answer is `412 Precondition Failed`:
+
+```json
+{"error": "A commit has happened since. Please refresh and try again."}
+```
+
+**One commit at a time per branch.** A branch takes one commit request at a time, from the
+moment its files are staged until everything is recorded. A request that arrives while another
+commit to the same branch is running is refused at once, whoever it is: `409 Conflict` with
+`Retry-After: 2`, nothing committed and nothing left staged. Commits to different branches, and
+to different repositories, do not wait for each other. Retry a refused commit, or name the
+`parentCommit` you expect so a branch that has moved is refused with `412` instead.
+
+```json
+{"error": "Branch 'main' is busy: another commit to it is in progress. Nothing was committed; try again in a few seconds."}
+```
+
+A request whose `parentCommit` names a branch that does not exist is answered `404` with
+`X-Error-Code: RevisionNotFound`.
 
 ---
 

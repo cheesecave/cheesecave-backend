@@ -461,6 +461,28 @@ def finish_delete(shas: Iterable[str]) -> None:
         ).execute()
 
 
+def collected_links(
+    links: Iterable[tuple[str, str, str]]
+) -> list[tuple[str, str, str]]:
+    """The ``(branch, path, sha256)`` links whose object garbage collection has deleted.
+
+    Such a file is listed, but cannot be downloaded until its content is uploaded again
+    (#56: the race of concurrent commits left files unlinked, and the collection deleted them).
+    """
+    links = sorted(set(links))
+    shas = sorted({sha for _, _, sha in links})
+    T = LfsObjectTombstone
+    gone: set[str] = set()
+    for start in range(0, len(shas), CANDIDATE_BATCH):
+        gone.update(
+            sha
+            for (sha,) in T.select(T.sha256)
+            .where(T.sha256.in_(shas[start : start + CANDIDATE_BATCH]) & (T.state == DELETED))
+            .tuples()
+        )
+    return [link for link in links if link[2] in gone]
+
+
 def deleted_shas(shas: Iterable[str]) -> set[str]:
     """Which of ``shas`` garbage collection has deleted (or is deleting)."""
     shas = list(set(shas))

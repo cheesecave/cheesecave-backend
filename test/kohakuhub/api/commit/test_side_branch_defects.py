@@ -308,5 +308,7 @@ async def test_d5_identical_recommit_with_a_missing_row_is_a_noop(m, owner_clien
     assert response.status_code == 200, response.text
     assert response.json()["commitOid"] == head_before
     assert await _head(owner_client, repo, "dev") == head_before
-    assert _rows(_repo_row(repo), "dev") == {}
+    # The row the commit wrote describes the branch as it is, so it stays (it used to be
+    # undone, leaving the file with no row: #56)
+    assert _rows(_repo_row(repo), "dev") == {"README.md": (blob("hello"), 5, False)}
     assert await _tree(owner_client, repo, "dev") == {"README.md": blob("hello")}

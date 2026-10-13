@@ -265,12 +265,57 @@ async def test_expired_uploads_become_candidates(m, monkeypatch):
     assert _candidates(m) == set(old)
     assert {row.sha256 for row in m.db.LfsRecentObject.select()} == {recent}
 
-    # The hourly task hands expired uploads to the collection
+    # The hourly task hands expired uploads to the collection (once every link is recorded)
+    m.gc.mark_references_reconciled()
     await m.cleanup.expire_recent_lfs({})
     assert _queued(m, m.cleanup.COLLECT_LFS_KIND) == []
     m.gc.touch(_sha("old3"), now=m.db.utcnow() - timedelta(days=2))
     await m.cleanup.expire_recent_lfs({})
     assert len(_queued(m, m.cleanup.COLLECT_LFS_KIND)) == 1
+
+
+async def test_uploads_stay_protected_until_the_links_are_reconciled(m):
+    """Files an earlier version left unlinked (#56) are linked by a reconciliation: until one
+    has run, an upload leaving its grace period is not handed to the collection, whatever
+    ``lfs_auto_gc`` says."""
+    old = _sha("unreconciled")
+    m.gc.touch(old, now=m.db.utcnow() - timedelta(days=2))
+    assert not m.gc.references_reconciled()
+
+    await m.cleanup.expire_recent_lfs({})
+
+    assert {row.sha256 for row in m.db.LfsRecentObject.select()} == {old}
+    assert _candidates(m) == set()
+    assert _queued(m, m.cleanup.COLLECT_LFS_KIND) == []
+    assert len(_queued(m, m.cleanup.RECONCILE_LFS_KIND)) == 1
+    # asking again does not queue a second reconciliation
+    await m.cleanup.expire_recent_lfs({})
+    assert len(_queued(m, m.cleanup.RECONCILE_LFS_KIND)) == 1
+
+    m.gc.mark_references_reconciled()
+    await m.cleanup.expire_recent_lfs({})
+    assert _candidates(m) == {old}
+    assert len(_queued(m, m.cleanup.COLLECT_LFS_KIND)) == 1
+
+
+def test_links_to_collected_objects_are_found(m):
+    gone, kept = _sha("gone"), _sha("kept")
+    m.db.LfsObjectTombstone.create(sha256=gone, state=m.gc.DELETED)
+    m.db.LfsObjectTombstone.create(sha256=_sha("deleting"), state=m.gc.DELETING)
+    links = {
+        ("main", "b.bin", gone),
+        ("main", "a.bin", gone),
+        ("dev", "a.bin", gone),
+        ("main", "k.bin", kept),
+        ("main", "d.bin", _sha("deleting")),
+    }
+
+    assert m.gc.collected_links(links) == [
+        ("dev", "a.bin", gone),
+        ("main", "a.bin", gone),
+        ("main", "b.bin", gone),
+    ]
+    assert m.gc.collected_links([]) == []
 
 
 async def test_review_records_versions_a_lowered_keep_count_evicts(m, monkeypatch):
