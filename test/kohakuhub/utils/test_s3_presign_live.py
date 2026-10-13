@@ -41,9 +41,11 @@ def other_host(endpoint: str) -> str:
 def store():
     """A real bucket on the configured MinIO, removed afterwards."""
     cfg = s3_module.cfg.s3
+    parts = urlsplit(cfg.endpoint)  # the suite also runs with the bucket in the endpoint's path: use the server's root
+    root = urlunsplit((parts.scheme, parts.netloc, "", "", ""))
     admin = boto3.client(
         "s3",
-        endpoint_url=cfg.endpoint,
+        endpoint_url=root,
         aws_access_key_id=cfg.access_key,
         aws_secret_access_key=cfg.secret_key,
         region_name=cfg.region,
@@ -51,7 +53,7 @@ def store():
     bucket = f"presign-live-{uuid.uuid4().hex[:10]}"
     admin.create_bucket(Bucket=bucket)
     try:
-        yield {"endpoint": cfg.endpoint, "bucket": bucket, "admin": admin}
+        yield {"endpoint": root, "bucket": bucket, "admin": admin}
     finally:
         for page in admin.get_paginator("list_objects_v2").paginate(Bucket=bucket):
             for item in page.get("Contents", []):
@@ -189,21 +191,25 @@ class Proxy:
         self.server.server_close()
 
 
+@pytest.mark.parametrize("bucket_in_endpoint", [False, True], ids=["bucket-in-config", "bucket-in-endpoint"])
 @pytest.mark.parametrize("keep_host", [True, False], ids=["host-kept", "host-rewritten-to-the-upstream"])
-def test_a_proxy_mounted_on_a_path_works_when_it_keeps_the_host(monkeypatch, store, http, keep_host):
+def test_a_proxy_mounted_on_a_path_works_when_it_keeps_the_host(monkeypatch, store, http, keep_host, bucket_in_endpoint):
     """The documented requirement: pass ``Host`` through (the mount path itself is not signed)."""
     endpoint = store["endpoint"]
+    name = store["bucket"]
+    if bucket_in_endpoint:  # the proxy mounts the whole store; the real bucket stays in the path behind the mount
+        endpoint, name = f"{endpoint}/{store['bucket']}", f"prefix-{uuid.uuid4().hex[:6]}"
     monkeypatch.setattr(s3_module.cfg.s3, "endpoint", endpoint)
-    monkeypatch.setattr(s3_module.cfg.s3, "bucket", store["bucket"])
+    monkeypatch.setattr(s3_module.cfg.s3, "bucket", name)
     monkeypatch.setattr(s3_module.cfg.s3, "signature_version", "s3v4")
     monkeypatch.setattr(s3_module.cfg.s3, "force_path_style", True)
     content = os.urandom(2048)
 
-    with Proxy(endpoint, keep_host) as proxy:
+    with Proxy(store["endpoint"], keep_host) as proxy:
         monkeypatch.setattr(s3_module.cfg.s3, "public_endpoint", proxy.url)
         key = f"proxied-{keep_host}.bin"
-        put = http.put(s3_module._generate_upload_presigned_url_sync(store["bucket"], key)["url"], content=content)
-        got = http.get(s3_module._generate_download_presigned_url_sync(store["bucket"], key))
+        put = http.put(s3_module._generate_upload_presigned_url_sync(name, key)["url"], content=content)
+        got = http.get(s3_module._generate_download_presigned_url_sync(name, key))
 
     if keep_host:
         assert (put.status_code, got.status_code, got.content) == (200, 200, content)

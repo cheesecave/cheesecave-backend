@@ -247,6 +247,22 @@ def _signing_endpoint(endpoint: str, public_endpoint: str | None) -> str:
     return urlunparse((public.scheme, public.netloc, internal.path.rstrip("/"), "", "", ""))
 
 
+def _public_base(endpoint: str, public_endpoint: str | None) -> str:
+    """What the signing endpoint is replaced with in a URL: the public endpoint.
+
+    With the real bucket in the endpoint's path the URL has to carry it. A public
+    address that ends with it already has it; one that does not (a proxy mounted
+    on ``/s3``) is the mount, and the bucket follows it.
+    """
+    if not public_endpoint:
+        return endpoint.rstrip("/")
+    bucket_path = urlparse(endpoint).path.rstrip("/")
+    public = public_endpoint.rstrip("/")
+    if bucket_path and not urlparse(public).path.endswith(bucket_path):
+        public += bucket_path
+    return public
+
+
 def _presign_settings() -> dict:
     """What presigning needs from the configuration (picklable, for the process pool)."""
     return {
@@ -266,7 +282,7 @@ def _presigned_url(client, settings: dict, operation: str, params: dict, expires
     """``operation``'s URL for a client of the public endpoint."""
     url = client.generate_presigned_url(operation, Params=params, ExpiresIn=expires_in, **extra)
     signed_for = _signing_endpoint(settings["endpoint"], settings["public_endpoint"])
-    return url.replace(signed_for, (settings["public_endpoint"] or settings["endpoint"]).rstrip("/"))
+    return url.replace(signed_for, _public_base(settings["endpoint"], settings["public_endpoint"]))
 
 
 def init_storage():

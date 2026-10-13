@@ -39,6 +39,13 @@ SETUPS = {
         "acct.r2.cloudflarestorage.com",
         "",
     ),
+    "bucket-in-endpoint-behind-a-mount-path": (
+        "https://acct.r2.cloudflarestorage.com/real",
+        "https://hub.example.com/s3",
+        "s3v4",
+        "hub.example.com",
+        "/s3",
+    ),
     "bucket-in-endpoint-other-host": (
         "https://acct.r2.cloudflarestorage.com/real",
         "https://files.example.com/real",
@@ -112,6 +119,8 @@ def test_every_url_goes_to_the_public_address_and_is_signed_for_it(configure, se
     for name, (url, method) in every_url().items():
         parts = urlsplit(url)
         assert f"{parts.scheme}://{parts.netloc}{prefix}" == public.rstrip("/").removesuffix("/real"), name
+        if "bucket-in-endpoint" in setup:  # the real bucket stays in the path, after the mount path if there is one
+            assert parts.path == f"{prefix}/real/{BUCKET}/{OBJECT_KEY}", name
         if signature_version == "s3v4":
             assert sigv4_matches(url, method, host, prefix), f"{name}: the signature does not cover Host {host}"
             internal = urlsplit(endpoint).netloc
@@ -171,3 +180,22 @@ def test_a_trailing_slash_on_the_public_endpoint_does_not_double_the_slash(confi
     url, _ = every_url()["download"]
 
     assert urlsplit(url).path == f"/{BUCKET}/{OBJECT_KEY}"
+
+
+@pytest.mark.parametrize(
+    ("endpoint", "public", "expected"),
+    [
+        ("http://minio:9000", "http://127.0.0.1:29001", "http://127.0.0.1:29001"),
+        ("http://minio:9000", "https://hub.example.com/s3/", "https://hub.example.com/s3"),
+        ("http://minio:9000", "", "http://minio:9000"),
+        ("http://minio:9000", None, "http://minio:9000"),
+        ("https://acct.r2.cloudflarestorage.com/real", "https://acct.r2.cloudflarestorage.com/real", "https://acct.r2.cloudflarestorage.com/real"),
+        ("https://acct.r2.cloudflarestorage.com/real", "https://files.example.com/real/", "https://files.example.com/real"),
+        # a public address that does not end with the bucket: its path is a mount, the bucket follows it
+        ("https://acct.r2.cloudflarestorage.com/real", "https://hub.example.com/s3", "https://hub.example.com/s3/real"),
+        ("https://acct.r2.cloudflarestorage.com/real", "https://hub.example.com", "https://hub.example.com/real"),
+        ("https://acct.r2.cloudflarestorage.com/real", "https://hub.example.com/mount/real", "https://hub.example.com/mount/real"),
+    ],
+)
+def test_the_public_base_is_what_the_signing_endpoint_is_replaced_with(endpoint, public, expected):
+    assert s3_module._public_base(endpoint, public) == expected
