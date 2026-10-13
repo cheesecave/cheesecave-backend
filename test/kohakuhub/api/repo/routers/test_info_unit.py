@@ -285,3 +285,14 @@ async def test_user_repo_listing_404s_unknown_names_and_sorts_real_rows(lakefs):
         "alice", request=None, limit=10, sort="recent", user=owner
     )
     assert {item["id"] for item in recent["models"]} == {"alice/small", "alice/big"}
+
+
+@pytest.mark.asyncio
+async def test_a_repository_deleted_after_the_order_was_read_is_left_out(lakefs):
+    owner = make_user("alice")
+    kept = make_repo(owner, "kept")
+
+    items = await repo_info._render_local([kept.id + 1000, kept.id], tag_source=False)
+
+    assert [item["id"] for item in items] == ["alice/kept"]
+    assert await repo_info._render_local([], tag_source=False) == []

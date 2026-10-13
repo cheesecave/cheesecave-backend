@@ -214,3 +214,12 @@ async def test_a_source_is_never_sent_a_credential(live_server_url, hf_api_token
     await asyncio.to_thread(lambda: list(api.list_models(author="ext", limit=5)))
 
     assert source.state.calls and all(c["query"] for c in source.state.calls)
+
+
+async def test_a_cursor_into_a_source_that_is_no_longer_configured_is_refused(client, source):
+    first = await client.get("/api/models", params={"author": "ext", "limit": 10})
+    cursor = dict(parse_qsl(urlsplit(first.links["next"]["url"]).query))["cursor"]
+
+    gone = await client.get("/api/models", params={"author": "ext", "limit": 10, "cursor": cursor, "fallback": "false"})
+
+    assert gone.status_code == 400

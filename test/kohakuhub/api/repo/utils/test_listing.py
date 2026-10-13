@@ -353,3 +353,57 @@ def test_search_is_a_case_insensitive_part_of_the_id_and_wildcards_are_plain_cha
     assert _ids(listing.local_order(query("OWNER/gpt"), owner)) != []
     assert _ids(listing.local_order(query("%_"), owner)) == [percent.id]
     assert _ids(listing.local_order(query("zzz"), owner)) == []
+
+
+def _tagged(owner, name, *facets, ready=True):
+    from kohakuhub.db import RepositoryFacet, RepositoryMetadata
+
+    repo = make_repo(owner, name)
+    for key, value in facets:
+        RepositoryFacet.create(repository=repo, key=key, value=value)
+    RepositoryMetadata.create(repository=repo, state="ready" if ready else "pending")
+    return repo
+
+
+def _match(owner, **fields):
+    return _ids(listing.local_order(listing.ListQuery(repo_type="model", **fields), owner))
+
+
+@pytestmark_db
+def test_filters_select_by_the_indexed_facets_all_of_them_must_hold():
+    owner = make_user("owner")
+    bert = _tagged(owner, "bert", ("task", "fill-mask"), ("library", "transformers"), ("license", "mit"), ("language", "en"), ("size", "1k"))
+    _tagged(owner, "gpt", ("task", "text-generation"), ("library", "transformers"), ("license", "apache-2.0"))
+
+    assert _match(owner, pipeline_tag=("fill-mask",)) == [bert.id]
+    assert _match(owner, task_categories=("Fill-Mask",)) == [bert.id]  # values are casefolded
+    assert len(_match(owner, library=("transformers",))) == 2
+    assert _match(owner, library=("transformers",), language=("en",)) == [bert.id]
+    assert _match(owner, size_categories=("1k",)) == [bert.id]
+    assert _match(owner, tags=("license:mit",)) == [bert.id]
+    assert _match(owner, tags=("mit",)) == [bert.id]  # a bare tag is any facet value
+    assert _match(owner, tags=("license:mit", "license:apache-2.0")) == []
+
+
+@pytestmark_db
+def test_a_tag_with_a_prefix_this_hub_does_not_index_matches_nothing():
+    owner = make_user("owner")
+    _tagged(owner, "bert", ("license", "mit"))
+
+    assert _match(owner, tags=("base_model:x",)) == []
+    assert _match(owner, tags=("license:",)) == []
+
+
+@pytestmark_db
+def test_a_repository_whose_index_is_not_ready_matches_no_filter():
+    owner = make_user("owner")
+    _tagged(owner, "later", ("license", "mit"), ready=False)
+
+    assert _match(owner, tags=("license:mit",)) == []
+
+
+def test_a_timestamp_without_a_zone_is_read_as_utc():
+    from datetime import datetime, timezone
+
+    naive = datetime(2026, 1, 1, 12, 0, 0)
+    assert listing._micros(naive) == listing._micros(naive.replace(tzinfo=timezone.utc))
