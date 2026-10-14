@@ -382,6 +382,7 @@ class LakeFSRestClient:
         parents: list[str],
         metadata: dict[str, str],
         generation: int,
+        version: int = 1,
     ) -> None:
         """Store a commit made of an existing metarange (LakeFS internal API).
 
@@ -393,7 +394,7 @@ class LakeFSRestClient:
         url = f"{self.base_url}/repositories/{repository}/commits"
         body = {
             "commit_id": commit_id,
-            "version": 1,
+            "version": version,
             "committer": committer,
             "message": message,
             "metarange_id": metarange_id,
