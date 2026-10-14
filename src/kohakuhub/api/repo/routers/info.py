@@ -11,7 +11,7 @@ from peewee import JOIN, fn
 from kohakuhub.config import cfg
 from kohakuhub.constants import DATETIME_FORMAT_ISO
 from kohakuhub import repository_discovery as discovery
-from kohakuhub.db import Commit, Repository, RepositoryCard, RepositoryMetadata, User
+from kohakuhub.db import Commit, Repository, RepositoryCard, User
 from kohakuhub.db_operations import (
     get_merged_external_tokens,
     get_organization,
@@ -291,7 +291,7 @@ async def get_repo_info(
 
     card = None
     if not expand or CARD_PROPERTIES & set(expand):
-        card = await discovery.info_card(repo_row)
+        card = await discovery.info_card(repo_row, head=commit_id)
     fields = repo_info_fields(
         repo_row,
         repo_type,
@@ -342,17 +342,13 @@ async def _render_local(ids: list[int], tag_source: bool, with_card: bool = Fals
     if not ids:
         return []
     by_id = {r.id: r for r in Repository.select().where(Repository.id.in_(ids))}
+    # The last known card, even while a newer commit is being indexed: a list shows what was true a
+    # moment ago rather than nothing (the info route is the one that waits for the head it answers)
     indexed = {
         row.repository_id: row
         for row in RepositoryCard.select(
             RepositoryCard.repository, RepositoryCard.derived, *([RepositoryCard.card] if with_card else [])
-        )
-        .join(RepositoryMetadata, on=(RepositoryMetadata.repository == RepositoryCard.repository))
-        .where(
-            RepositoryCard.repository.in_(ids)
-            & (RepositoryMetadata.state == "ready")
-            & (RepositoryMetadata.main_sha == RepositoryCard.main_sha)
-        )
+        ).where(RepositoryCard.repository.in_(ids))
     }
     heads = _latest_main_commits(ids)
     client = get_lakefs_client()

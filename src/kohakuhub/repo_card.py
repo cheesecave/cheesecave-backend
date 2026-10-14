@@ -152,6 +152,11 @@ def clean_card(raw) -> dict | None:
     return card or None
 
 
+# Tasks the Hub folded into another: it answers the new name as the field and keeps the author's
+# words in the tags (seen on real cards: text2text-generation x5, conversational x1)
+MERGED_TASKS = {"text2text-generation": "text-generation", "conversational": "text-generation"}
+
+
 def declared(card: dict | None) -> dict:
     """The few card values the info routes answer as fields of their own."""
     card = card or {}
@@ -160,7 +165,8 @@ def declared(card: dict | None) -> dict:
         value = card.get(name)
         return value if isinstance(value, str) and value else None
 
-    return {"pipeline_tag": text("pipeline_tag"), "library_name": text("library_name"), "sdk": text("sdk")}
+    task = text("pipeline_tag")
+    return {"pipeline_tag": MERGED_TASKS.get(task, task), "library_name": text("library_name"), "sdk": text("sdk")}
 
 
 def _strings(value) -> list[str]:

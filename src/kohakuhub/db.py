@@ -338,6 +338,8 @@ class RepositoryCard(BaseModel):
     main_sha = CharField(max_length=64, null=True)
     card = TextField()  # the cleaned front matter as JSON; "{}" for a repository without a card
     derived = TextField()  # tags, pipeline_tag, library_name, sdk as JSON, small enough for every row of a list
+    info = TextField(default="{}")  # what the files add and only the repository's own info shows (config), JSON
+    version = IntegerField(default=0)  # the rules that derived this row; 0 = before they read the files (#63)
 
     class Meta:
         table_name = "repository_card"

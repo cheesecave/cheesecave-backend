@@ -53,14 +53,17 @@ def test_the_table_does_what_the_model_needs(migration, db_dual):
     migration.run()
     repo = _repository()
 
-    RepositoryCard.create(repository=repo, main_sha="a" * 64, card='{"license": "mit"}', derived='{"tags": []}')
+    # raw SQL on the columns 035 makes: the model has since gained two, which 036 adds
+    mark = "?" if isinstance(db_dual, SqliteDatabase) else "%s"
+    insert = f'INSERT INTO "repository_card" ("repository_id", "main_sha", "card", "derived") VALUES ({mark}, {mark}, {mark}, {mark})'
+    db_dual.execute_sql(insert, (repo.id, "a" * 64, '{"license": "mit"}', '{"tags": []}'))
     with pytest.raises(IntegrityError):  # one card per repository
-        RepositoryCard.insert(repository=repo.id, main_sha="b", card="{}", derived="{}").execute()
+        db_dual.execute_sql(insert, (repo.id, "b", "{}", "{}"))
 
-    row = RepositoryCard.get_by_id(repo.id)
-    assert row.card == '{"license": "mit"}' and row.main_sha == "a" * 64
+    row = db_dual.execute_sql('SELECT "card", "main_sha" FROM "repository_card" WHERE "repository_id" = ' + mark, (repo.id,)).fetchone()
+    assert row == ('{"license": "mit"}', "a" * 64)
     Repository.delete().where(Repository.id == repo.id).execute()  # the card goes with its repository
-    assert RepositoryCard.select().count() == 0
+    assert db_dual.execute_sql('SELECT COUNT(*) FROM "repository_card"').fetchone()[0] == 0
 
 
 def test_init_db_builds_no_second_table(migration, db_dual):

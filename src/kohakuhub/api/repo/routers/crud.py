@@ -687,9 +687,10 @@ def _update_repository_database_records(
         Repository.update(owner=to_owner).where(Repository.id == repo_row.id).execute()
         File.update(owner=to_owner).where(File.repository == repo_row).execute()
         Commit.update(owner=to_owner).where(Commit.repository == repo_row).execute()
-    from kohakuhub.repository_discovery import mark_dirty
+    from kohakuhub.repository_discovery import mark_dirty, schedule_repository
 
     mark_dirty(repo_row.id)
+    schedule_repository(repo_row.id)
 
 
 @router.post("/repos/move")

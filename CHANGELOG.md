@@ -107,6 +107,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a row is read the first time its info is asked for). `POST /api/validate-yaml` follows the Hub:
   `{errors, warnings}`, `400` for metadata that cannot be read (`huggingface_hub` now refuses such a README
   before uploading it; `valid` is still answered).
+- **What the files of a model say about it** (#62, #63). `library_name`, `pipeline_tag`, the framework tags
+  (`pytorch`, `safetensors`, ...), the model type, `diffusers:<Class>` and `config` are derived from the files
+  of the head commit when the card does not say, in repository info (`expand=config` too), the lists and the
+  facets. Only what is right is returned (checked against the real Hub's answers for 542 repositories, none
+  wrong; `null` where the files do not settle it). The index follows a commit by itself (background, one run per
+  repository, a read waits for it), the info route compares the live head with the indexed one, and a list shows
+  the last known card while a new commit is indexed. A task the Hub merged (`text2text-generation`,
+  `conversational`) is answered as `text-generation`. Migration 036 adds `info` and `version` to
+  `repository_card`; older rows are derived again on the next read or refresh.
 - **Account routes in the Hub's shapes** (#60, #64, #65). `list_user_followers`, `list_user_following`
   and `list_organization_followers` read a bare array with `Link` paging (they raised `TypeError`
   before); `whoami-v2` carries `avatarUrl` and the Hub's organization fields; user and organization

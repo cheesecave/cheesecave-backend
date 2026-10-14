@@ -8,7 +8,7 @@ from uuid import uuid4
 import httpx
 from peewee import JOIN, fn
 
-from kohakuhub import repo_card
+from kohakuhub import repo_card, repo_derive
 from kohakuhub.db import Commit, Repository, RepositoryCard, RepositoryFacet, RepositoryMetadata, utcnow
 from kohakuhub.logger import get_logger
 from kohakuhub.utils.commit_id import hub_oid
@@ -21,6 +21,10 @@ MAX_README_BYTES = repo_card.MAX_CARD_BYTES
 INFO_INDEX_SECONDS = 4  # how long an info request waits for the card of a repository not indexed yet
 README_CANDIDATES = ("README.md", "readme.md", "Readme.md")
 README_TIMEOUT_SECONDS = 3
+FILES_TIMEOUT_SECONDS = 5  # the listing, then the few small JSON files the rules read
+MAX_LISTED_OBJECTS = 3000  # a bigger repository is indexed by its card alone: the rules need the whole list
+MAX_JSON_BYTES = 1048576  # a JSON file that is cut off here is not read (whisper's tokenizer_config.json is 800 KB)
+JSON_FILES = ("config.json", "model_index.json", "adapter_config.json", "tokenizer_config.json")
 REFRESH_AFTER = timedelta(minutes=5)
 RETRY_AFTER = timedelta(seconds=30)
 LEASE_AFTER = timedelta(seconds=60)
@@ -47,6 +51,9 @@ FIELDS = {
     "sdk": ("sdk",),
 }
 _batches: set[asyncio.Task] = set()
+_running: dict[int, asyncio.Task] = {}  # repositories being indexed in the background by this process
+_again: set[int] = set()  # asked to be indexed again while a run was under way
+_slots: dict = {}  # per event loop: at most four background runs at a time
 
 
 CardLoader = repo_card.CardLoader
@@ -98,14 +105,40 @@ def parse_card(content: bytes) -> tuple[dict, dict[str, list[str]]]:
     return _facets_of(repo_card.load_front_matter(content))
 
 
-def parse_card_record(content: bytes, repo_type: str) -> tuple[dict, dict[str, list[str]], str, str]:
-    """Everything one index of a README keeps: facet metadata and facets, the cleaned card as
-    JSON ("{}" for none) and what it declares as JSON. CPU-bound: run it off the event loop."""
+def _json(data: bytes | None):
+    try:
+        return None if data is None else json.loads(data)
+    except ValueError:
+        return None
+
+
+def parse_card_record(
+    content: bytes, repo_type: str, names: list[str] | None = None, raw_files: dict | None = None
+) -> tuple[dict, dict[str, list[str]], str, str, str]:
+    """Everything one index of a repository keeps: facet metadata and facets, the cleaned card as
+    JSON ("{}" for none), what it declares as JSON and what its files add as JSON (``names``: the
+    file list, ``raw_files``: the small JSON files, as bytes; models only). CPU-bound: run it off
+    the event loop."""
     raw = repo_card.load_front_matter(content)
     metadata, facets = _facets_of(raw)
     card = repo_card.clean_card(raw)
-    derived = {**repo_card.declared(card), "tags": repo_card.compose_tags(card, repo_type)}
-    return metadata, facets, json.dumps(card or {}), json.dumps(derived)
+    tags = repo_card.compose_tags(card, repo_type)
+    declared = repo_card.declared(card)
+    info = {}
+    if names is not None:
+        files = {path: parsed for path, data in raw_files.items() if (parsed := _json(data)) is not None}
+        found = repo_derive.derive(card or {}, names, files)
+        merged = repo_derive.merge_tags(tags, card or {}, found)
+        added = set(merged) - set(tags) - {found["library_name"], found["pipeline_tag"]}
+        for key, value in (("library", found["library_name"]), ("task", found["pipeline_tag"])):
+            if value:
+                facets[key] = sorted({*facets[key], value.casefold()})
+        facets["tag"] = sorted({*facets["tag"], *(t.casefold() for t in added)})
+        tags = merged
+        declared = {**declared, "pipeline_tag": found["pipeline_tag"], "library_name": found["library_name"]}
+        info = {"config": found["config"]} if found["config"] else {}
+    derived = {**declared, "tags": tags}
+    return metadata, facets, json.dumps(card or {}), json.dumps(derived), json.dumps(info)
 
 
 def mark_dirty(repo_id: int) -> None:
@@ -141,12 +174,16 @@ def _due_catalog(scope):
     return (
         Repository.select(Repository.id)
         .join(M, JOIN.LEFT_OUTER, on=(M.repository == Repository.id))
+        .switch(Repository)
+        .join(RepositoryCard, JOIN.LEFT_OUTER, on=(RepositoryCard.repository == Repository.id))
         .where(Repository.id.in_(scope.select(Repository.id)))
         .where(
             M.repository.is_null()
             | (M.state != "ready")
             | M.checked_at.is_null()
             | (M.checked_at <= now - REFRESH_AFTER)
+            | RepositoryCard.repository.is_null()
+            | (RepositoryCard.version < repo_derive.VERSION)
         )
     )
 
@@ -188,6 +225,47 @@ async def read_card_prefix(client, source: str, head: str) -> bytes:
     return await asyncio.wait_for(read_candidates(), README_TIMEOUT_SECONDS)
 
 
+async def list_names(client, source: str, head: str) -> list[str] | None:
+    """The paths of every object at ``head``, or ``None`` when there are more than
+    ``MAX_LISTED_OBJECTS``."""
+    names: list[str] = []
+    after = ""
+    while True:
+        result = await client.list_objects(
+            repository=source, ref=head, prefix="", delimiter="", amount=1000, after=after
+        )
+        page = result if isinstance(result, list) else result.get("results", [])
+        names.extend(obj["path"] for obj in page if obj.get("path_type") == "object")
+        if len(names) > MAX_LISTED_OBJECTS:
+            return None
+        if isinstance(result, list):
+            return names
+        pagination = result.get("pagination", {})
+        after = pagination.get("next_offset")
+        if not pagination.get("has_more") or not after:
+            return names
+
+
+async def read_repo_files(client, source: str, head: str) -> tuple[list[str] | None, dict]:
+    """``(names, raw_files)`` for the rules: the file list and the JSON files they read, as bytes
+    (``None`` for one that was cut off at ``MAX_JSON_BYTES``). Names are ``None`` for a repository
+    too big to list."""
+
+    async def read():
+        names = await list_names(client, source, head)
+        if names is None:
+            return None, {}
+        wanted = [path for path in JSON_FILES if path in names]
+
+        async def one(path):
+            data = await client.get_object_prefix(source, head, path, MAX_JSON_BYTES)
+            return None if len(data) >= MAX_JSON_BYTES else data
+
+        return names, dict(zip(wanted, await asyncio.gather(*(one(path) for path in wanted))))
+
+    return await asyncio.wait_for(read(), FILES_TIMEOUT_SECONDS)
+
+
 async def index_repository(repo_id: int) -> None:
     repo = Repository.get_or_none(Repository.id == repo_id)
     if repo is None:
@@ -211,8 +289,11 @@ async def index_repository(repo_id: int) -> None:
         content = b""
         if head:
             content = await read_card_prefix(client, source, head)
-        metadata, facets, card, derived = await asyncio.to_thread(
-            parse_card_record, content, repo.repo_type
+        names, raw_files = (None, {})
+        if head and repo.repo_type == "model":
+            names, raw_files = await read_repo_files(client, source, head)
+        metadata, facets, card, derived, info = await asyncio.to_thread(
+            parse_card_record, content, repo.repo_type, names, raw_files
         )
         actual = (await asyncio.wait_for(client.get_branch(repository=source, branch="main"), 3))[
             "commit_id"
@@ -240,9 +321,18 @@ async def index_repository(repo_id: int) -> None:
             )
             if not published:
                 return
-            RepositoryCard.insert(repository=repo_id, main_sha=head, card=card, derived=derived).on_conflict(
+            version = repo_derive.VERSION
+            RepositoryCard.insert(
+                repository=repo_id, main_sha=head, card=card, derived=derived, info=info, version=version
+            ).on_conflict(
                 conflict_target=[RepositoryCard.repository],
-                update={RepositoryCard.main_sha: head, RepositoryCard.card: card, RepositoryCard.derived: derived},
+                update={
+                    RepositoryCard.main_sha: head,
+                    RepositoryCard.card: card,
+                    RepositoryCard.derived: derived,
+                    RepositoryCard.info: info,
+                    RepositoryCard.version: version,
+                },
             ).execute()
             F.delete().where(F.repository == repo_id).execute()
             rows = [
@@ -266,28 +356,69 @@ async def index_repository(repo_id: int) -> None:
         logger.debug(f"Metadata indexing failed for repository {repo_id}: {type(exc).__name__}")
 
 
-def _known(repo_id: int) -> dict | None:
+def _known(repo_id: int, head: str | None = None) -> dict | None:
     """The indexed card and declared fields of a repository, if its snapshot is ready and the card
-    was read at that snapshot's head."""
+    was read at that snapshot's head (and, when the caller knows it, at the live ``head``)."""
     record = M.get_or_none(M.repository == repo_id)
     row = RepositoryCard.get_or_none(RepositoryCard.repository == repo_id)
     if record is None or row is None or record.state != "ready" or row.main_sha != record.main_sha:
         return None
-    return {"card": json.loads(row.card) or None, "derived": json.loads(row.derived)}
+    if head is not None and row.main_sha != head:  # a commit whose invalidation was lost
+        return None
+    if row.version < repo_derive.VERSION:  # made by older rules: derive it again
+        return None
+    return {"card": json.loads(row.card) or None, "derived": json.loads(row.derived), "info": json.loads(row.info)}
 
 
-async def info_card(repo) -> dict | None:
-    """The card of ``repo`` for its info response: ``{"card": dict | None, "derived": {...}}``,
-    or ``None`` when it cannot be known now (storage down, another worker indexing it, too
-    slow). A repository not indexed yet is indexed here, so a README just pushed shows at once."""
-    known = _known(repo.id)
+async def info_card(repo, head: str | None = None) -> dict | None:
+    """The card of ``repo`` for its info response: ``{"card": dict | None, "derived": {...},
+    "info": {...}}``, or ``None`` when it cannot be known now (storage down, another worker
+    indexing it, too slow). ``head`` is the live head when the caller has it. A repository not
+    indexed yet is indexed here, so a README just pushed shows at once; one this process is
+    already indexing is waited for, not indexed twice."""
+    known = _known(repo.id, head)
     if known is not None:
         return known
+    run = _running.get(repo.id)
     try:
-        await asyncio.wait_for(index_repository(repo.id), INFO_INDEX_SECONDS)
+        if run is not None:
+            await asyncio.wait_for(asyncio.shield(run), INFO_INDEX_SECONDS)
+        else:
+            await asyncio.wait_for(index_repository(repo.id), INFO_INDEX_SECONDS)
     except asyncio.TimeoutError:
         return None
-    return _known(repo.id)
+    except Exception:  # the run's own failure is its own to log and retry
+        pass
+    return _known(repo.id, head)
+
+
+async def _run_in_background(repo_id: int) -> None:
+    slots = _slots.setdefault(asyncio.get_running_loop(), asyncio.Semaphore(4))
+    try:
+        async with slots:
+            while True:
+                _again.discard(repo_id)
+                await index_repository(repo_id)
+                if repo_id not in _again:
+                    return
+    finally:
+        _running.pop(repo_id, None)
+        _again.discard(repo_id)
+
+
+def schedule_repository(repo_id: int) -> None:
+    """Index one repository in the background: its main just moved, so its snapshot is stale.
+    At most one run per repository in this process; a request during a run makes the run go once
+    more (it may have read the head before the commit). Without a running event loop this does
+    nothing: the next read or the scheduled refresh indexes it."""
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    if repo_id in _running:
+        _again.add(repo_id)
+        return
+    _running[repo_id] = loop.create_task(_run_in_background(repo_id))
 
 
 def schedule_indexing(scope) -> None:
@@ -330,11 +461,13 @@ def schedule_indexing(scope) -> None:
 
 
 async def close_indexing() -> None:
-    jobs = list(_batches)
+    jobs = list(_batches) + list(_running.values())
     for job in jobs:
         job.cancel()
     await asyncio.gather(*jobs, return_exceptions=True)
     _batches.clear()
+    _running.clear()  # a task cancelled before its first step never reaches its own cleanup
+    _again.clear()
 
 
 def apply_filters(scope, filters: dict, skip: str | None = None):

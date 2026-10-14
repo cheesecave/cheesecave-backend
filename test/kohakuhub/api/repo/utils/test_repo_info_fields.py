@@ -89,6 +89,36 @@ def test_expand_answers_only_what_was_asked_with_null_for_what_there_is_not():
     }
 
 
+CONFIG = {"model_type": "bert", "architectures": ["BertForMaskedLM"]}
+
+
+def test_a_model_answers_the_config_its_files_gave():
+    assert fields("model", {**CARD, "info": {"config": CONFIG}})["config"] == CONFIG
+
+
+@pytest.mark.parametrize("info", [None, {}, {"config": {}}])
+def test_a_model_without_a_config_has_no_config_key(info):
+    assert "config" not in fields("model", {**CARD, "info": info})
+    assert "config" not in fields("model", CARD)  # a card that has no info at all
+
+
+@pytest.mark.parametrize("repo_type", ["dataset", "space"])
+def test_only_models_have_a_config(repo_type):
+    assert "config" not in fields(repo_type, {**CARD, "info": {"config": CONFIG}})
+
+
+def test_expand_config_is_answered_or_null():
+    asked = hf.hf_repo_info_response(fields("model", {**CARD, "info": {"config": CONFIG}}), ["config"], siblings=None)
+    unknown = hf.hf_repo_info_response(fields("model", CARD), ["config"], siblings=None)
+
+    assert json.loads(asked.body)["config"] == CONFIG
+    assert json.loads(unknown.body)["config"] is None
+
+
+def test_config_is_a_property_that_needs_the_card():
+    assert "config" in hf.CARD_PROPERTIES
+
+
 @pytest.mark.parametrize("name", ["cardData", "model-index", "pipeline_tag", "library_name"])
 def test_the_card_properties_are_valid_expand_values_for_models(name):
     assert hf.expand_error("model", [name]) is None

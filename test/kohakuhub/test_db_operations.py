@@ -443,3 +443,21 @@ def test_email_staging_invitation_and_stats_helpers_cover_remaining_paths():
     )
     assert get_confirmation_token(confirmation.token) is None
     assert cleanup_expired_confirmation_tokens() >= 1
+
+
+@pytest.mark.parametrize("branch, scheduled", [("main", True), ("dev", False)])
+def test_only_a_commit_on_main_schedules_the_index(monkeypatch, branch, scheduled):
+    """The README card and the files the card is derived from are read at main."""
+    owner = get_user_by_username("owner")
+    repo = create_repository(
+        repo_type="model", namespace="owner", name=f"index-{branch}", full_id=f"owner/index-{branch}", private=False, owner=owner
+    )
+    calls = []
+    monkeypatch.setattr("kohakuhub.repository_discovery.schedule_repository", calls.append)
+
+    create_commit(
+        commit_id=f"c-{branch}", repository=repo, repo_type="model", branch=branch,
+        author=owner, username=owner.username, message="m", description="",
+    )
+
+    assert calls == ([repo.id] if scheduled else [])

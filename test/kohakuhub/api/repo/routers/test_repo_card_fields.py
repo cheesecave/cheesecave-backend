@@ -118,9 +118,9 @@ async def test_an_expand_that_does_not_need_the_card_does_not_read_it(anonymous,
     reads = []
     real = discovery.info_card
 
-    async def counting(repo):
+    async def counting(repo, head=None):
         reads.append(repo.id)
-        return await real(repo)
+        return await real(repo, head)
 
     monkeypatch.setattr(sys.modules["kohakuhub.api.repo.routers.info"].discovery, "info_card", counting)
 
@@ -135,7 +135,7 @@ async def test_an_unreadable_card_does_not_fail_the_info(anonymous, owner_client
 
     await _create(owner_client, "model", "unknown")
 
-    async def nothing(repo):
+    async def nothing(repo, head=None):
         return None
 
     monkeypatch.setattr(sys.modules["kohakuhub.api.repo.routers.info"].discovery, "info_card", nothing)
