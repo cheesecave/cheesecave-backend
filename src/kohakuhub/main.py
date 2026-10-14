@@ -9,6 +9,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from kohakuhub.api import (
     admin,
+    lfs_files,
     avatar,
     branches,
     files,
@@ -215,6 +216,7 @@ app.include_router(commit_availability.router, prefix=cfg.app.api_base, tags=["c
 app.include_router(lfs.router, tags=["lfs"])
 app.include_router(branches.router, prefix=cfg.app.api_base, tags=["branches"])
 app.include_router(settings.router, prefix=cfg.app.api_base, tags=["settings"])
+app.include_router(lfs_files.router, prefix=cfg.app.api_base, tags=["lfs"])
 app.include_router(avatar.router, prefix=cfg.app.api_base, tags=["avatars"])
 app.include_router(likes.router, prefix=cfg.app.api_base, tags=["likes"])
 app.include_router(social.router, prefix=cfg.app.api_base, tags=["social"])

@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`list_lfs_files` and `permanently_delete_lfs_files`** ([#66](https://github.com/cheesecave/cheesecave-backend/issues/66)).
+  Both answered `404`. `GET /api/{type}s/{repo}/lfs-files` lists the LFS objects a repository stores (the Hub's
+  `LFSFileInfo` shape, newest first, `Link` paging); `POST .../lfs-files/batch` deletes objects for good, all or none:
+  an object a branch head links, an active file has, was uploaded in the last 24 hours or another repository's history
+  keeps is refused with `409` and the reason (the decision is the garbage collection's, with the repository's own history
+  left out of it); what goes leaves the bucket, its commits stay and are reported as missing the file, and the quota drops.
+  Rewriting history is not supported (`501`), and `huggingface_hub` sends `rewriteHistory: true` by default, so call
+  `permanently_delete_lfs_files(..., rewrite_history=False)`. See `docs/api/git-lfs.md`.
+
 ### Fixed
 
 - **One form of a commit id in every response: the Hub's 40 hex** ([#12](https://github.com/cheesecave/cheesecave-backend/issues/12)).
