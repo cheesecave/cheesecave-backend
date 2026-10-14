@@ -314,3 +314,13 @@ def test_an_object_only_the_ignored_repository_relies_on_may_go_and_others_keep_
     assert m.gc.retention_reason(sha, ignore_history_of=repo.id) is None
     assert m.gc.retention_reason(sha) == "history"
 
+
+def test_abort_delete_undoes_only_a_delete_that_has_not_finished(m):
+    deleting, deleted, none = _sha("deleting"), _sha("deleted"), _sha("never tombstoned")
+    m.db.LfsObjectTombstone.create(sha256=deleting, state=m.gc.DELETING)
+    m.db.LfsObjectTombstone.create(sha256=deleted, state=m.gc.DELETED)
+    m.gc.abort_delete([deleting, deleted, none])
+    assert m.gc.tombstone_state(deleting) is None  # still stored: not gone
+    assert m.gc.tombstone_state(deleted) == m.gc.DELETED  # finished: stays
+    assert m.gc.tombstone_state(none) is None
+
