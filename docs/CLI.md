@@ -165,7 +165,6 @@ client.update_repo_settings(
     repo_id="my-org/my-model",
     repo_type="model",
     private=True,
-    gated="auto",  # "auto", "manual", or None
 )
 
 # Update LFS settings
@@ -447,7 +446,6 @@ kohub-cli org member remove my-org bob
 # Update repository settings
 kohub-cli settings repo update my-org/my-model --type model --private
 kohub-cli settings repo update my-org/my-model --type model --public
-kohub-cli settings repo update my-org/my-model --type model --gated auto
 
 # Move/rename repository
 kohub-cli settings repo move my-org/old-name my-org/new-name --type model

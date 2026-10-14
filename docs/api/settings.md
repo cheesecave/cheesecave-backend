@@ -489,6 +489,7 @@ Update repository configuration including visibility and LFS settings.
 | Field | Type | Description | Constraints |
 |-------|------|-------------|-------------|
 | `private` | boolean | Repository visibility | Checks quota before changing |
+| `gated` | `false`, `true`, `"auto"` or `"manual"` | Gated access. Gated repositories are not supported: `false` (or omitted) is accepted and changes nothing; `true`, `"auto"` and `"manual"` answer `501` and nothing in the request is applied | Any other string: `400` |
 | `lfs_threshold_bytes` | integer | Size threshold for LFS (bytes) | Min: 1,000,000 (1 MB), null = server default |
 | `lfs_keep_versions` | integer | Number of LFS versions to keep | Min: 2, null = server default |
 | `lfs_suffix_rules` | array[string] | File extensions to always use LFS | Must start with '.', null = no custom rules |
