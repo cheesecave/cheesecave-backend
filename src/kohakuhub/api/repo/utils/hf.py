@@ -420,6 +420,9 @@ EXPAND_PROPERTIES = {
     }),
 }
 
+# The properties that come from the README card: reading one means reading the card
+CARD_PROPERTIES = frozenset({"cardData", "tags", "pipeline_tag", "library_name", "model-index", "sdk", "paperswithcode_id"})
+
 # Properties the Hub returns only when expanded, from another field
 _EXPAND_ONLY = {"downloadsAllTime": "downloads"}
 
@@ -432,18 +435,26 @@ _building: dict[tuple[str, str, bool], asyncio.Task] = {}
 
 
 def repo_info_fields(
-    repo_row, repo_type: str, sha: Optional[str], last_modified: Optional[str], storage: bool
+    repo_row,
+    repo_type: str,
+    sha: Optional[str],
+    last_modified: Optional[str],
+    storage: bool,
+    card: Optional[dict] = None,
 ) -> dict:
-    """The repository info fields KohakuHub has values for (``siblings`` aside).
+    """The repository info fields KohakuHub has values for (``siblings`` aside), per type.
 
-    ``storage`` (KohakuHub's quota usage) is computed only when asked: it
-    reads the namespace's quota.
+    ``card`` is ``{"card": cleaned README front matter or None, "derived": tags, pipeline_tag,
+    library_name, sdk}`` (see ``repository_discovery.info_card``), ``None`` when it cannot be
+    known now. ``sha`` is answered as given. ``storage`` (KohakuHub's quota usage) is computed
+    only when asked: it reads the namespace's quota.
     """
     repo_id = f"{repo_row.namespace}/{repo_row.name}"
+    declared = (card or {}).get("derived") or {}
+    card_data = (card or {}).get("card")
     fields = {
-        "_id": repo_row.id,
+        "_id": str(repo_row.id),
         "id": repo_id,
-        "modelId": repo_id if repo_type == "model" else None,
         "author": repo_row.namespace,
         "sha": sha,
         "lastModified": last_modified,
@@ -451,16 +462,25 @@ def repo_info_fields(
         "private": repo_row.private,
         "disabled": False,
         "gated": False,
-        "downloads": repo_row.downloads,
         "likes": repo_row.likes_count,
-        "tags": [],
-        "pipeline_tag": None,
-        "library_name": None,
+        "tags": declared.get("tags", []),
         "usedStorage": repo_row.used_bytes,
-        "spaces": [],
-        "models": [],
-        "datasets": [],
     }
+    if repo_type != "space":
+        fields["downloads"] = repo_row.downloads
+    if repo_type == "model":
+        fields["modelId"] = repo_id
+        fields["pipeline_tag"] = declared.get("pipeline_tag")
+        fields["library_name"] = declared.get("library_name")
+        fields["spaces"] = []
+    elif repo_type == "space":
+        fields["sdk"] = declared.get("sdk")
+    if card_data:
+        fields["cardData"] = card_data
+        if repo_type == "model":
+            fields["model-index"] = card_data.get("model-index")
+        elif repo_type == "dataset" and isinstance(card_data.get("paperswithcode_id"), str):
+            fields["paperswithcode_id"] = card_data["paperswithcode_id"]
     if storage:
         from kohakuhub.api.quota.util import get_repo_storage_info
 

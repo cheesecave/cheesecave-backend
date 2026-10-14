@@ -1,0 +1,3707 @@
+[
+ {
+  "cardData": {
+   "datasets": [
+    "bookcorpus",
+    "wikipedia"
+   ],
+   "language": "en",
+   "license": "apache-2.0",
+   "tags": [
+    "exbert"
+   ]
+  },
+  "front_matter": "language: en\ntags:\n- exbert\nlicense: apache-2.0\ndatasets:\n- bookcorpus\n- wikipedia",
+  "library_name": "transformers",
+  "pipeline_tag": "fill-mask",
+  "repo": "google-bert/bert-base-uncased",
+  "tags": [
+   "transformers",
+   "pytorch",
+   "tf",
+   "jax",
+   "rust",
+   "coreml",
+   "onnx",
+   "safetensors",
+   "bert",
+   "fill-mask",
+   "exbert",
+   "en",
+   "dataset:bookcorpus",
+   "dataset:wikipedia",
+   "arxiv:1810.04805",
+   "license:apache-2.0",
+   "endpoints_compatible",
+   "deploy:sagemaker",
+   "deploy:azure",
+   "region:us"
+  ],
+  "type": "model"
+ },
+ {
+  "cardData": {
+   "datasets": [
+    "sst2",
+    "glue"
+   ],
+   "language": "en",
+   "license": "apache-2.0",
+   "model-index": [
+    {
+     "name": "distilbert-base-uncased-finetuned-sst-2-english",
+     "results": [
+      {
+       "dataset": {
+        "config": "sst2",
+        "name": "glue",
+        "split": "validation",
+        "type": "glue"
+       },
+       "metrics": [
+        {
+         "name": "Accuracy",
+         "type": "accuracy",
+         "value": 0.9105504587155964,
+         "verified": true,
+         "verifyToken": "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJoYXNoIjoiN2YyOGMxYjY2Y2JhMjkxNjIzN2FmMjNiNmM2ZWViNGY3MTNmNWI2YzhiYjYxZTY0ZGUyN2M1NGIxZjRiMjQwZiIsInZlcnNpb24iOjF9.uui0srxV5ZHRhxbYN6082EZdwpnBgubPJ5R2-Wk8HTWqmxYE3QHidevR9LLAhidqGw6Ih93fK0goAXncld_gBg"
+        },
+        {
+         "name": "Precision",
+         "type": "precision",
+         "value": 0.8978260869565218,
+         "verified": true,
+         "verifyToken": "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJoYXNoIjoiMzgwYTYwYjA2MmM0ZTYwNDk0M2NmNTBkZmM2NGNhYzQ1OGEyN2NkNDQ3Mzc2NTQyMmZiNDJiNzBhNGVhZGUyOSIsInZlcnNpb24iOjF9.eHjLmw3K02OU69R2Au8eyuSqT3aBDHgZCn8jSzE3_urD6EUSSsLxUpiAYR4BGLD_U6-ZKcdxVo_A2rdXqvUJDA"
+        },
+        {
+         "name": "Recall",
+         "type": "recall",
+         "value": 0.9301801801801802,
+         "verified": true,
+         "verifyToken": "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJoYXNoIjoiMGIzM2E3MTI2Mzc2MDYwNmU3ZTVjYmZmZDBkNjY4ZTc5MGY0Y2FkNDU3NjY1MmVkNmE3Y2QzMzAwZDZhOWY1NiIsInZlcnNpb24iOjF9.PUZlqmct13-rJWBXdHm5tdkXgETL9F82GNbbSR4hI8MB-v39KrK59cqzFC2Ac7kJe_DtOeUyosj34O_mFt_1DQ"
+        },
+        {
+         "name": "AUC",
+         "type": "auc",
+         "value": 0.9716626673402374,
+         "verified": true,
+         "verifyToken": "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJoYXNoIjoiMDM0YWIwZmQ4YjUwOGZmMWU2MjI1YjIxZGQ2MzNjMzRmZmYxMzZkNGFjODhlMDcyZDM1Y2RkMWZlOWQ0MWYwNSIsInZlcnNpb24iOjF9.E7GRlAXmmpEkTHlXheVkuL1W4WNjv4JO3qY_WCVsTVKiO7bUu0UVjPIyQ6g-J1OxsfqZmW3Leli1wY8vPBNNCQ"
+        },
+        {
+         "name": "F1",
+         "type": "f1",
+         "value": 0.9137168141592922,
+         "verified": true,
+         "verifyToken": "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJoYXNoIjoiMGU4MjNmOGYwZjZjMDQ1ZTkyZTA4YTc1MWYwOTM0NDM4ZWY1ZGVkNDY5MzNhYTQyZGFlNzIyZmUwMDg3NDU0NyIsInZlcnNpb24iOjF9.mW5ftkq50Se58M-jm6a2Pu93QeKa3MfV7xcBwvG3PSB_KNJxZWTCpfMQp-Cmx_EMlmI2siKOyd8akYjJUrzJCA"
+        },
+        {
+         "name": "loss",
+         "type": "loss",
+         "value": 0.39013850688934326,
+         "verified": true,
+         "verifyToken": "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJoYXNoIjoiMTZiNzAyZDc0MzUzMmE1MGJiN2JlYzFiODE5ZTNlNGE4MmI4YzRiMTc2ODEzMTUwZmEzOTgxNzc4YjJjZTRmNiIsInZlcnNpb24iOjF9.VqIC7uYC-ZZ8ss9zQOlRV39YVOOLc5R36sIzCcVz8lolh61ux_5djm2XjpP6ARc6KqEnXC4ZtfNXsX2HZfrtCQ"
+        }
+       ],
+       "task": {
+        "name": "Text Classification",
+        "type": "text-classification"
+       }
+      },
+      {
+       "dataset": {
+        "config": "default",
+        "name": "sst2",
+        "split": "train",
+        "type": "sst2"
+       },
+       "metrics": [
+        {
+         "name": "Accuracy",
+         "type": "accuracy",
+         "value": 0.9885521685548412,
+         "verified": true,
+         "verifyToken": "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJoYXNoIjoiY2I3NzU3YzhmMDkxZTViY2M3OTY1NmI0ZTdmMDQxNjNjYzJiZmQxNzczM2E4YmExYTY5ODY0NDBkY2I4ZjNkOCIsInZlcnNpb24iOjF9.4Gtk3FeVc9sPWSqZIaeUXJ9oVlPzm-NmujnWpK2y5s1Vhp1l6Y1pK5_78wW0-NxSvQqV6qd5KQf_OAEpVAkQDA"
+        },
+        {
+         "name": "Precision Macro",
+         "type": "precision",
+         "value": 0.9881965062029833,
+         "verified": true,
+         "verifyToken": "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJoYXNoIjoiZDdlZDMzY2I3MTAwYTljNmM4MGMyMzU2YjAzZDg1NDYwN2ZmM2Y5OWZhMjUyMGJiNjY1YmZiMzFhMDI2ODFhNyIsInZlcnNpb24iOjF9.cqmv6yBxu4St2mykRWrZ07tDsiSLdtLTz2hbqQ7Gm1rMzq9tdlkZ8MyJRxtME_Y8UaOG9rs68pV-gKVUs8wABw"
+        },
+        {
+         "name": "Precision Micro",
+         "type": "precision",
+         "value": 0.9885521685548412,
+         "verified": true,
+         "verifyToken": "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJoYXNoIjoiZjFlYzAzNmE1YjljNjUwNzBjZjEzZDY0ZDQyMmY5ZWM2OTBhNzNjYjYzYTk1YWE1NjU3YTMxZDQwOTE1Y2FkNyIsInZlcnNpb24iOjF9.jnCHOkUHuAOZZ_ZMVOnetx__OVJCS6LOno4caWECAmfrUaIPnPNV9iJ6izRO3sqkHRmxYpWBb-27GJ4N3LU-BQ"
+        },
+        {
+         "name": "Precision Weighted",
+         "type": "precision",
+         "value": 0.9885639626373408,
+         "verified": true,
+         "verifyToken": "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJoYXNoIjoiZGUyODFjNjBlNTE2MTY3ZDAxOGU1N2U0YjUyY2NiZjhkOGVmYThjYjBkNGU3NTRkYzkzNDQ2MmMwMjkwMWNiMyIsInZlcnNpb24iOjF9.zTNabMwApiZyXdr76QUn7WgGB7D7lP-iqS3bn35piqVTNsv3wnKjZOaKFVLIUvtBXq4gKw7N2oWxvWc4OcSNDg"
+        },
+        {
+         "name": "Recall Macro",
+         "type": "recall",
+         "value": 0.9886145346602994,
+         "verified": true,
+         "verifyToken": "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJoYXNoIjoiNTU1YjlhODU3YTkyNTdiZDcwZGFlZDBiYjY0N2NjMGM2NTRiNjQ3MDNjNGMxOWY2ZGQ4NWU1YmMzY2UwZTI3YSIsInZlcnNpb24iOjF9.xaLPY7U-wHsJ3DDui1yyyM-xWjL0Jz5puRThy7fczal9x05eKEQ9s0a_WD-iLmapvJs0caXpV70hDe2NLcs-DA"
+        },
+        {
+         "name": "Recall Micro",
+         "type": "recall",
+         "value": 0.9885521685548412,
+         "verified": true,
+         "verifyToken": "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJoYXNoIjoiODE0YTU0MDBlOGY4YzU0MjY5MzA3OTk2OGNhOGVkMmU5OGRjZmFiZWI2ZjY5ODEzZTQzMTI0N2NiOTVkNDliYiIsInZlcnNpb24iOjF9.SOt1baTBbuZRrsvGcak2sUwoTrQzmNCbyV2m1_yjGsU48SBH0NcKXicidNBSnJ6ihM5jf_Lv_B5_eOBkLfNWDQ"
+        },
+        {
+         "name": "Recall Weighted",
+         "type": "recall",
+         "value": 0.9885521685548412,
+         "verified": true,
+         "verifyToken": "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJoYXNoIjoiZWNkNmM0ZGRlNmYxYzIwNDk4OTI5MzIwZWU1NzZjZDVhMDcyNDFlMjBhNDQxODU5OWMwMWNhNGEzNjY3ZGUyOSIsInZlcnNpb24iOjF9.b15Fh70GwtlG3cSqPW-8VEZT2oy0CtgvgEOtWiYonOovjkIQ4RSLFVzVG-YfslaIyfg9RzMWzjhLnMY7Bpn2Aw"
+        },
+        {
+         "name": "F1 Macro",
+         "type": "f1",
+         "value": 0.9884019815052447,
+         "verified": true,
+         "verifyToken": "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJoYXNoIjoiYmM4NjQ5Yjk5ODRhYTU1MTY3MmRhZDBmODM1NTg3OTFiNWM4NDRmYjI0MzZkNmQ1MzE3MzcxODZlYzBkYTMyYSIsInZlcnNpb24iOjF9.74RaDK8nBVuGRl2Se_-hwQvP6c4lvVxGHpcCWB4uZUCf2_HoC9NT9u7P3pMJfH_tK2cpV7U3VWGgSDhQDi-UBQ"
+        },
+        {
+         "name": "F1 Micro",
+         "type": "f1",
+         "value": 0.9885521685548412,
+         "verified": true,
+         "verifyToken": "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJoYXNoIjoiZDRmYWRmMmQ0YjViZmQxMzhhYTUyOTE1MTc0ZDU1ZjQyZjFhMDYzYzMzZDE0NzZlYzQyOTBhMTBhNmM5NTlkMiIsInZlcnNpb24iOjF9.VMn_psdAHIZTlW6GbjERZDe8MHhwzJ0rbjV_VJyuMrsdOh5QDmko-wEvaBWNEdT0cEKsbggm-6jd3Gh81PfHAQ"
+        },
+        {
+         "name": "F1 Weighted",
+         "type": "f1",
+         "value": 0.9885546181087554,
+         "verified": true,
+         "verifyToken": "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJoYXNoIjoiMjUyZWFhZDZhMGQ3MzBmYmRiNDVmN2FkZDBjMjk3ODk0OTAxNGZkMWE0NzU5ZjI0NzE0NGZiNzM0N2Y2NDYyOSIsInZlcnNpb24iOjF9.YsXBhnzEEFEW6jw3mQlFUuIrW7Gabad2Ils-iunYJr-myg0heF8NEnEWABKFE1SnvCWt-69jkLza6SupeyLVCA"
+        },
+        {
+         "name": "loss",
+         "type": "loss",
+         "value": 0.040652573108673096,
+         "verified": true,
+         "verifyToken": "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJoYXNoIjoiZTc3YjU3MjdjMzkxODA5MjU5NGUyY2NkMGVhZDg3ZWEzMmU1YWVjMmI0NmU2OWEyZTkzMTVjNDZiYTc0YjIyNCIsInZlcnNpb24iOjF9.lA90qXZVYiILHMFlr6t6H81Oe8a-4KmeX-vyCC1BDia2ofudegv6Vb46-4RzmbtuKeV6yy6YNNXxXxqVak1pAg"
+        }
+       ],
+       "task": {
+        "name": "Text Classification",
+        "type": "text-classification"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  "front_matter": "language: en\nlicense: apache-2.0\ndatasets:\n- sst2\n- glue\nmodel-index:\n- name: distilbert-base-uncased-finetuned-sst-2-english\n  results:\n  - task:\n      type: text-classification\n      name: Text Classification\n    dataset:\n      name: glue\n      type: glue\n      config: sst2\n      split: validation\n    metrics:\n    - type: accuracy\n      value: 0.9105504587155964\n      name: Accuracy\n      verified: true\n      verifyToken: eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJoYXNoIjoiN2YyOGMxYjY2Y2JhMjkxNjIzN2FmMjNiNmM2ZWViNGY3MTNmNWI2YzhiYjYxZTY0ZGUyN2M1NGIxZjRiMjQwZiIsInZlcnNpb24iOjF9.uui0srxV5ZHRhxbYN6082EZdwpnBgubPJ5R2-Wk8HTWqmxYE3QHidevR9LLAhidqGw6Ih93fK0goAXncld_gBg\n    - type: precision\n      value: 0.8978260869565218\n      name: Precision\n      verified: true\n      verifyToken: eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJoYXNoIjoiMzgwYTYwYjA2MmM0ZTYwNDk0M2NmNTBkZmM2NGNhYzQ1OGEyN2NkNDQ3Mzc2NTQyMmZiNDJiNzBhNGVhZGUyOSIsInZlcnNpb24iOjF9.eHjLmw3K02OU69R2Au8eyuSqT3aBDHgZCn8jSzE3_urD6EUSSsLxUpiAYR4BGLD_U6-ZKcdxVo_A2rdXqvUJDA\n    - type: recall\n      value: 0.9301801801801802\n      name: Recall\n      verified: true\n      verifyToken: eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJoYXNoIjoiMGIzM2E3MTI2Mzc2MDYwNmU3ZTVjYmZmZDBkNjY4ZTc5MGY0Y2FkNDU3NjY1MmVkNmE3Y2QzMzAwZDZhOWY1NiIsInZlcnNpb24iOjF9.PUZlqmct13-rJWBXdHm5tdkXgETL9F82GNbbSR4hI8MB-v39KrK59cqzFC2Ac7kJe_DtOeUyosj34O_mFt_1DQ\n    - type: auc\n      value: 0.9716626673402374\n      name: AUC\n      verified: true\n      verifyToken: eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJoYXNoIjoiMDM0YWIwZmQ4YjUwOGZmMWU2MjI1YjIxZGQ2MzNjMzRmZmYxMzZkNGFjODhlMDcyZDM1Y2RkMWZlOWQ0MWYwNSIsInZlcnNpb24iOjF9.E7GRlAXmmpEkTHlXheVkuL1W4WNjv4JO3qY_WCVsTVKiO7bUu0UVjPIyQ6g-J1OxsfqZmW3Leli1wY8vPBNNCQ\n    - type: f1\n      value: 0.9137168141592922\n      name: F1\n      verified: true\n      verifyToken: eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJoYXNoIjoiMGU4MjNmOGYwZjZjMDQ1ZTkyZTA4YTc1MWYwOTM0NDM4ZWY1ZGVkNDY5MzNhYTQyZGFlNzIyZmUwMDg3NDU0NyIsInZlcnNpb24iOjF9.mW5ftkq50Se58M-jm6a2Pu93QeKa3MfV7xcBwvG3PSB_KNJxZWTCpfMQp-Cmx_EMlmI2siKOyd8akYjJUrzJCA\n    - type: loss\n      value: 0.39013850688934326\n      name: loss\n      verified: true\n      verifyToken: eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJoYXNoIjoiMTZiNzAyZDc0MzUzMmE1MGJiN2JlYzFiODE5ZTNlNGE4MmI4YzRiMTc2ODEzMTUwZmEzOTgxNzc4YjJjZTRmNiIsInZlcnNpb24iOjF9.VqIC7uYC-ZZ8ss9zQOlRV39YVOOLc5R36sIzCcVz8lolh61ux_5djm2XjpP6ARc6KqEnXC4ZtfNXsX2HZfrtCQ\n  - task:\n      type: text-classification\n      name: Text Classification\n    dataset:\n      name: sst2\n      type: sst2\n      config: default\n      split: train\n    metrics:\n    - type: accuracy\n      value: 0.9885521685548412\n      name: Accuracy\n      verified: true\n      verifyToken: eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJoYXNoIjoiY2I3NzU3YzhmMDkxZTViY2M3OTY1NmI0ZTdmMDQxNjNjYzJiZmQxNzczM2E4YmExYTY5ODY0NDBkY2I4ZjNkOCIsInZlcnNpb24iOjF9.4Gtk3FeVc9sPWSqZIaeUXJ9oVlPzm-NmujnWpK2y5s1Vhp1l6Y1pK5_78wW0-NxSvQqV6qd5KQf_OAEpVAkQDA\n    - type: precision\n      value: 0.9881965062029833\n      name: Precision Macro\n      verified: true\n      verifyToken: eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJoYXNoIjoiZDdlZDMzY2I3MTAwYTljNmM4MGMyMzU2YjAzZDg1NDYwN2ZmM2Y5OWZhMjUyMGJiNjY1YmZiMzFhMDI2ODFhNyIsInZlcnNpb24iOjF9.cqmv6yBxu4St2mykRWrZ07tDsiSLdtLTz2hbqQ7Gm1rMzq9tdlkZ8MyJRxtME_Y8UaOG9rs68pV-gKVUs8wABw\n    - type: precision\n      value: 0.9885521685548412\n      name: Precision Micro\n      verified: true\n      verifyToken: eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJoYXNoIjoiZjFlYzAzNmE1YjljNjUwNzBjZjEzZDY0ZDQyMmY5ZWM2OTBhNzNjYjYzYTk1YWE1NjU3YTMxZDQwOTE1Y2FkNyIsInZlcnNpb24iOjF9.jnCHOkUHuAOZZ_ZMVOnetx__OVJCS6LOno4caWECAmfrUaIPnPNV9iJ6izRO3sqkHRmxYpWBb-27GJ4N3LU-BQ\n    - type: precision\n      value: 0.9885639626373408\n      name: Precision Weighted\n      verified: true\n      verifyToken: eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJoYXNoIjoiZGUyODFjNjBlNTE2MTY3ZDAxOGU1N2U0YjUyY2NiZjhkOGVmYThjYjBkNGU3NTRkYzkzNDQ2MmMwMjkwMWNiMyIsInZlcnNpb24iOjF9.zTNabMwApiZyXdr76QUn7WgGB7D7lP-iqS3bn35piqVTNsv3wnKjZOaKFVLIUvtBXq4gKw7N2oWxvWc4OcSNDg\n    - type: recall\n      value: 0.9886145346602994\n      name: Recall Macro\n      verified: true\n      verifyToken: eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJoYXNoIjoiNTU1YjlhODU3YTkyNTdiZDcwZGFlZDBiYjY0N2NjMGM2NTRiNjQ3MDNjNGMxOWY2ZGQ4NWU1YmMzY2UwZTI3YSIsInZlcnNpb24iOjF9.xaLPY7U-wHsJ3DDui1yyyM-xWjL0Jz5puRThy7fczal9x05eKEQ9s0a_WD-iLmapvJs0caXpV70hDe2NLcs-DA\n    - type: recall\n      value: 0.9885521685548412\n      name: Recall Micro\n      verified: true\n      verifyToken: eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJoYXNoIjoiODE0YTU0MDBlOGY4YzU0MjY5MzA3OTk2OGNhOGVkMmU5OGRjZmFiZWI2ZjY5ODEzZTQzMTI0N2NiOTVkNDliYiIsInZlcnNpb24iOjF9.SOt1baTBbuZRrsvGcak2sUwoTrQzmNCbyV2m1_yjGsU48SBH0NcKXicidNBSnJ6ihM5jf_Lv_B5_eOBkLfNWDQ\n    - type: recall\n      value: 0.9885521685548412\n      name: Recall Weighted\n      verified: true\n      verifyToken: eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJoYXNoIjoiZWNkNmM0ZGRlNmYxYzIwNDk4OTI5MzIwZWU1NzZjZDVhMDcyNDFlMjBhNDQxODU5OWMwMWNhNGEzNjY3ZGUyOSIsInZlcnNpb24iOjF9.b15Fh70GwtlG3cSqPW-8VEZT2oy0CtgvgEOtWiYonOovjkIQ4RSLFVzVG-YfslaIyfg9RzMWzjhLnMY7Bpn2Aw\n    - type: f1\n      value: 0.9884019815052447\n      name: F1 Macro\n      verified: true\n      verifyToken: eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJoYXNoIjoiYmM4NjQ5Yjk5ODRhYTU1MTY3MmRhZDBmODM1NTg3OTFiNWM4NDRmYjI0MzZkNmQ1MzE3MzcxODZlYzBkYTMyYSIsInZlcnNpb24iOjF9.74RaDK8nBVuGRl2Se_-hwQvP6c4lvVxGHpcCWB4uZUCf2_HoC9NT9u7P3pMJfH_tK2cpV7U3VWGgSDhQDi-UBQ\n    - type: f1\n      value: 0.9885521685548412\n      name: F1 Micro\n      verified: true\n      verifyToken: eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJoYXNoIjoiZDRmYWRmMmQ0YjViZmQxMzhhYTUyOTE1MTc0ZDU1ZjQyZjFhMDYzYzMzZDE0NzZlYzQyOTBhMTBhNmM5NTlkMiIsInZlcnNpb24iOjF9.VMn_psdAHIZTlW6GbjERZDe8MHhwzJ0rbjV_VJyuMrsdOh5QDmko-wEvaBWNEdT0cEKsbggm-6jd3Gh81PfHAQ\n    - type: f1\n      value: 0.9885546181087554\n      name: F1 Weighted\n      verified: true\n      verifyToken: eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJoYXNoIjoiMjUyZWFhZDZhMGQ3MzBmYmRiNDVmN2FkZDBjMjk3ODk0OTAxNGZkMWE0NzU5ZjI0NzE0NGZiNzM0N2Y2NDYyOSIsInZlcnNpb24iOjF9.YsXBhnzEEFEW6jw3mQlFUuIrW7Gabad2Ils-iunYJr-myg0heF8NEnEWABKFE1SnvCWt-69jkLza6SupeyLVCA\n    - type: loss\n      value: 0.040652573108673096\n      name: loss\n      verified: true\n      verifyToken: eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJoYXNoIjoiZTc3YjU3MjdjMzkxODA5MjU5NGUyY2NkMGVhZDg3ZWEzMmU1YWVjMmI0NmU2OWEyZTkzMTVjNDZiYTc0YjIyNCIsInZlcnNpb24iOjF9.lA90qXZVYiILHMFlr6t6H81Oe8a-4KmeX-vyCC1BDia2ofudegv6Vb46-4RzmbtuKeV6yy6YNNXxXxqVak1pAg",
+  "library_name": "transformers",
+  "pipeline_tag": "text-classification",
+  "repo": "distilbert/distilbert-base-uncased-finetuned-sst-2-english",
+  "tags": [
+   "transformers",
+   "pytorch",
+   "tf",
+   "rust",
+   "onnx",
+   "safetensors",
+   "distilbert",
+   "text-classification",
+   "en",
+   "dataset:sst2",
+   "dataset:glue",
+   "arxiv:1910.01108",
+   "doi:10.57967/hf/0181",
+   "license:apache-2.0",
+   "model-index",
+   "endpoints_compatible",
+   "deploy:azure",
+   "region:us"
+  ],
+  "type": "model"
+ },
+ {
+  "cardData": {
+   "language": [
+    "en",
+    "zh",
+    "de",
+    "es",
+    "ru",
+    "ko",
+    "fr",
+    "ja",
+    "pt",
+    "tr",
+    "pl",
+    "ca",
+    "nl",
+    "ar",
+    "sv",
+    "it",
+    "id",
+    "hi",
+    "fi",
+    "vi",
+    "he",
+    "uk",
+    "el",
+    "ms",
+    "cs",
+    "ro",
+    "da",
+    "hu",
+    "ta",
+    "no",
+    "th",
+    "ur",
+    "hr",
+    "bg",
+    "lt",
+    "la",
+    "mi",
+    "ml",
+    "cy",
+    "sk",
+    "te",
+    "fa",
+    "lv",
+    "bn",
+    "sr",
+    "az",
+    "sl",
+    "kn",
+    "et",
+    "mk",
+    "br",
+    "eu",
+    "is",
+    "hy",
+    "ne",
+    "mn",
+    "bs",
+    "kk",
+    "sq",
+    "sw",
+    "gl",
+    "mr",
+    "pa",
+    "si",
+    "km",
+    "sn",
+    "yo",
+    "so",
+    "af",
+    "oc",
+    "ka",
+    "be",
+    "tg",
+    "sd",
+    "gu",
+    "am",
+    "yi",
+    "lo",
+    "uz",
+    "fo",
+    "ht",
+    "ps",
+    "tk",
+    "nn",
+    "mt",
+    "sa",
+    "lb",
+    "my",
+    "bo",
+    "tl",
+    "mg",
+    "as",
+    "tt",
+    "haw",
+    "ln",
+    "ha",
+    "ba",
+    "jw",
+    "su"
+   ],
+   "license": "apache-2.0",
+   "model-index": [
+    {
+     "name": "whisper-tiny",
+     "results": [
+      {
+       "dataset": {
+        "args": {
+         "language": "en"
+        },
+        "config": "clean",
+        "name": "LibriSpeech (clean)",
+        "split": "test",
+        "type": "librispeech_asr"
+       },
+       "metrics": [
+        {
+         "name": "Test WER",
+         "type": "wer",
+         "value": 7.54,
+         "verified": false
+        }
+       ],
+       "task": {
+        "name": "Automatic Speech Recognition",
+        "type": "automatic-speech-recognition"
+       }
+      },
+      {
+       "dataset": {
+        "args": {
+         "language": "en"
+        },
+        "config": "other",
+        "name": "LibriSpeech (other)",
+        "split": "test",
+        "type": "librispeech_asr"
+       },
+       "metrics": [
+        {
+         "name": "Test WER",
+         "type": "wer",
+         "value": 17.15,
+         "verified": false
+        }
+       ],
+       "task": {
+        "name": "Automatic Speech Recognition",
+        "type": "automatic-speech-recognition"
+       }
+      },
+      {
+       "dataset": {
+        "args": {
+         "language": "hi"
+        },
+        "config": "hi",
+        "name": "Common Voice 11.0",
+        "split": "test",
+        "type": "mozilla-foundation/common_voice_11_0"
+       },
+       "metrics": [
+        {
+         "name": "Test WER",
+         "type": "wer",
+         "value": 141,
+         "verified": false
+        }
+       ],
+       "task": {
+        "name": "Automatic Speech Recognition",
+        "type": "automatic-speech-recognition"
+       }
+      }
+     ]
+    }
+   ],
+   "pipeline_tag": "automatic-speech-recognition",
+   "tags": [
+    "audio",
+    "automatic-speech-recognition",
+    "hf-asr-leaderboard"
+   ],
+   "widget": [
+    {
+     "example_title": "Librispeech sample 1",
+     "src": "https://cdn-media.huggingface.co/speech_samples/sample1.flac"
+    },
+    {
+     "example_title": "Librispeech sample 2",
+     "src": "https://cdn-media.huggingface.co/speech_samples/sample2.flac"
+    }
+   ]
+  },
+  "front_matter": "language: \n- en\n- zh\n- de\n- es\n- ru\n- ko\n- fr\n- ja\n- pt\n- tr\n- pl\n- ca\n- nl\n- ar\n- sv\n- it\n- id\n- hi\n- fi\n- vi\n- he\n- uk\n- el\n- ms\n- cs\n- ro\n- da\n- hu\n- ta\n- no\n- th\n- ur\n- hr\n- bg\n- lt\n- la\n- mi\n- ml\n- cy\n- sk\n- te\n- fa\n- lv\n- bn\n- sr\n- az\n- sl\n- kn\n- et\n- mk\n- br\n- eu\n- is\n- hy\n- ne\n- mn\n- bs\n- kk\n- sq\n- sw\n- gl\n- mr\n- pa\n- si\n- km\n- sn\n- yo\n- so\n- af\n- oc\n- ka\n- be\n- tg\n- sd\n- gu\n- am\n- yi\n- lo\n- uz\n- fo\n- ht\n- ps\n- tk\n- nn\n- mt\n- sa\n- lb\n- my\n- bo\n- tl\n- mg\n- as\n- tt\n- haw\n- ln\n- ha\n- ba\n- jw\n- su\ntags:\n- audio\n- automatic-speech-recognition\n- hf-asr-leaderboard\nwidget:\n- example_title: Librispeech sample 1\n  src: https://cdn-media.huggingface.co/speech_samples/sample1.flac\n- example_title: Librispeech sample 2\n  src: https://cdn-media.huggingface.co/speech_samples/sample2.flac\nmodel-index:\n- name: whisper-tiny\n  results:\n  - task:\n      name: Automatic Speech Recognition\n      type: automatic-speech-recognition\n    dataset:\n      name: LibriSpeech (clean)\n      type: librispeech_asr\n      config: clean\n      split: test\n      args: \n        language: en\n    metrics:\n    - name: Test WER\n      type: wer\n      value: 7.54\n  - task:\n      name: Automatic Speech Recognition\n      type: automatic-speech-recognition\n    dataset:\n      name: LibriSpeech (other)\n      type: librispeech_asr\n      config: other\n      split: test\n      args: \n        language: en\n    metrics:\n    - name: Test WER\n      type: wer\n      value:  17.15\n  - task:\n      name: Automatic Speech Recognition\n      type: automatic-speech-recognition\n    dataset:\n      name: Common Voice 11.0\n      type: mozilla-foundation/common_voice_11_0\n      config: hi\n      split: test\n      args:\n        language: hi\n    metrics:\n    - name: Test WER\n      type: wer\n      value: 141\npipeline_tag: automatic-speech-recognition\nlicense: apache-2.0",
+  "library_name": "transformers",
+  "pipeline_tag": "automatic-speech-recognition",
+  "repo": "openai/whisper-tiny",
+  "tags": [
+   "transformers",
+   "pytorch",
+   "tf",
+   "jax",
+   "safetensors",
+   "whisper",
+   "automatic-speech-recognition",
+   "audio",
+   "hf-asr-leaderboard",
+   "en",
+   "zh",
+   "de",
+   "es",
+   "ru",
+   "ko",
+   "fr",
+   "ja",
+   "pt",
+   "tr",
+   "pl",
+   "ca",
+   "nl",
+   "ar",
+   "sv",
+   "it",
+   "id",
+   "hi",
+   "fi",
+   "vi",
+   "he",
+   "uk",
+   "el",
+   "ms",
+   "cs",
+   "ro",
+   "da",
+   "hu",
+   "ta",
+   "no",
+   "th",
+   "ur",
+   "hr",
+   "bg",
+   "lt",
+   "la",
+   "mi",
+   "ml",
+   "cy",
+   "sk",
+   "te",
+   "fa",
+   "lv",
+   "bn",
+   "sr",
+   "az",
+   "sl",
+   "kn",
+   "et",
+   "mk",
+   "br",
+   "eu",
+   "is",
+   "hy",
+   "ne",
+   "mn",
+   "bs",
+   "kk",
+   "sq",
+   "sw",
+   "gl",
+   "mr",
+   "pa",
+   "si",
+   "km",
+   "sn",
+   "yo",
+   "so",
+   "af",
+   "oc",
+   "ka",
+   "be",
+   "tg",
+   "sd",
+   "gu",
+   "am",
+   "yi",
+   "lo",
+   "uz",
+   "fo",
+   "ht",
+   "ps",
+   "tk",
+   "nn",
+   "mt",
+   "sa",
+   "lb",
+   "my",
+   "bo",
+   "tl",
+   "mg",
+   "as",
+   "tt",
+   "haw",
+   "ln",
+   "ha",
+   "ba",
+   "jw",
+   "su",
+   "arxiv:2212.04356",
+   "license:apache-2.0",
+   "model-index",
+   "endpoints_compatible",
+   "deploy:sagemaker",
+   "deploy:azure",
+   "region:us"
+  ],
+  "type": "model"
+ },
+ {
+  "cardData": {
+   "extra_gated_button_content": "Submit",
+   "extra_gated_description": "The information you provide will be collected, stored, processed and shared in accordance with the [Meta Privacy Policy](https://www.facebook.com/privacy/policy/).",
+   "extra_gated_fields": {
+    "Affiliation": "text",
+    "By clicking Submit below I accept the terms of the license and acknowledge that the information I provide will be collected stored processed and shared in accordance with the Meta Privacy Policy": "checkbox",
+    "Country": "country",
+    "Date of birth": "date_picker",
+    "First Name": "text",
+    "Job title": {
+     "options": [
+      "Student",
+      "Research Graduate",
+      "AI researcher",
+      "AI developer/engineer",
+      "Reporter",
+      "Other"
+     ],
+     "type": "select"
+    },
+    "Last Name": "text",
+    "geo": "ip_location"
+   },
+   "extra_gated_prompt": "### LLAMA 3.2 COMMUNITY LICENSE AGREEMENT\n\nLlama 3.2 Version Release Date: September 25, 2024\n\n“Agreement” means the terms and conditions for use, reproduction, distribution  and modification of the Llama Materials set forth herein.\n\n“Documentation” means the specifications, manuals and documentation accompanying Llama 3.2 distributed by Meta at https://llama.meta.com/doc/overview.\n\n“Licensee” or “you” means you, or your employer or any other person or entity (if you are  entering into this Agreement on such person or entity’s behalf), of the age required under applicable laws, rules or regulations to provide legal consent and that has legal authority to bind your employer or such other person or entity if you are entering in this Agreement on their behalf.\n\n“Llama 3.2” means the foundational large language models and software and algorithms, including machine-learning model code, trained model weights, inference-enabling code, training-enabling code, fine-tuning enabling code and other elements of the foregoing distributed by Meta at  https://www.llama.com/llama-downloads.\n\n“Llama Materials” means, collectively, Meta’s proprietary Llama 3.2 and Documentation (and  any portion thereof) made available under this Agreement.\n\n“Meta” or “we” means Meta Platforms Ireland Limited (if you are located in or,  if you are an entity, your principal place of business is in the EEA or Switzerland)  and Meta Platforms, Inc. (if you are located outside of the EEA or Switzerland). \n\nBy clicking “I Accept” below or by using or distributing any portion or element of the Llama Materials, you agree to be bound by this Agreement.\n\n1. License Rights and Redistribution.\na. Grant of Rights. You are granted a non-exclusive, worldwide,  non-transferable and royalty-free limited license under Meta’s intellectual property or other rights  owned by Meta embodied in the Llama Materials to use, reproduce, distribute, copy, create derivative works  of, and make modifications to the Llama Materials.  \nb. Redistribution and Use.  \ni. If you distribute or make available the Llama Materials (or any derivative works thereof),  or a product or service (including another AI model) that contains any of them, you shall (A) provide a copy of this Agreement with any such Llama Materials; and (B) prominently display “Built with Llama” on a related website, user interface, blogpost, about page, or product documentation. If you use the Llama Materials or any outputs or results of the Llama Materials to create, train, fine tune, or otherwise improve an AI model, which is distributed or made available, you shall also include “Llama” at the beginning of any such AI model name.\nii. If you receive Llama Materials, or any derivative works thereof, from a Licensee as part of an integrated end user product, then Section 2 of this Agreement will not apply to you. \niii. You must retain in all copies of the Llama Materials that you distribute the  following attribution notice within a “Notice” text file distributed as a part of such copies:  “Llama 3.2 is licensed under the Llama 3.2 Community License, Copyright © Meta Platforms, Inc. All Rights Reserved.”\niv. Your use of the Llama Materials must comply with applicable laws and regulations (including trade compliance laws and regulations) and adhere to the Acceptable Use Policy for the Llama Materials (available at https://www.llama.com/llama3_2/use-policy), which is hereby  incorporated by reference into this Agreement.\n  \n2. Additional Commercial Terms. If, on the Llama 3.2 version release date, the monthly active users of the products or services made available by or for Licensee, or Licensee’s affiliates,  is greater than 700 million monthly active users in the preceding calendar month, you must request  a license from Meta, which Meta may grant to you in its sole discretion, and you are not authorized to exercise any of the rights under this Agreement unless or until Meta otherwise expressly grants you such rights.\n3. Disclaimer of Warranty. UNLESS REQUIRED BY APPLICABLE LAW, THE LLAMA MATERIALS AND ANY OUTPUT AND  RESULTS THEREFROM ARE PROVIDED ON AN “AS IS” BASIS, WITHOUT WARRANTIES OF ANY KIND, AND META DISCLAIMS ALL WARRANTIES OF ANY KIND, BOTH EXPRESS AND IMPLIED, INCLUDING, WITHOUT LIMITATION, ANY WARRANTIES OF TITLE, NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE. YOU ARE SOLELY RESPONSIBLE FOR DETERMINING THE APPROPRIATENESS OF USING OR REDISTRIBUTING THE LLAMA MATERIALS AND ASSUME ANY RISKS ASSOCIATED WITH YOUR USE OF THE LLAMA MATERIALS AND ANY OUTPUT AND RESULTS.\n4. Limitation of Liability. IN NO EVENT WILL META OR ITS AFFILIATES BE LIABLE UNDER ANY THEORY OF LIABILITY,  WHETHER IN CONTRACT, TORT, NEGLIGENCE, PRODUCTS LIABILITY, OR OTHERWISE, ARISING OUT OF THIS AGREEMENT,  FOR ANY LOST PROFITS OR ANY INDIRECT, SPECIAL, CONSEQUENTIAL, INCIDENTAL, EXEMPLARY OR PUNITIVE DAMAGES, EVEN  IF META OR ITS AFFILIATES HAVE BEEN ADVISED OF THE POSSIBILITY OF ANY OF THE FOREGOING.\n5. Intellectual Property.\na. No trademark licenses are granted under this Agreement, and in connection with the Llama Materials,  neither Meta nor Licensee may use any name or mark owned by or associated with the other or any of its affiliates,  except as required for reasonable and customary use in describing and redistributing the Llama Materials or as  set forth in this Section 5(a). Meta hereby grants you a license to use “Llama” (the “Mark”) solely as required  to comply with the last sentence of Section 1.b.i. You will comply with Meta’s brand guidelines (currently accessible  at https://about.meta.com/brand/resources/meta/company-brand/). All goodwill arising out of your use of the Mark  will inure to the benefit of Meta.\nb. Subject to Meta’s ownership of Llama Materials and derivatives made by or for Meta, with respect to any derivative works and modifications of the Llama Materials that are made by you, as between you and Meta, you are and will be the owner of such derivative works and modifications.\nc. If you institute litigation or other proceedings against Meta or any entity (including a cross-claim or counterclaim in a lawsuit) alleging that the Llama Materials or Llama 3.2 outputs or results, or any portion of any of the foregoing, constitutes infringement of intellectual property or other rights owned or licensable by you, then any licenses granted to you under this Agreement shall terminate as of the date such litigation or claim is filed or instituted. You will indemnify and hold harmless Meta from and against any claim by any third party arising out of or related to your use or distribution of the Llama Materials.\n6. Term and Termination. The term of this Agreement will commence upon your acceptance of this Agreement or access to the Llama Materials and will continue in full force and effect until terminated in accordance with the terms and conditions herein. Meta may terminate this Agreement if you are in breach of any term or condition of this Agreement. Upon termination of this Agreement, you shall delete and cease use of the Llama Materials. Sections 3, 4 and 7 shall survive the termination of this Agreement. \n7. Governing Law and Jurisdiction. This Agreement will be governed and construed under the laws of the State of  California without regard to choice of law principles, and the UN Convention on Contracts for the International Sale of Goods does not apply to this Agreement. The courts of California shall have exclusive jurisdiction of any dispute arising out of this Agreement. \n### Llama 3.2 Acceptable Use Policy\nMeta is committed to promoting safe and fair use of its tools and features, including Llama 3.2.  If you access or use Llama 3.2, you agree to this Acceptable Use Policy (“**Policy**”).  The most recent copy of this policy can be found at [https://www.llama.com/llama3_2/use-policy](https://www.llama.com/llama3_2/use-policy).\n#### Prohibited Uses\nWe want everyone to use Llama 3.2 safely and responsibly. You agree you will not use, or allow others to use, Llama 3.2 to:\n1. Violate the law or others’ rights, including to:\n    1. Engage in, promote, generate, contribute to, encourage, plan, incite, or further illegal or unlawful activity or content, such as:\n        1. Violence or terrorism\n        2. Exploitation or harm to children, including the solicitation, creation, acquisition, or dissemination of child exploitative content or failure to report Child Sexual Abuse Material\n        3. Human trafficking, exploitation, and sexual violence\n        4. The illegal distribution of information or materials to minors, including obscene materials, or failure to employ legally required age-gating in connection with such information or materials.\n        5. Sexual solicitation\n        6. Any other criminal activity\n    1. Engage in, promote, incite, or facilitate the harassment, abuse, threatening, or bullying of individuals or groups of individuals\n    2. Engage in, promote, incite, or facilitate discrimination or other unlawful or harmful conduct in the provision of employment, employment benefits, credit, housing, other economic benefits, or other essential goods and services\n    3. Engage in the unauthorized or unlicensed practice of any profession including, but not limited to, financial, legal, medical/health, or related professional practices\n    4. Collect, process, disclose, generate, or infer private or sensitive information about individuals, including information about individuals’ identity, health, or demographic information, unless you have obtained the right to do so in accordance with applicable law\n    5. Engage in or facilitate any action or generate any content that infringes, misappropriates, or otherwise violates any third-party rights, including the outputs or results of any products or services using the Llama Materials\n    6. Create, generate, or facilitate the creation of malicious code, malware, computer viruses or do anything else that could disable, overburden, interfere with or impair the proper working, integrity, operation or appearance of a website or computer system\n    7. Engage in any action, or facilitate any action, to intentionally circumvent or remove usage restrictions or other safety measures, or to enable functionality disabled by Meta \n2. Engage in, promote, incite, facilitate, or assist in the planning or development of activities that present a risk of death or bodily harm to individuals, including use of Llama 3.2 related to the following:\n    8. Military, warfare, nuclear industries or applications, espionage, use for materials or activities that are subject to the International Traffic Arms Regulations (ITAR) maintained by the United States Department of State or to the U.S. Biological Weapons Anti-Terrorism Act of 1989 or the Chemical Weapons Convention Implementation Act of 1997\n    9. Guns and illegal weapons (including weapon development)\n    10. Illegal drugs and regulated/controlled substances\n    11. Operation of critical infrastructure, transportation technologies, or heavy machinery\n    12. Self-harm or harm to others, including suicide, cutting, and eating disorders\n    13. Any content intended to incite or promote violence, abuse, or any infliction of bodily harm to an individual\n3. Intentionally deceive or mislead others, including use of Llama 3.2 related to the following:\n    14. Generating, promoting, or furthering fraud or the creation or promotion of disinformation\n    15. Generating, promoting, or furthering defamatory content, including the creation of defamatory statements, images, or other content\n    16. Generating, promoting, or further distributing spam\n    17. Impersonating another individual without consent, authorization, or legal right\n    18. Representing that the use of Llama 3.2 or outputs are human-generated\n    19. Generating or facilitating false online engagement, including fake reviews and other means of fake online engagement \n4. Fail to appropriately disclose to end users any known dangers of your AI system 5. Interact with third party tools, models, or software designed to generate unlawful content or engage in unlawful or harmful conduct and/or represent that the outputs of such tools, models, or software are associated with Meta or Llama 3.2\n\nWith respect to any multimodal models included in Llama 3.2, the rights granted under Section 1(a) of the Llama 3.2 Community License Agreement are not being granted to you if you are an individual domiciled in, or a company with a principal place of business in, the European Union. This restriction does not apply to end users of a product or service that incorporates any such multimodal models.\n\nPlease report any violation of this Policy, software “bug,” or other problems that could lead to a violation of this Policy through one of the following means:\n\n* Reporting issues with the model: [https://github.com/meta-llama/llama-models/issues](https://l.workplace.com/l.php?u=https%3A%2F%2Fgithub.com%2Fmeta-llama%2Fllama-models%2Fissues&h=AT0qV8W9BFT6NwihiOHRuKYQM_UnkzN_NmHMy91OT55gkLpgi4kQupHUl0ssR4dQsIQ8n3tfd0vtkobvsEvt1l4Ic6GXI2EeuHV8N08OG2WnbAmm0FL4ObkazC6G_256vN0lN9DsykCvCqGZ)\n* Reporting risky content generated by the model: [developers.facebook.com/llama_output_feedback](http://developers.facebook.com/llama_output_feedback)\n* Reporting bugs and security concerns: [facebook.com/whitehat/info](http://facebook.com/whitehat/info)\n* Reporting violations of the Acceptable Use Policy or unlicensed uses of Llama 3.2: LlamaUseReport@meta.com",
+   "language": [
+    "en",
+    "de",
+    "fr",
+    "it",
+    "pt",
+    "hi",
+    "es",
+    "th"
+   ],
+   "library_name": "transformers",
+   "license": "llama3.2",
+   "pipeline_tag": "text-generation",
+   "tags": [
+    "facebook",
+    "meta",
+    "pytorch",
+    "llama",
+    "llama-3"
+   ]
+  },
+  "front_matter": "language:\n- en\n- de\n- fr\n- it\n- pt\n- hi\n- es\n- th\nlibrary_name: transformers\npipeline_tag: text-generation\ntags:\n- facebook\n- meta\n- pytorch\n- llama\n- llama-3\nlicense: llama3.2\nextra_gated_prompt: >-\n  ### LLAMA 3.2 COMMUNITY LICENSE AGREEMENT\n\n\n  Llama 3.2 Version Release Date: September 25, 2024\n\n  \n  “Agreement” means the terms and conditions for use, reproduction, distribution \n  and modification of the Llama Materials set forth herein.\n\n  \n  “Documentation” means the specifications, manuals and documentation accompanying Llama 3.2\n  distributed by Meta at https://llama.meta.com/doc/overview.\n\n  \n  “Licensee” or “you” means you, or your employer or any other person or entity (if you are \n  entering into this Agreement on such person or entity’s behalf), of the age required under\n  applicable laws, rules or regulations to provide legal consent and that has legal authority\n  to bind your employer or such other person or entity if you are entering in this Agreement\n  on their behalf.\n\n  \n  “Llama 3.2” means the foundational large language models and software and algorithms, including\n  machine-learning model code, trained model weights, inference-enabling code, training-enabling code,\n  fine-tuning enabling code and other elements of the foregoing distributed by Meta at \n  https://www.llama.com/llama-downloads.\n\n  \n  “Llama Materials” means, collectively, Meta’s proprietary Llama 3.2 and Documentation (and \n  any portion thereof) made available under this Agreement.\n\n  \n  “Meta” or “we” means Meta Platforms Ireland Limited (if you are located in or, \n  if you are an entity, your principal place of business is in the EEA or Switzerland) \n  and Meta Platforms, Inc. (if you are located outside of the EEA or Switzerland). \n\n\n  By clicking “I Accept” below or by using or distributing any portion or element of the Llama Materials,\n  you agree to be bound by this Agreement.\n\n  \n  1. License Rights and Redistribution.\n  \n  a. Grant of Rights. You are granted a non-exclusive, worldwide, \n  non-transferable and royalty-free limited license under Meta’s intellectual property or other rights \n  owned by Meta embodied in the Llama Materials to use, reproduce, distribute, copy, create derivative works \n  of, and make modifications to the Llama Materials.  \n\n  b. Redistribution and Use.  \n\n  i. If you distribute or make available the Llama Materials (or any derivative works thereof), \n  or a product or service (including another AI model) that contains any of them, you shall (A) provide\n  a copy of this Agreement with any such Llama Materials; and (B) prominently display “Built with Llama”\n  on a related website, user interface, blogpost, about page, or product documentation. If you use the\n  Llama Materials or any outputs or results of the Llama Materials to create, train, fine tune, or\n  otherwise improve an AI model, which is distributed or made available, you shall also include “Llama”\n  at the beginning of any such AI model name.\n\n  ii. If you receive Llama Materials, or any derivative works thereof, from a Licensee as part\n  of an integrated end user product, then Section 2 of this Agreement will not apply to you. \n\n  iii. You must retain in all copies of the Llama Materials that you distribute the \n  following attribution notice within a “Notice” text file distributed as a part of such copies: \n  “Llama 3.2 is licensed under the Llama 3.2 Community License, Copyright © Meta Platforms,\n  Inc. All Rights Reserved.”\n\n  iv. Your use of the Llama Materials must comply with applicable laws and regulations\n  (including trade compliance laws and regulations) and adhere to the Acceptable Use Policy for\n  the Llama Materials (available at https://www.llama.com/llama3_2/use-policy), which is hereby \n  incorporated by reference into this Agreement.\n    \n  2. Additional Commercial Terms. If, on the Llama 3.2 version release date, the monthly active users\n  of the products or services made available by or for Licensee, or Licensee’s affiliates, \n  is greater than 700 million monthly active users in the preceding calendar month, you must request \n  a license from Meta, which Meta may grant to you in its sole discretion, and you are not authorized to\n  exercise any of the rights under this Agreement unless or until Meta otherwise expressly grants you such rights.\n  \n  3. Disclaimer of Warranty. UNLESS REQUIRED BY APPLICABLE LAW, THE LLAMA MATERIALS AND ANY OUTPUT AND \n  RESULTS THEREFROM ARE PROVIDED ON AN “AS IS” BASIS, WITHOUT WARRANTIES OF ANY KIND, AND META DISCLAIMS\n  ALL WARRANTIES OF ANY KIND, BOTH EXPRESS AND IMPLIED, INCLUDING, WITHOUT LIMITATION, ANY WARRANTIES\n  OF TITLE, NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE. YOU ARE SOLELY RESPONSIBLE\n  FOR DETERMINING THE APPROPRIATENESS OF USING OR REDISTRIBUTING THE LLAMA MATERIALS AND ASSUME ANY RISKS ASSOCIATED\n  WITH YOUR USE OF THE LLAMA MATERIALS AND ANY OUTPUT AND RESULTS.\n  \n  4. Limitation of Liability. IN NO EVENT WILL META OR ITS AFFILIATES BE LIABLE UNDER ANY THEORY OF LIABILITY, \n  WHETHER IN CONTRACT, TORT, NEGLIGENCE, PRODUCTS LIABILITY, OR OTHERWISE, ARISING OUT OF THIS AGREEMENT, \n  FOR ANY LOST PROFITS OR ANY INDIRECT, SPECIAL, CONSEQUENTIAL, INCIDENTAL, EXEMPLARY OR PUNITIVE DAMAGES, EVEN \n  IF META OR ITS AFFILIATES HAVE BEEN ADVISED OF THE POSSIBILITY OF ANY OF THE FOREGOING.\n  \n  5. Intellectual Property.\n  \n  a. No trademark licenses are granted under this Agreement, and in connection with the Llama Materials, \n  neither Meta nor Licensee may use any name or mark owned by or associated with the other or any of its affiliates, \n  except as required for reasonable and customary use in describing and redistributing the Llama Materials or as \n  set forth in this Section 5(a). Meta hereby grants you a license to use “Llama” (the “Mark”) solely as required \n  to comply with the last sentence of Section 1.b.i. You will comply with Meta’s brand guidelines (currently accessible \n  at https://about.meta.com/brand/resources/meta/company-brand/). All goodwill arising out of your use of the Mark \n  will inure to the benefit of Meta.\n  \n  b. Subject to Meta’s ownership of Llama Materials and derivatives made by or for Meta, with respect to any\n  derivative works and modifications of the Llama Materials that are made by you, as between you and Meta,\n  you are and will be the owner of such derivative works and modifications.\n\n  c. If you institute litigation or other proceedings against Meta or any entity (including a cross-claim or\n  counterclaim in a lawsuit) alleging that the Llama Materials or Llama 3.2 outputs or results, or any portion\n  of any of the foregoing, constitutes infringement of intellectual property or other rights owned or licensable\n  by you, then any licenses granted to you under this Agreement shall terminate as of the date such litigation or\n  claim is filed or instituted. You will indemnify and hold harmless Meta from and against any claim by any third\n  party arising out of or related to your use or distribution of the Llama Materials.\n  \n  6. Term and Termination. The term of this Agreement will commence upon your acceptance of this Agreement or access\n  to the Llama Materials and will continue in full force and effect until terminated in accordance with the terms\n  and conditions herein. Meta may terminate this Agreement if you are in breach of any term or condition of this\n  Agreement. Upon termination of this Agreement, you shall delete and cease use of the Llama Materials. Sections 3,\n  4 and 7 shall survive the termination of this Agreement. \n  \n  7. Governing Law and Jurisdiction. This Agreement will be governed and construed under the laws of the State of \n  California without regard to choice of law principles, and the UN Convention on Contracts for the International\n  Sale of Goods does not apply to this Agreement. The courts of California shall have exclusive jurisdiction of\n  any dispute arising out of this Agreement. \n  \n  ### Llama 3.2 Acceptable Use Policy\n  \n  Meta is committed to promoting safe and fair use of its tools and features, including Llama 3.2. \n  If you access or use Llama 3.2, you agree to this Acceptable Use Policy (“**Policy**”). \n  The most recent copy of this policy can be found at\n  [https://www.llama.com/llama3_2/use-policy](https://www.llama.com/llama3_2/use-policy).\n  \n  #### Prohibited Uses\n  \n  We want everyone to use Llama 3.2 safely and responsibly. You agree you will not use, or allow others to use, Llama 3.2 to:\n  \n  1. Violate the law or others’ rights, including to:\n      1. Engage in, promote, generate, contribute to, encourage, plan, incite, or further illegal or unlawful activity or content, such as:\n          1. Violence or terrorism\n          2. Exploitation or harm to children, including the solicitation, creation, acquisition, or dissemination of child exploitative content or failure to report Child Sexual Abuse Material\n          3. Human trafficking, exploitation, and sexual violence\n          4. The illegal distribution of information or materials to minors, including obscene materials, or failure to employ legally required age-gating in connection with such information or materials.\n          5. Sexual solicitation\n          6. Any other criminal activity\n      1. Engage in, promote, incite, or facilitate the harassment, abuse, threatening, or bullying of individuals or groups of individuals\n      2. Engage in, promote, incite, or facilitate discrimination or other unlawful or harmful conduct in the provision of employment, employment benefits, credit, housing, other economic benefits, or other essential goods and services\n      3. Engage in the unauthorized or unlicensed practice of any profession including, but not limited to, financial, legal, medical/health, or related professional practices\n      4. Collect, process, disclose, generate, or infer private or sensitive information about individuals, including information about individuals’ identity, health, or demographic information, unless you have obtained the right to do so in accordance with applicable law\n      5. Engage in or facilitate any action or generate any content that infringes, misappropriates, or otherwise violates any third-party rights, including the outputs or results of any products or services using the Llama Materials\n      6. Create, generate, or facilitate the creation of malicious code, malware, computer viruses or do anything else that could disable, overburden, interfere with or impair the proper working, integrity, operation or appearance of a website or computer system\n      7. Engage in any action, or facilitate any action, to intentionally circumvent or remove usage restrictions or other safety measures, or to enable functionality disabled by Meta \n  2. Engage in, promote, incite, facilitate, or assist in the planning or development of activities that present a risk of death or bodily harm to individuals, including use of Llama 3.2 related to the following:\n      8. Military, warfare, nuclear industries or applications, espionage, use for materials or activities that are subject to the International Traffic Arms Regulations (ITAR) maintained by the United States Department of State or to the U.S. Biological Weapons Anti-Terrorism Act of 1989 or the Chemical Weapons Convention Implementation Act of 1997\n      9. Guns and illegal weapons (including weapon development)\n      10. Illegal drugs and regulated/controlled substances\n      11. Operation of critical infrastructure, transportation technologies, or heavy machinery\n      12. Self-harm or harm to others, including suicide, cutting, and eating disorders\n      13. Any content intended to incite or promote violence, abuse, or any infliction of bodily harm to an individual\n  3. Intentionally deceive or mislead others, including use of Llama 3.2 related to the following:\n      14. Generating, promoting, or furthering fraud or the creation or promotion of disinformation\n      15. Generating, promoting, or furthering defamatory content, including the creation of defamatory statements, images, or other content\n      16. Generating, promoting, or further distributing spam\n      17. Impersonating another individual without consent, authorization, or legal right\n      18. Representing that the use of Llama 3.2 or outputs are human-generated\n      19. Generating or facilitating false online engagement, including fake reviews and other means of fake online engagement \n  4. Fail to appropriately disclose to end users any known dangers of your AI system\n  5. Interact with third party tools, models, or software designed to generate unlawful content or engage in unlawful or harmful conduct and/or represent that the outputs of such tools, models, or software are associated with Meta or Llama 3.2\n\n\n  With respect to any multimodal models included in Llama 3.2, the rights granted under Section 1(a) of the Llama 3.2 Community License Agreement are not being granted to you if you are an individual domiciled in, or a company with a principal place of business in, the European Union. This restriction does not apply to end users of a product or service that incorporates any such multimodal models.\n\n\n  Please report any violation of this Policy, software “bug,” or other problems that could lead to a violation of this Policy through one of the following means:\n\n\n  * Reporting issues with the model: [https://github.com/meta-llama/llama-models/issues](https://l.workplace.com/l.php?u=https%3A%2F%2Fgithub.com%2Fmeta-llama%2Fllama-models%2Fissues&h=AT0qV8W9BFT6NwihiOHRuKYQM_UnkzN_NmHMy91OT55gkLpgi4kQupHUl0ssR4dQsIQ8n3tfd0vtkobvsEvt1l4Ic6GXI2EeuHV8N08OG2WnbAmm0FL4ObkazC6G_256vN0lN9DsykCvCqGZ)\n  \n  * Reporting risky content generated by the model: [developers.facebook.com/llama_output_feedback](http://developers.facebook.com/llama_output_feedback)\n  \n  * Reporting bugs and security concerns: [facebook.com/whitehat/info](http://facebook.com/whitehat/info)\n  \n  * Reporting violations of the Acceptable Use Policy or unlicensed uses of Llama 3.2: LlamaUseReport@meta.com\nextra_gated_fields:\n  First Name: text\n  Last Name: text\n  Date of birth: date_picker\n  Country: country\n  Affiliation: text\n  Job title:\n    type: select\n    options:\n    - Student\n    - Research Graduate\n    - AI researcher\n    - AI developer/engineer\n    - Reporter\n    - Other\n  geo: ip_location\n  By clicking Submit below I accept the terms of the license and acknowledge that the information I provide will be collected stored processed and shared in accordance with the Meta Privacy Policy: checkbox\nextra_gated_description: >-\n  The information you provide will be collected, stored, processed and shared in\n  accordance with the [Meta Privacy\n  Policy](https://www.facebook.com/privacy/policy/).\nextra_gated_button_content: Submit",
+  "library_name": "transformers",
+  "pipeline_tag": "text-generation",
+  "repo": "meta-llama/Llama-3.2-1B",
+  "tags": [
+   "transformers",
+   "safetensors",
+   "llama",
+   "text-generation",
+   "facebook",
+   "meta",
+   "pytorch",
+   "llama-3",
+   "en",
+   "de",
+   "fr",
+   "it",
+   "pt",
+   "hi",
+   "es",
+   "th",
+   "arxiv:2204.05149",
+   "arxiv:2405.16406",
+   "license:llama3.2",
+   "eval-results",
+   "text-generation-inference",
+   "endpoints_compatible",
+   "deploy:sagemaker",
+   "region:us"
+  ],
+  "type": "model"
+ },
+ {
+  "cardData": {
+   "extra_gated_button_content": "Acknowledge license",
+   "extra_gated_heading": "Access Gemma on Hugging Face",
+   "extra_gated_prompt": "To access Gemma on Hugging Face, you’re required to review and agree to Google’s usage license. To do this, please ensure you’re logged in to Hugging Face and click below. Requests are processed immediately.",
+   "library_name": "transformers",
+   "license": "gemma",
+   "pipeline_tag": "text-generation"
+  },
+  "front_matter": "license: gemma\nlibrary_name: transformers\npipeline_tag: text-generation\nextra_gated_heading: Access Gemma on Hugging Face\nextra_gated_prompt: >-\n  To access Gemma on Hugging Face, you’re required to review and agree to\n  Google’s usage license. To do this, please ensure you’re logged in to Hugging\n  Face and click below. Requests are processed immediately.\nextra_gated_button_content: Acknowledge license",
+  "library_name": "transformers",
+  "pipeline_tag": "text-generation",
+  "repo": "google/gemma-2-2b",
+  "tags": [
+   "transformers",
+   "safetensors",
+   "gemma2",
+   "text-generation",
+   "arxiv:2009.03300",
+   "arxiv:1905.07830",
+   "arxiv:1911.11641",
+   "arxiv:1904.09728",
+   "arxiv:1905.10044",
+   "arxiv:1907.10641",
+   "arxiv:1811.00937",
+   "arxiv:1809.02789",
+   "arxiv:1911.01547",
+   "arxiv:1705.03551",
+   "arxiv:2107.03374",
+   "arxiv:2108.07732",
+   "arxiv:2110.14168",
+   "arxiv:2009.11462",
+   "arxiv:2101.11718",
+   "arxiv:2110.08193",
+   "arxiv:1804.09301",
+   "arxiv:2109.07958",
+   "arxiv:1804.06876",
+   "arxiv:2103.03874",
+   "arxiv:2304.06364",
+   "arxiv:1903.00161",
+   "arxiv:2206.04615",
+   "arxiv:2203.09509",
+   "arxiv:2403.13793",
+   "license:gemma",
+   "text-generation-inference",
+   "endpoints_compatible",
+   "deploy:sagemaker",
+   "region:us"
+  ],
+  "type": "model"
+ },
+ {
+  "cardData": {
+   "base_model": "Qwen/Qwen2.5-0.5B",
+   "language": [
+    "en"
+   ],
+   "library_name": "transformers",
+   "license": "apache-2.0",
+   "license_link": "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct/blob/main/LICENSE",
+   "pipeline_tag": "text-generation",
+   "tags": [
+    "chat"
+   ]
+  },
+  "front_matter": "license: apache-2.0\nlicense_link: https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct/blob/main/LICENSE\nlanguage:\n- en\npipeline_tag: text-generation\nbase_model: Qwen/Qwen2.5-0.5B\ntags:\n- chat\nlibrary_name: transformers",
+  "library_name": "transformers",
+  "pipeline_tag": "text-generation",
+  "repo": "Qwen/Qwen2.5-0.5B-Instruct",
+  "tags": [
+   "transformers",
+   "safetensors",
+   "qwen2",
+   "text-generation",
+   "chat",
+   "conversational",
+   "en",
+   "arxiv:2407.10671",
+   "base_model:Qwen/Qwen2.5-0.5B",
+   "base_model:finetune:Qwen/Qwen2.5-0.5B",
+   "license:apache-2.0",
+   "text-generation-inference",
+   "endpoints_compatible",
+   "deploy:azure",
+   "region:us"
+  ],
+  "type": "model"
+ },
+ {
+  "cardData": {
+   "base_model": [
+    "nreimers/MiniLM-L6-H384-uncased"
+   ],
+   "datasets": [
+    "s2orc",
+    "flax-sentence-embeddings/stackexchange_xml",
+    "ms_marco",
+    "gooaq",
+    "yahoo_answers_topics",
+    "code_search_net",
+    "search_qa",
+    "eli5",
+    "snli",
+    "multi_nli",
+    "wikihow",
+    "natural_questions",
+    "trivia_qa",
+    "embedding-data/sentence-compression",
+    "embedding-data/flickr30k-captions",
+    "embedding-data/altlex",
+    "embedding-data/simple-wiki",
+    "embedding-data/QQP",
+    "embedding-data/SPECTER",
+    "embedding-data/PAQ_pairs",
+    "embedding-data/WikiAnswers"
+   ],
+   "language": "en",
+   "library_name": "sentence-transformers",
+   "license": "apache-2.0",
+   "pipeline_tag": "sentence-similarity",
+   "tags": [
+    "sentence-transformers",
+    "feature-extraction",
+    "sentence-similarity",
+    "transformers"
+   ]
+  },
+  "front_matter": "base_model:\n  - nreimers/MiniLM-L6-H384-uncased\nlanguage: en\nlicense: apache-2.0\nlibrary_name: sentence-transformers\ntags:\n- sentence-transformers\n- feature-extraction\n- sentence-similarity\n- transformers\ndatasets:\n- s2orc\n- flax-sentence-embeddings/stackexchange_xml\n- ms_marco\n- gooaq\n- yahoo_answers_topics\n- code_search_net\n- search_qa\n- eli5\n- snli\n- multi_nli\n- wikihow\n- natural_questions\n- trivia_qa\n- embedding-data/sentence-compression\n- embedding-data/flickr30k-captions\n- embedding-data/altlex\n- embedding-data/simple-wiki\n- embedding-data/QQP\n- embedding-data/SPECTER\n- embedding-data/PAQ_pairs\n- embedding-data/WikiAnswers\npipeline_tag: sentence-similarity",
+  "library_name": "sentence-transformers",
+  "pipeline_tag": "sentence-similarity",
+  "repo": "sentence-transformers/all-MiniLM-L6-v2",
+  "tags": [
+   "sentence-transformers",
+   "pytorch",
+   "tf",
+   "rust",
+   "onnx",
+   "safetensors",
+   "openvino",
+   "bert",
+   "feature-extraction",
+   "sentence-similarity",
+   "transformers",
+   "en",
+   "dataset:s2orc",
+   "dataset:flax-sentence-embeddings/stackexchange_xml",
+   "dataset:ms_marco",
+   "dataset:gooaq",
+   "dataset:yahoo_answers_topics",
+   "dataset:code_search_net",
+   "dataset:search_qa",
+   "dataset:eli5",
+   "dataset:snli",
+   "dataset:multi_nli",
+   "dataset:wikihow",
+   "dataset:natural_questions",
+   "dataset:trivia_qa",
+   "dataset:embedding-data/sentence-compression",
+   "dataset:embedding-data/flickr30k-captions",
+   "dataset:embedding-data/altlex",
+   "dataset:embedding-data/simple-wiki",
+   "dataset:embedding-data/QQP",
+   "dataset:embedding-data/SPECTER",
+   "dataset:embedding-data/PAQ_pairs",
+   "dataset:embedding-data/WikiAnswers",
+   "arxiv:1904.06472",
+   "arxiv:2102.07033",
+   "arxiv:2104.08727",
+   "arxiv:1704.05179",
+   "arxiv:1810.09305",
+   "base_model:nreimers/MiniLM-L6-H384-uncased",
+   "base_model:quantized:nreimers/MiniLM-L6-H384-uncased",
+   "license:apache-2.0",
+   "eval-results",
+   "text-embeddings-inference",
+   "endpoints_compatible",
+   "deploy:sagemaker",
+   "deploy:azure",
+   "region:us"
+  ],
+  "type": "model"
+ },
+ {
+  "cardData": {
+   "library_name": "timm",
+   "license": "apache-2.0",
+   "tags": [
+    "image-classification",
+    "timm",
+    "transformers"
+   ]
+  },
+  "front_matter": "tags:\n- image-classification\n- timm\n- transformers\nlicense: apache-2.0\nlibrary_name: timm",
+  "library_name": "timm",
+  "pipeline_tag": "image-classification",
+  "repo": "timm/resnet18.a1_in1k",
+  "tags": [
+   "timm",
+   "pytorch",
+   "safetensors",
+   "image-classification",
+   "transformers",
+   "arxiv:2110.00476",
+   "arxiv:1512.03385",
+   "license:apache-2.0",
+   "region:us"
+  ],
+  "type": "model"
+ },
+ {
+  "cardData": {
+   "base_model": "Qwen/Qwen2.5-0.5B-Instruct",
+   "language": [
+    "en"
+   ],
+   "license": "apache-2.0",
+   "license_link": "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/blob/main/LICENSE",
+   "pipeline_tag": "text-generation",
+   "tags": [
+    "chat"
+   ]
+  },
+  "front_matter": "license: apache-2.0\nlicense_link: https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/blob/main/LICENSE\nlanguage:\n- en\npipeline_tag: text-generation\nbase_model: Qwen/Qwen2.5-0.5B-Instruct\ntags:\n- chat",
+  "library_name": null,
+  "pipeline_tag": "text-generation",
+  "repo": "Qwen/Qwen2.5-0.5B-Instruct-GGUF",
+  "tags": [
+   "gguf",
+   "chat",
+   "text-generation",
+   "en",
+   "arxiv:2407.10671",
+   "base_model:Qwen/Qwen2.5-0.5B-Instruct",
+   "base_model:quantized:Qwen/Qwen2.5-0.5B-Instruct",
+   "license:apache-2.0",
+   "endpoints_compatible",
+   "region:us",
+   "conversational"
+  ],
+  "type": "model"
+ },
+ {
+  "cardData": {
+   "library_name": "bertopic",
+   "pipeline_tag": "text-classification",
+   "tags": [
+    "bertopic"
+   ]
+  },
+  "front_matter": "tags:\n- bertopic\nlibrary_name: bertopic\npipeline_tag: text-classification",
+  "library_name": "bertopic",
+  "pipeline_tag": "text-classification",
+  "repo": "Ah7med/BERTopic_ArXiv",
+  "tags": [
+   "bertopic",
+   "text-classification",
+   "region:us"
+  ],
+  "type": "model"
+ },
+ {
+  "cardData": {
+   "datasets": [
+    "conll2003"
+   ],
+   "language": "en",
+   "license": "mit",
+   "model-index": [
+    {
+     "name": "dslim/bert-base-NER",
+     "results": [
+      {
+       "dataset": {
+        "config": "conll2003",
+        "name": "conll2003",
+        "split": "test",
+        "type": "conll2003"
+       },
+       "metrics": [
+        {
+         "name": "Accuracy",
+         "type": "accuracy",
+         "value": 0.9118041001560013,
+         "verified": false
+        },
+        {
+         "name": "Precision",
+         "type": "precision",
+         "value": 0.9211550382257732,
+         "verified": false
+        },
+        {
+         "name": "Recall",
+         "type": "recall",
+         "value": 0.9306415698281261,
+         "verified": false
+        },
+        {
+         "name": "F1",
+         "type": "f1",
+         "value": 0.9258740048459675,
+         "verified": false
+        },
+        {
+         "name": "loss",
+         "type": "loss",
+         "value": 0.48325642943382263,
+         "verified": false
+        }
+       ],
+       "task": {
+        "name": "Token Classification",
+        "type": "token-classification"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  "front_matter": "language: en\ndatasets:\n- conll2003\nlicense: mit\nmodel-index:\n- name: dslim/bert-base-NER\n  results:\n  - task:\n      type: token-classification\n      name: Token Classification\n    dataset:\n      name: conll2003\n      type: conll2003\n      config: conll2003\n      split: test\n    metrics:\n    - name: Accuracy\n      type: accuracy\n      value: 0.9118041001560013\n      verified: true\n    - name: Precision\n      type: precision\n      value: 0.9211550382257732\n      verified: true\n    - name: Recall\n      type: recall\n      value: 0.9306415698281261\n      verified: true\n    - name: F1\n      type: f1\n      value: 0.9258740048459675\n      verified: true\n    - name: loss\n      type: loss\n      value: 0.48325642943382263\n      verified: true",
+  "library_name": "transformers",
+  "pipeline_tag": "token-classification",
+  "repo": "dslim/bert-base-NER",
+  "tags": [
+   "transformers",
+   "pytorch",
+   "tf",
+   "jax",
+   "onnx",
+   "safetensors",
+   "bert",
+   "token-classification",
+   "en",
+   "dataset:conll2003",
+   "arxiv:1810.04805",
+   "license:mit",
+   "model-index",
+   "endpoints_compatible",
+   "deploy:azure",
+   "region:us"
+  ],
+  "type": "model"
+ },
+ {
+  "cardData": {
+   "library_name": "diffusers",
+   "tags": [
+    "text-to-image"
+   ]
+  },
+  "front_matter": "library_name: diffusers\ntags:\n- text-to-image",
+  "library_name": "diffusers",
+  "pipeline_tag": "text-to-image",
+  "repo": "hf-internal-testing/tiny-stable-diffusion-pipe",
+  "tags": [
+   "diffusers",
+   "text-to-image",
+   "endpoints_compatible",
+   "diffusers:StableDiffusionPipeline",
+   "region:us"
+  ],
+  "type": "model"
+ },
+ {
+  "cardData": {
+   "annotations_creators": [
+    "crowdsourced"
+   ],
+   "configs": [
+    {
+     "config_name": "plain_text",
+     "data_files": [
+      {
+       "path": "plain_text/train-*",
+       "split": "train"
+      },
+      {
+       "path": "plain_text/validation-*",
+       "split": "validation"
+      }
+     ],
+     "default": true
+    }
+   ],
+   "dataset_info": {
+    "config_name": "plain_text",
+    "dataset_size": 89819092,
+    "download_size": 16278203,
+    "features": [
+     {
+      "dtype": "string",
+      "name": "id"
+     },
+     {
+      "dtype": "string",
+      "name": "title"
+     },
+     {
+      "dtype": "string",
+      "name": "context"
+     },
+     {
+      "dtype": "string",
+      "name": "question"
+     },
+     {
+      "name": "answers",
+      "sequence": [
+       {
+        "dtype": "string",
+        "name": "text"
+       },
+       {
+        "dtype": "int32",
+        "name": "answer_start"
+       }
+      ]
+     }
+    ],
+    "splits": [
+     {
+      "name": "train",
+      "num_bytes": 79346108,
+      "num_examples": 87599
+     },
+     {
+      "name": "validation",
+      "num_bytes": 10472984,
+      "num_examples": 10570
+     }
+    ]
+   },
+   "language": [
+    "en"
+   ],
+   "language_creators": [
+    "crowdsourced",
+    "found"
+   ],
+   "license": "cc-by-sa-4.0",
+   "multilinguality": [
+    "monolingual"
+   ],
+   "paperswithcode_id": "squad",
+   "pretty_name": "SQuAD",
+   "size_categories": [
+    "10K<n<100K"
+   ],
+   "source_datasets": [
+    "extended|wikipedia"
+   ],
+   "task_categories": [
+    "question-answering"
+   ],
+   "task_ids": [
+    "extractive-qa"
+   ],
+   "train-eval-index": [
+    {
+     "col_mapping": {
+      "answers": {
+       "answer_start": "answer_start",
+       "text": "text"
+      },
+      "context": "context",
+      "question": "question"
+     },
+     "config": "plain_text",
+     "metrics": [
+      {
+       "name": "SQuAD",
+       "type": "squad"
+      }
+     ],
+     "splits": {
+      "eval_split": "validation",
+      "train_split": "train"
+     },
+     "task": "question-answering",
+     "task_id": "extractive_question_answering"
+    }
+   ]
+  },
+  "front_matter": "annotations_creators:\n- crowdsourced\nlanguage_creators:\n- crowdsourced\n- found\nlanguage:\n- en\nlicense: cc-by-sa-4.0\nmultilinguality:\n- monolingual\nsize_categories:\n- 10K<n<100K\nsource_datasets:\n- extended|wikipedia\ntask_categories:\n- question-answering\ntask_ids:\n- extractive-qa\npaperswithcode_id: squad\npretty_name: SQuAD\ndataset_info:\n  config_name: plain_text\n  features:\n  - name: id\n    dtype: string\n  - name: title\n    dtype: string\n  - name: context\n    dtype: string\n  - name: question\n    dtype: string\n  - name: answers\n    sequence:\n    - name: text\n      dtype: string\n    - name: answer_start\n      dtype: int32\n  splits:\n  - name: train\n    num_bytes: 79346108\n    num_examples: 87599\n  - name: validation\n    num_bytes: 10472984\n    num_examples: 10570\n  download_size: 16278203\n  dataset_size: 89819092\nconfigs:\n- config_name: plain_text\n  data_files:\n  - split: train\n    path: plain_text/train-*\n  - split: validation\n    path: plain_text/validation-*\n  default: true\ntrain-eval-index:\n- config: plain_text\n  task: question-answering\n  task_id: extractive_question_answering\n  splits:\n    train_split: train\n    eval_split: validation\n  col_mapping:\n    question: question\n    context: context\n    answers:\n      text: text\n      answer_start: answer_start\n  metrics:\n  - type: squad\n    name: SQuAD",
+  "library_name": null,
+  "pipeline_tag": null,
+  "repo": "rajpurkar/squad",
+  "tags": [
+   "task_categories:question-answering",
+   "task_ids:extractive-qa",
+   "annotations_creators:crowdsourced",
+   "language_creators:crowdsourced",
+   "language_creators:found",
+   "multilinguality:monolingual",
+   "source_datasets:extended|wikipedia",
+   "language:en",
+   "license:cc-by-sa-4.0",
+   "size_categories:10K<n<100K",
+   "format:parquet",
+   "modality:text",
+   "library:datasets",
+   "library:pandas",
+   "library:polars",
+   "library:mlcroissant",
+   "arxiv:1606.05250",
+   "region:us"
+  ],
+  "type": "dataset"
+ },
+ {
+  "cardData": {
+   "annotations_creators": [
+    "expert-generated"
+   ],
+   "configs": [
+    {
+     "config_name": "plain_text",
+     "data_files": [
+      {
+       "path": "plain_text/train-*",
+       "split": "train"
+      },
+      {
+       "path": "plain_text/test-*",
+       "split": "test"
+      },
+      {
+       "path": "plain_text/unsupervised-*",
+       "split": "unsupervised"
+      }
+     ],
+     "default": true
+    }
+   ],
+   "dataset_info": {
+    "config_name": "plain_text",
+    "dataset_size": 133190302,
+    "download_size": 83446840,
+    "features": [
+     {
+      "dtype": "string",
+      "name": "text"
+     },
+     {
+      "dtype": {
+       "class_label": {
+        "names": {
+         "0": "neg",
+         "1": "pos"
+        }
+       }
+      },
+      "name": "label"
+     }
+    ],
+    "splits": [
+     {
+      "name": "train",
+      "num_bytes": 33432823,
+      "num_examples": 25000
+     },
+     {
+      "name": "test",
+      "num_bytes": 32650685,
+      "num_examples": 25000
+     },
+     {
+      "name": "unsupervised",
+      "num_bytes": 67106794,
+      "num_examples": 50000
+     }
+    ]
+   },
+   "language": [
+    "en"
+   ],
+   "language_creators": [
+    "expert-generated"
+   ],
+   "license": [
+    "other"
+   ],
+   "multilinguality": [
+    "monolingual"
+   ],
+   "paperswithcode_id": "imdb-movie-reviews",
+   "pretty_name": "IMDB",
+   "size_categories": [
+    "10K<n<100K"
+   ],
+   "source_datasets": [
+    "original"
+   ],
+   "task_categories": [
+    "text-classification"
+   ],
+   "task_ids": [
+    "sentiment-classification"
+   ],
+   "train-eval-index": [
+    {
+     "col_mapping": {
+      "label": "target",
+      "text": "text"
+     },
+     "config": "plain_text",
+     "metrics": [
+      {
+       "type": "accuracy"
+      },
+      {
+       "name": "Accuracy"
+      },
+      {
+       "args": {
+        "average": "macro"
+       },
+       "name": "F1 macro",
+       "type": "f1"
+      },
+      {
+       "args": {
+        "average": "micro"
+       },
+       "name": "F1 micro",
+       "type": "f1"
+      },
+      {
+       "args": {
+        "average": "weighted"
+       },
+       "name": "F1 weighted",
+       "type": "f1"
+      },
+      {
+       "args": {
+        "average": "macro"
+       },
+       "name": "Precision macro",
+       "type": "precision"
+      },
+      {
+       "args": {
+        "average": "micro"
+       },
+       "name": "Precision micro",
+       "type": "precision"
+      },
+      {
+       "args": {
+        "average": "weighted"
+       },
+       "name": "Precision weighted",
+       "type": "precision"
+      },
+      {
+       "args": {
+        "average": "macro"
+       },
+       "name": "Recall macro",
+       "type": "recall"
+      },
+      {
+       "args": {
+        "average": "micro"
+       },
+       "name": "Recall micro",
+       "type": "recall"
+      },
+      {
+       "args": {
+        "average": "weighted"
+       },
+       "name": "Recall weighted",
+       "type": "recall"
+      }
+     ],
+     "splits": {
+      "eval_split": "test",
+      "train_split": "train"
+     },
+     "task": "text-classification",
+     "task_id": "binary_classification"
+    }
+   ]
+  },
+  "front_matter": "annotations_creators:\n- expert-generated\nlanguage_creators:\n- expert-generated\nlanguage:\n- en\nlicense:\n- other\nmultilinguality:\n- monolingual\nsize_categories:\n- 10K<n<100K\nsource_datasets:\n- original\ntask_categories:\n- text-classification\ntask_ids:\n- sentiment-classification\npaperswithcode_id: imdb-movie-reviews\npretty_name: IMDB\ndataset_info:\n  config_name: plain_text\n  features:\n  - name: text\n    dtype: string\n  - name: label\n    dtype:\n      class_label:\n        names:\n          '0': neg\n          '1': pos\n  splits:\n  - name: train\n    num_bytes: 33432823\n    num_examples: 25000\n  - name: test\n    num_bytes: 32650685\n    num_examples: 25000\n  - name: unsupervised\n    num_bytes: 67106794\n    num_examples: 50000\n  download_size: 83446840\n  dataset_size: 133190302\nconfigs:\n- config_name: plain_text\n  data_files:\n  - split: train\n    path: plain_text/train-*\n  - split: test\n    path: plain_text/test-*\n  - split: unsupervised\n    path: plain_text/unsupervised-*\n  default: true\ntrain-eval-index:\n- config: plain_text\n  task: text-classification\n  task_id: binary_classification\n  splits:\n    train_split: train\n    eval_split: test\n  col_mapping:\n    text: text\n    label: target\n  metrics:\n  - type: accuracy\n  - name: Accuracy\n  - type: f1\n    name: F1 macro\n    args:\n      average: macro\n  - type: f1\n    name: F1 micro\n    args:\n      average: micro\n  - type: f1\n    name: F1 weighted\n    args:\n      average: weighted\n  - type: precision\n    name: Precision macro\n    args:\n      average: macro\n  - type: precision\n    name: Precision micro\n    args:\n      average: micro\n  - type: precision\n    name: Precision weighted\n    args:\n      average: weighted\n  - type: recall\n    name: Recall macro\n    args:\n      average: macro\n  - type: recall\n    name: Recall micro\n    args:\n      average: micro\n  - type: recall\n    name: Recall weighted\n    args:\n      average: weighted",
+  "library_name": null,
+  "pipeline_tag": null,
+  "repo": "stanfordnlp/imdb",
+  "tags": [
+   "task_categories:text-classification",
+   "task_ids:sentiment-classification",
+   "annotations_creators:expert-generated",
+   "language_creators:expert-generated",
+   "multilinguality:monolingual",
+   "source_datasets:original",
+   "language:en",
+   "license:other",
+   "size_categories:100K<n<1M",
+   "format:parquet",
+   "modality:text",
+   "library:datasets",
+   "library:pandas",
+   "library:polars",
+   "library:mlcroissant",
+   "region:us"
+  ],
+  "type": "dataset"
+ },
+ {
+  "cardData": {
+   "annotations_creators": [
+    "expert-generated"
+   ],
+   "configs": [
+    {
+     "config_name": "mnist",
+     "data_files": [
+      {
+       "path": "mnist/train-*",
+       "split": "train"
+      },
+      {
+       "path": "mnist/test-*",
+       "split": "test"
+      }
+     ],
+     "default": true
+    }
+   ],
+   "dataset_info": {
+    "config_name": "mnist",
+    "dataset_size": 20098482,
+    "download_size": 18157506,
+    "features": [
+     {
+      "dtype": "image",
+      "name": "image"
+     },
+     {
+      "dtype": {
+       "class_label": {
+        "names": {
+         "0": "0",
+         "1": "1",
+         "2": "2",
+         "3": "3",
+         "4": "4",
+         "5": "5",
+         "6": "6",
+         "7": "7",
+         "8": "8",
+         "9": "9"
+        }
+       }
+      },
+      "name": "label"
+     }
+    ],
+    "splits": [
+     {
+      "name": "train",
+      "num_bytes": 17223300,
+      "num_examples": 60000
+     },
+     {
+      "name": "test",
+      "num_bytes": 2875182,
+      "num_examples": 10000
+     }
+    ]
+   },
+   "language": [
+    "en"
+   ],
+   "language_creators": [
+    "found"
+   ],
+   "license": [
+    "mit"
+   ],
+   "multilinguality": [
+    "monolingual"
+   ],
+   "paperswithcode_id": "mnist",
+   "pretty_name": "MNIST",
+   "size_categories": [
+    "10K<n<100K"
+   ],
+   "source_datasets": [
+    "extended|other-nist"
+   ],
+   "task_categories": [
+    "image-classification"
+   ],
+   "task_ids": [
+    "multi-class-image-classification"
+   ]
+  },
+  "front_matter": "annotations_creators:\n- expert-generated\nlanguage_creators:\n- found\nlanguage:\n- en\nlicense:\n- mit\nmultilinguality:\n- monolingual\nsize_categories:\n- 10K<n<100K\nsource_datasets:\n- extended|other-nist\ntask_categories:\n- image-classification\ntask_ids:\n- multi-class-image-classification\npaperswithcode_id: mnist\npretty_name: MNIST\ndataset_info:\n  config_name: mnist\n  features:\n  - name: image\n    dtype: image\n  - name: label\n    dtype:\n      class_label:\n        names:\n          '0': '0'\n          '1': '1'\n          '2': '2'\n          '3': '3'\n          '4': '4'\n          '5': '5'\n          '6': '6'\n          '7': '7'\n          '8': '8'\n          '9': '9'\n  splits:\n  - name: train\n    num_bytes: 17223300.0\n    num_examples: 60000\n  - name: test\n    num_bytes: 2875182.0\n    num_examples: 10000\n  download_size: 18157506\n  dataset_size: 20098482.0\nconfigs:\n- config_name: mnist\n  data_files:\n  - split: train\n    path: mnist/train-*\n  - split: test\n    path: mnist/test-*\n  default: true",
+  "library_name": null,
+  "pipeline_tag": null,
+  "repo": "ylecun/mnist",
+  "tags": [
+   "task_categories:image-classification",
+   "task_ids:multi-class-image-classification",
+   "annotations_creators:expert-generated",
+   "language_creators:found",
+   "multilinguality:monolingual",
+   "source_datasets:extended|other-nist",
+   "language:en",
+   "license:mit",
+   "size_categories:10K<n<100K",
+   "format:parquet",
+   "modality:image",
+   "library:datasets",
+   "library:pandas",
+   "library:polars",
+   "library:mlcroissant",
+   "region:us"
+  ],
+  "type": "dataset"
+ },
+ {
+  "cardData": {
+   "annotations_creators": [
+    "crowdsourced"
+   ],
+   "configs": [
+    {
+     "config_name": "main",
+     "data_files": [
+      {
+       "path": "main/train-*",
+       "split": "train"
+      },
+      {
+       "path": "main/test-*",
+       "split": "test"
+      }
+     ]
+    },
+    {
+     "config_name": "socratic",
+     "data_files": [
+      {
+       "path": "socratic/train-*",
+       "split": "train"
+      },
+      {
+       "path": "socratic/test-*",
+       "split": "test"
+      }
+     ]
+    }
+   ],
+   "dataset_info": [
+    {
+     "config_name": "main",
+     "dataset_size": 4676934,
+     "download_size": 2725633,
+     "features": [
+      {
+       "dtype": "string",
+       "name": "question"
+      },
+      {
+       "dtype": "string",
+       "name": "answer"
+      }
+     ],
+     "splits": [
+      {
+       "name": "train",
+       "num_bytes": 3963202,
+       "num_examples": 7473
+      },
+      {
+       "name": "test",
+       "num_bytes": 713732,
+       "num_examples": 1319
+      }
+     ]
+    },
+    {
+     "config_name": "socratic",
+     "dataset_size": 6134967,
+     "download_size": 3164254,
+     "features": [
+      {
+       "dtype": "string",
+       "name": "question"
+      },
+      {
+       "dtype": "string",
+       "name": "answer"
+      }
+     ],
+     "splits": [
+      {
+       "name": "train",
+       "num_bytes": 5198108,
+       "num_examples": 7473
+      },
+      {
+       "name": "test",
+       "num_bytes": 936859,
+       "num_examples": 1319
+      }
+     ]
+    }
+   ],
+   "language": [
+    "en"
+   ],
+   "language_creators": [
+    "crowdsourced"
+   ],
+   "license": [
+    "mit"
+   ],
+   "multilinguality": [
+    "monolingual"
+   ],
+   "paperswithcode_id": "gsm8k",
+   "pretty_name": "Grade School Math 8K",
+   "size_categories": [
+    "1K<n<10K"
+   ],
+   "source_datasets": [
+    "original"
+   ],
+   "tags": [
+    "math-word-problems"
+   ],
+   "task_categories": [
+    "text-generation"
+   ],
+   "task_ids": []
+  },
+  "front_matter": "annotations_creators:\n- crowdsourced\nlanguage_creators:\n- crowdsourced\nlanguage:\n- en\nlicense:\n- mit\nmultilinguality:\n- monolingual\nsize_categories:\n- 1K<n<10K\nsource_datasets:\n- original\ntask_categories:\n- text-generation\ntask_ids: []\npaperswithcode_id: gsm8k\npretty_name: Grade School Math 8K\ntags:\n- math-word-problems\ndataset_info:\n- config_name: main\n  features:\n  - name: question\n    dtype: string\n  - name: answer\n    dtype: string\n  splits:\n  - name: train\n    num_bytes: 3963202\n    num_examples: 7473\n  - name: test\n    num_bytes: 713732\n    num_examples: 1319\n  download_size: 2725633\n  dataset_size: 4676934\n- config_name: socratic\n  features:\n  - name: question\n    dtype: string\n  - name: answer\n    dtype: string\n  splits:\n  - name: train\n    num_bytes: 5198108\n    num_examples: 7473\n  - name: test\n    num_bytes: 936859\n    num_examples: 1319\n  download_size: 3164254\n  dataset_size: 6134967\nconfigs:\n- config_name: main\n  data_files:\n  - split: train\n    path: main/train-*\n  - split: test\n    path: main/test-*\n- config_name: socratic\n  data_files:\n  - split: train\n    path: socratic/train-*\n  - split: test\n    path: socratic/test-*",
+  "library_name": null,
+  "pipeline_tag": null,
+  "repo": "openai/gsm8k",
+  "tags": [
+   "benchmark:official",
+   "benchmark:eval-yaml",
+   "task_categories:text-generation",
+   "annotations_creators:crowdsourced",
+   "language_creators:crowdsourced",
+   "multilinguality:monolingual",
+   "source_datasets:original",
+   "language:en",
+   "license:mit",
+   "size_categories:10K<n<100K",
+   "format:parquet",
+   "modality:text",
+   "library:datasets",
+   "library:pandas",
+   "library:polars",
+   "library:mlcroissant",
+   "arxiv:2110.14168",
+   "region:us",
+   "math-word-problems"
+  ],
+  "type": "dataset"
+ },
+ {
+  "cardData": {
+   "annotations_creators": [
+    "other"
+   ],
+   "config_names": [
+    "ax",
+    "cola",
+    "mnli",
+    "mnli_matched",
+    "mnli_mismatched",
+    "mrpc",
+    "qnli",
+    "qqp",
+    "rte",
+    "sst2",
+    "stsb",
+    "wnli"
+   ],
+   "configs": [
+    {
+     "config_name": "ax",
+     "data_files": [
+      {
+       "path": "ax/test-*",
+       "split": "test"
+      }
+     ]
+    },
+    {
+     "config_name": "cola",
+     "data_files": [
+      {
+       "path": "cola/train-*",
+       "split": "train"
+      },
+      {
+       "path": "cola/validation-*",
+       "split": "validation"
+      },
+      {
+       "path": "cola/test-*",
+       "split": "test"
+      }
+     ]
+    },
+    {
+     "config_name": "mnli",
+     "data_files": [
+      {
+       "path": "mnli/train-*",
+       "split": "train"
+      },
+      {
+       "path": "mnli/validation_matched-*",
+       "split": "validation_matched"
+      },
+      {
+       "path": "mnli/validation_mismatched-*",
+       "split": "validation_mismatched"
+      },
+      {
+       "path": "mnli/test_matched-*",
+       "split": "test_matched"
+      },
+      {
+       "path": "mnli/test_mismatched-*",
+       "split": "test_mismatched"
+      }
+     ]
+    },
+    {
+     "config_name": "mnli_matched",
+     "data_files": [
+      {
+       "path": "mnli_matched/validation-*",
+       "split": "validation"
+      },
+      {
+       "path": "mnli_matched/test-*",
+       "split": "test"
+      }
+     ]
+    },
+    {
+     "config_name": "mnli_mismatched",
+     "data_files": [
+      {
+       "path": "mnli_mismatched/validation-*",
+       "split": "validation"
+      },
+      {
+       "path": "mnli_mismatched/test-*",
+       "split": "test"
+      }
+     ]
+    },
+    {
+     "config_name": "mrpc",
+     "data_files": [
+      {
+       "path": "mrpc/train-*",
+       "split": "train"
+      },
+      {
+       "path": "mrpc/validation-*",
+       "split": "validation"
+      },
+      {
+       "path": "mrpc/test-*",
+       "split": "test"
+      }
+     ]
+    },
+    {
+     "config_name": "qnli",
+     "data_files": [
+      {
+       "path": "qnli/train-*",
+       "split": "train"
+      },
+      {
+       "path": "qnli/validation-*",
+       "split": "validation"
+      },
+      {
+       "path": "qnli/test-*",
+       "split": "test"
+      }
+     ]
+    },
+    {
+     "config_name": "qqp",
+     "data_files": [
+      {
+       "path": "qqp/train-*",
+       "split": "train"
+      },
+      {
+       "path": "qqp/validation-*",
+       "split": "validation"
+      },
+      {
+       "path": "qqp/test-*",
+       "split": "test"
+      }
+     ]
+    },
+    {
+     "config_name": "rte",
+     "data_files": [
+      {
+       "path": "rte/train-*",
+       "split": "train"
+      },
+      {
+       "path": "rte/validation-*",
+       "split": "validation"
+      },
+      {
+       "path": "rte/test-*",
+       "split": "test"
+      }
+     ]
+    },
+    {
+     "config_name": "sst2",
+     "data_files": [
+      {
+       "path": "sst2/train-*",
+       "split": "train"
+      },
+      {
+       "path": "sst2/validation-*",
+       "split": "validation"
+      },
+      {
+       "path": "sst2/test-*",
+       "split": "test"
+      }
+     ]
+    },
+    {
+     "config_name": "stsb",
+     "data_files": [
+      {
+       "path": "stsb/train-*",
+       "split": "train"
+      },
+      {
+       "path": "stsb/validation-*",
+       "split": "validation"
+      },
+      {
+       "path": "stsb/test-*",
+       "split": "test"
+      }
+     ]
+    },
+    {
+     "config_name": "wnli",
+     "data_files": [
+      {
+       "path": "wnli/train-*",
+       "split": "train"
+      },
+      {
+       "path": "wnli/validation-*",
+       "split": "validation"
+      },
+      {
+       "path": "wnli/test-*",
+       "split": "test"
+      }
+     ]
+    }
+   ],
+   "dataset_info": [
+    {
+     "config_name": "ax",
+     "dataset_size": 237694,
+     "download_size": 80767,
+     "features": [
+      {
+       "dtype": "string",
+       "name": "premise"
+      },
+      {
+       "dtype": "string",
+       "name": "hypothesis"
+      },
+      {
+       "dtype": {
+        "class_label": {
+         "names": {
+          "0": "entailment",
+          "1": "neutral",
+          "2": "contradiction"
+         }
+        }
+       },
+       "name": "label"
+      },
+      {
+       "dtype": "int32",
+       "name": "idx"
+      }
+     ],
+     "splits": [
+      {
+       "name": "test",
+       "num_bytes": 237694,
+       "num_examples": 1104
+      }
+     ]
+    },
+    {
+     "config_name": "cola",
+     "dataset_size": 605704,
+     "download_size": 326394,
+     "features": [
+      {
+       "dtype": "string",
+       "name": "sentence"
+      },
+      {
+       "dtype": {
+        "class_label": {
+         "names": {
+          "0": "unacceptable",
+          "1": "acceptable"
+         }
+        }
+       },
+       "name": "label"
+      },
+      {
+       "dtype": "int32",
+       "name": "idx"
+      }
+     ],
+     "splits": [
+      {
+       "name": "train",
+       "num_bytes": 484869,
+       "num_examples": 8551
+      },
+      {
+       "name": "validation",
+       "num_bytes": 60322,
+       "num_examples": 1043
+      },
+      {
+       "name": "test",
+       "num_bytes": 60513,
+       "num_examples": 1063
+      }
+     ]
+    },
+    {
+     "config_name": "mnli",
+     "dataset_size": 82202017,
+     "download_size": 57168425,
+     "features": [
+      {
+       "dtype": "string",
+       "name": "premise"
+      },
+      {
+       "dtype": "string",
+       "name": "hypothesis"
+      },
+      {
+       "dtype": {
+        "class_label": {
+         "names": {
+          "0": "entailment",
+          "1": "neutral",
+          "2": "contradiction"
+         }
+        }
+       },
+       "name": "label"
+      },
+      {
+       "dtype": "int32",
+       "name": "idx"
+      }
+     ],
+     "splits": [
+      {
+       "name": "train",
+       "num_bytes": 74619646,
+       "num_examples": 392702
+      },
+      {
+       "name": "validation_matched",
+       "num_bytes": 1833783,
+       "num_examples": 9815
+      },
+      {
+       "name": "validation_mismatched",
+       "num_bytes": 1949231,
+       "num_examples": 9832
+      },
+      {
+       "name": "test_matched",
+       "num_bytes": 1848654,
+       "num_examples": 9796
+      },
+      {
+       "name": "test_mismatched",
+       "num_bytes": 1950703,
+       "num_examples": 9847
+      }
+     ]
+    },
+    {
+     "config_name": "mnli_matched",
+     "dataset_size": 3682437,
+     "download_size": 2435055,
+     "features": [
+      {
+       "dtype": "string",
+       "name": "premise"
+      },
+      {
+       "dtype": "string",
+       "name": "hypothesis"
+      },
+      {
+       "dtype": {
+        "class_label": {
+         "names": {
+          "0": "entailment",
+          "1": "neutral",
+          "2": "contradiction"
+         }
+        }
+       },
+       "name": "label"
+      },
+      {
+       "dtype": "int32",
+       "name": "idx"
+      }
+     ],
+     "splits": [
+      {
+       "name": "validation",
+       "num_bytes": 1833783,
+       "num_examples": 9815
+      },
+      {
+       "name": "test",
+       "num_bytes": 1848654,
+       "num_examples": 9796
+      }
+     ]
+    },
+    {
+     "config_name": "mnli_mismatched",
+     "dataset_size": 3899934,
+     "download_size": 2509009,
+     "features": [
+      {
+       "dtype": "string",
+       "name": "premise"
+      },
+      {
+       "dtype": "string",
+       "name": "hypothesis"
+      },
+      {
+       "dtype": {
+        "class_label": {
+         "names": {
+          "0": "entailment",
+          "1": "neutral",
+          "2": "contradiction"
+         }
+        }
+       },
+       "name": "label"
+      },
+      {
+       "dtype": "int32",
+       "name": "idx"
+      }
+     ],
+     "splits": [
+      {
+       "name": "validation",
+       "num_bytes": 1949231,
+       "num_examples": 9832
+      },
+      {
+       "name": "test",
+       "num_bytes": 1950703,
+       "num_examples": 9847
+      }
+     ]
+    },
+    {
+     "config_name": "mrpc",
+     "dataset_size": 1492132,
+     "download_size": 1033400,
+     "features": [
+      {
+       "dtype": "string",
+       "name": "sentence1"
+      },
+      {
+       "dtype": "string",
+       "name": "sentence2"
+      },
+      {
+       "dtype": {
+        "class_label": {
+         "names": {
+          "0": "not_equivalent",
+          "1": "equivalent"
+         }
+        }
+       },
+       "name": "label"
+      },
+      {
+       "dtype": "int32",
+       "name": "idx"
+      }
+     ],
+     "splits": [
+      {
+       "name": "train",
+       "num_bytes": 943843,
+       "num_examples": 3668
+      },
+      {
+       "name": "validation",
+       "num_bytes": 105879,
+       "num_examples": 408
+      },
+      {
+       "name": "test",
+       "num_bytes": 442410,
+       "num_examples": 1725
+      }
+     ]
+    },
+    {
+     "config_name": "qnli",
+     "dataset_size": 28353840,
+     "download_size": 19278324,
+     "features": [
+      {
+       "dtype": "string",
+       "name": "question"
+      },
+      {
+       "dtype": "string",
+       "name": "sentence"
+      },
+      {
+       "dtype": {
+        "class_label": {
+         "names": {
+          "0": "entailment",
+          "1": "not_entailment"
+         }
+        }
+       },
+       "name": "label"
+      },
+      {
+       "dtype": "int32",
+       "name": "idx"
+      }
+     ],
+     "splits": [
+      {
+       "name": "train",
+       "num_bytes": 25612443,
+       "num_examples": 104743
+      },
+      {
+       "name": "validation",
+       "num_bytes": 1368304,
+       "num_examples": 5463
+      },
+      {
+       "name": "test",
+       "num_bytes": 1373093,
+       "num_examples": 5463
+      }
+     ]
+    },
+    {
+     "config_name": "qqp",
+     "dataset_size": 111725685,
+     "download_size": 73982265,
+     "features": [
+      {
+       "dtype": "string",
+       "name": "question1"
+      },
+      {
+       "dtype": "string",
+       "name": "question2"
+      },
+      {
+       "dtype": {
+        "class_label": {
+         "names": {
+          "0": "not_duplicate",
+          "1": "duplicate"
+         }
+        }
+       },
+       "name": "label"
+      },
+      {
+       "dtype": "int32",
+       "name": "idx"
+      }
+     ],
+     "splits": [
+      {
+       "name": "train",
+       "num_bytes": 50900820,
+       "num_examples": 363846
+      },
+      {
+       "name": "validation",
+       "num_bytes": 5653754,
+       "num_examples": 40430
+      },
+      {
+       "name": "test",
+       "num_bytes": 55171111,
+       "num_examples": 390965
+      }
+     ]
+    },
+    {
+     "config_name": "rte",
+     "dataset_size": 1912101,
+     "download_size": 1274409,
+     "features": [
+      {
+       "dtype": "string",
+       "name": "sentence1"
+      },
+      {
+       "dtype": "string",
+       "name": "sentence2"
+      },
+      {
+       "dtype": {
+        "class_label": {
+         "names": {
+          "0": "entailment",
+          "1": "not_entailment"
+         }
+        }
+       },
+       "name": "label"
+      },
+      {
+       "dtype": "int32",
+       "name": "idx"
+      }
+     ],
+     "splits": [
+      {
+       "name": "train",
+       "num_bytes": 847320,
+       "num_examples": 2490
+      },
+      {
+       "name": "validation",
+       "num_bytes": 90728,
+       "num_examples": 277
+      },
+      {
+       "name": "test",
+       "num_bytes": 974053,
+       "num_examples": 3000
+      }
+     ]
+    },
+    {
+     "config_name": "sst2",
+     "dataset_size": 5004495,
+     "download_size": 3331080,
+     "features": [
+      {
+       "dtype": "string",
+       "name": "sentence"
+      },
+      {
+       "dtype": {
+        "class_label": {
+         "names": {
+          "0": "negative",
+          "1": "positive"
+         }
+        }
+       },
+       "name": "label"
+      },
+      {
+       "dtype": "int32",
+       "name": "idx"
+      }
+     ],
+     "splits": [
+      {
+       "name": "train",
+       "num_bytes": 4681603,
+       "num_examples": 67349
+      },
+      {
+       "name": "validation",
+       "num_bytes": 106252,
+       "num_examples": 872
+      },
+      {
+       "name": "test",
+       "num_bytes": 216640,
+       "num_examples": 1821
+      }
+     ]
+    },
+    {
+     "config_name": "stsb",
+     "dataset_size": 1140829,
+     "download_size": 766983,
+     "features": [
+      {
+       "dtype": "string",
+       "name": "sentence1"
+      },
+      {
+       "dtype": "string",
+       "name": "sentence2"
+      },
+      {
+       "dtype": "float32",
+       "name": "label"
+      },
+      {
+       "dtype": "int32",
+       "name": "idx"
+      }
+     ],
+     "splits": [
+      {
+       "name": "train",
+       "num_bytes": 754791,
+       "num_examples": 5749
+      },
+      {
+       "name": "validation",
+       "num_bytes": 216064,
+       "num_examples": 1500
+      },
+      {
+       "name": "test",
+       "num_bytes": 169974,
+       "num_examples": 1379
+      }
+     ]
+    },
+    {
+     "config_name": "wnli",
+     "dataset_size": 157160,
+     "download_size": 63522,
+     "features": [
+      {
+       "dtype": "string",
+       "name": "sentence1"
+      },
+      {
+       "dtype": "string",
+       "name": "sentence2"
+      },
+      {
+       "dtype": {
+        "class_label": {
+         "names": {
+          "0": "not_entailment",
+          "1": "entailment"
+         }
+        }
+       },
+       "name": "label"
+      },
+      {
+       "dtype": "int32",
+       "name": "idx"
+      }
+     ],
+     "splits": [
+      {
+       "name": "train",
+       "num_bytes": 107109,
+       "num_examples": 635
+      },
+      {
+       "name": "validation",
+       "num_bytes": 12162,
+       "num_examples": 71
+      },
+      {
+       "name": "test",
+       "num_bytes": 37889,
+       "num_examples": 146
+      }
+     ]
+    }
+   ],
+   "language": [
+    "en"
+   ],
+   "language_creators": [
+    "other"
+   ],
+   "license": [
+    "other"
+   ],
+   "multilinguality": [
+    "monolingual"
+   ],
+   "paperswithcode_id": "glue",
+   "pretty_name": "GLUE (General Language Understanding Evaluation benchmark)",
+   "size_categories": [
+    "10K<n<100K"
+   ],
+   "source_datasets": [
+    "original"
+   ],
+   "tags": [
+    "qa-nli",
+    "coreference-nli",
+    "paraphrase-identification"
+   ],
+   "task_categories": [
+    "text-classification"
+   ],
+   "task_ids": [
+    "acceptability-classification",
+    "natural-language-inference",
+    "semantic-similarity-scoring",
+    "sentiment-classification",
+    "text-scoring"
+   ],
+   "train-eval-index": [
+    {
+     "col_mapping": {
+      "label": "target",
+      "sentence": "text"
+     },
+     "config": "cola",
+     "splits": {
+      "eval_split": "validation",
+      "train_split": "train"
+     },
+     "task": "text-classification",
+     "task_id": "binary_classification"
+    },
+    {
+     "col_mapping": {
+      "label": "target",
+      "sentence": "text"
+     },
+     "config": "sst2",
+     "splits": {
+      "eval_split": "validation",
+      "train_split": "train"
+     },
+     "task": "text-classification",
+     "task_id": "binary_classification"
+    },
+    {
+     "col_mapping": {
+      "label": "target",
+      "sentence1": "text1",
+      "sentence2": "text2"
+     },
+     "config": "mrpc",
+     "splits": {
+      "eval_split": "validation",
+      "train_split": "train"
+     },
+     "task": "text-classification",
+     "task_id": "natural_language_inference"
+    },
+    {
+     "col_mapping": {
+      "label": "target",
+      "question1": "text1",
+      "question2": "text2"
+     },
+     "config": "qqp",
+     "splits": {
+      "eval_split": "validation",
+      "train_split": "train"
+     },
+     "task": "text-classification",
+     "task_id": "natural_language_inference"
+    },
+    {
+     "col_mapping": {
+      "label": "target",
+      "sentence1": "text1",
+      "sentence2": "text2"
+     },
+     "config": "stsb",
+     "splits": {
+      "eval_split": "validation",
+      "train_split": "train"
+     },
+     "task": "text-classification",
+     "task_id": "natural_language_inference"
+    },
+    {
+     "col_mapping": {
+      "hypothesis": "text2",
+      "label": "target",
+      "premise": "text1"
+     },
+     "config": "mnli",
+     "splits": {
+      "eval_split": "validation_matched",
+      "train_split": "train"
+     },
+     "task": "text-classification",
+     "task_id": "natural_language_inference"
+    },
+    {
+     "col_mapping": {
+      "hypothesis": "text2",
+      "label": "target",
+      "premise": "text1"
+     },
+     "config": "mnli_mismatched",
+     "splits": {
+      "eval_split": "validation",
+      "train_split": "train"
+     },
+     "task": "text-classification",
+     "task_id": "natural_language_inference"
+    },
+    {
+     "col_mapping": {
+      "hypothesis": "text2",
+      "label": "target",
+      "premise": "text1"
+     },
+     "config": "mnli_matched",
+     "splits": {
+      "eval_split": "validation",
+      "train_split": "train"
+     },
+     "task": "text-classification",
+     "task_id": "natural_language_inference"
+    },
+    {
+     "col_mapping": {
+      "label": "target",
+      "question": "text1",
+      "sentence": "text2"
+     },
+     "config": "qnli",
+     "splits": {
+      "eval_split": "validation",
+      "train_split": "train"
+     },
+     "task": "text-classification",
+     "task_id": "natural_language_inference"
+    },
+    {
+     "col_mapping": {
+      "label": "target",
+      "sentence1": "text1",
+      "sentence2": "text2"
+     },
+     "config": "rte",
+     "splits": {
+      "eval_split": "validation",
+      "train_split": "train"
+     },
+     "task": "text-classification",
+     "task_id": "natural_language_inference"
+    },
+    {
+     "col_mapping": {
+      "label": "target",
+      "sentence1": "text1",
+      "sentence2": "text2"
+     },
+     "config": "wnli",
+     "splits": {
+      "eval_split": "validation",
+      "train_split": "train"
+     },
+     "task": "text-classification",
+     "task_id": "natural_language_inference"
+    }
+   ]
+  },
+  "front_matter": "annotations_creators:\n- other\nlanguage_creators:\n- other\nlanguage:\n- en\nlicense:\n- other\nmultilinguality:\n- monolingual\nsize_categories:\n- 10K<n<100K\nsource_datasets:\n- original\ntask_categories:\n- text-classification\ntask_ids:\n- acceptability-classification\n- natural-language-inference\n- semantic-similarity-scoring\n- sentiment-classification\n- text-scoring\npaperswithcode_id: glue\npretty_name: GLUE (General Language Understanding Evaluation benchmark)\nconfig_names:\n- ax\n- cola\n- mnli\n- mnli_matched\n- mnli_mismatched\n- mrpc\n- qnli\n- qqp\n- rte\n- sst2\n- stsb\n- wnli\ntags:\n- qa-nli\n- coreference-nli\n- paraphrase-identification\ndataset_info:\n- config_name: ax\n  features:\n  - name: premise\n    dtype: string\n  - name: hypothesis\n    dtype: string\n  - name: label\n    dtype:\n      class_label:\n        names:\n          '0': entailment\n          '1': neutral\n          '2': contradiction\n  - name: idx\n    dtype: int32\n  splits:\n  - name: test\n    num_bytes: 237694\n    num_examples: 1104\n  download_size: 80767\n  dataset_size: 237694\n- config_name: cola\n  features:\n  - name: sentence\n    dtype: string\n  - name: label\n    dtype:\n      class_label:\n        names:\n          '0': unacceptable\n          '1': acceptable\n  - name: idx\n    dtype: int32\n  splits:\n  - name: train\n    num_bytes: 484869\n    num_examples: 8551\n  - name: validation\n    num_bytes: 60322\n    num_examples: 1043\n  - name: test\n    num_bytes: 60513\n    num_examples: 1063\n  download_size: 326394\n  dataset_size: 605704\n- config_name: mnli\n  features:\n  - name: premise\n    dtype: string\n  - name: hypothesis\n    dtype: string\n  - name: label\n    dtype:\n      class_label:\n        names:\n          '0': entailment\n          '1': neutral\n          '2': contradiction\n  - name: idx\n    dtype: int32\n  splits:\n  - name: train\n    num_bytes: 74619646\n    num_examples: 392702\n  - name: validation_matched\n    num_bytes: 1833783\n    num_examples: 9815\n  - name: validation_mismatched\n    num_bytes: 1949231\n    num_examples: 9832\n  - name: test_matched\n    num_bytes: 1848654\n    num_examples: 9796\n  - name: test_mismatched\n    num_bytes: 1950703\n    num_examples: 9847\n  download_size: 57168425\n  dataset_size: 82202017\n- config_name: mnli_matched\n  features:\n  - name: premise\n    dtype: string\n  - name: hypothesis\n    dtype: string\n  - name: label\n    dtype:\n      class_label:\n        names:\n          '0': entailment\n          '1': neutral\n          '2': contradiction\n  - name: idx\n    dtype: int32\n  splits:\n  - name: validation\n    num_bytes: 1833783\n    num_examples: 9815\n  - name: test\n    num_bytes: 1848654\n    num_examples: 9796\n  download_size: 2435055\n  dataset_size: 3682437\n- config_name: mnli_mismatched\n  features:\n  - name: premise\n    dtype: string\n  - name: hypothesis\n    dtype: string\n  - name: label\n    dtype:\n      class_label:\n        names:\n          '0': entailment\n          '1': neutral\n          '2': contradiction\n  - name: idx\n    dtype: int32\n  splits:\n  - name: validation\n    num_bytes: 1949231\n    num_examples: 9832\n  - name: test\n    num_bytes: 1950703\n    num_examples: 9847\n  download_size: 2509009\n  dataset_size: 3899934\n- config_name: mrpc\n  features:\n  - name: sentence1\n    dtype: string\n  - name: sentence2\n    dtype: string\n  - name: label\n    dtype:\n      class_label:\n        names:\n          '0': not_equivalent\n          '1': equivalent\n  - name: idx\n    dtype: int32\n  splits:\n  - name: train\n    num_bytes: 943843\n    num_examples: 3668\n  - name: validation\n    num_bytes: 105879\n    num_examples: 408\n  - name: test\n    num_bytes: 442410\n    num_examples: 1725\n  download_size: 1033400\n  dataset_size: 1492132\n- config_name: qnli\n  features:\n  - name: question\n    dtype: string\n  - name: sentence\n    dtype: string\n  - name: label\n    dtype:\n      class_label:\n        names:\n          '0': entailment\n          '1': not_entailment\n  - name: idx\n    dtype: int32\n  splits:\n  - name: train\n    num_bytes: 25612443\n    num_examples: 104743\n  - name: validation\n    num_bytes: 1368304\n    num_examples: 5463\n  - name: test\n    num_bytes: 1373093\n    num_examples: 5463\n  download_size: 19278324\n  dataset_size: 28353840\n- config_name: qqp\n  features:\n  - name: question1\n    dtype: string\n  - name: question2\n    dtype: string\n  - name: label\n    dtype:\n      class_label:\n        names:\n          '0': not_duplicate\n          '1': duplicate\n  - name: idx\n    dtype: int32\n  splits:\n  - name: train\n    num_bytes: 50900820\n    num_examples: 363846\n  - name: validation\n    num_bytes: 5653754\n    num_examples: 40430\n  - name: test\n    num_bytes: 55171111\n    num_examples: 390965\n  download_size: 73982265\n  dataset_size: 111725685\n- config_name: rte\n  features:\n  - name: sentence1\n    dtype: string\n  - name: sentence2\n    dtype: string\n  - name: label\n    dtype:\n      class_label:\n        names:\n          '0': entailment\n          '1': not_entailment\n  - name: idx\n    dtype: int32\n  splits:\n  - name: train\n    num_bytes: 847320\n    num_examples: 2490\n  - name: validation\n    num_bytes: 90728\n    num_examples: 277\n  - name: test\n    num_bytes: 974053\n    num_examples: 3000\n  download_size: 1274409\n  dataset_size: 1912101\n- config_name: sst2\n  features:\n  - name: sentence\n    dtype: string\n  - name: label\n    dtype:\n      class_label:\n        names:\n          '0': negative\n          '1': positive\n  - name: idx\n    dtype: int32\n  splits:\n  - name: train\n    num_bytes: 4681603\n    num_examples: 67349\n  - name: validation\n    num_bytes: 106252\n    num_examples: 872\n  - name: test\n    num_bytes: 216640\n    num_examples: 1821\n  download_size: 3331080\n  dataset_size: 5004495\n- config_name: stsb\n  features:\n  - name: sentence1\n    dtype: string\n  - name: sentence2\n    dtype: string\n  - name: label\n    dtype: float32\n  - name: idx\n    dtype: int32\n  splits:\n  - name: train\n    num_bytes: 754791\n    num_examples: 5749\n  - name: validation\n    num_bytes: 216064\n    num_examples: 1500\n  - name: test\n    num_bytes: 169974\n    num_examples: 1379\n  download_size: 766983\n  dataset_size: 1140829\n- config_name: wnli\n  features:\n  - name: sentence1\n    dtype: string\n  - name: sentence2\n    dtype: string\n  - name: label\n    dtype:\n      class_label:\n        names:\n          '0': not_entailment\n          '1': entailment\n  - name: idx\n    dtype: int32\n  splits:\n  - name: train\n    num_bytes: 107109\n    num_examples: 635\n  - name: validation\n    num_bytes: 12162\n    num_examples: 71\n  - name: test\n    num_bytes: 37889\n    num_examples: 146\n  download_size: 63522\n  dataset_size: 157160\nconfigs:\n- config_name: ax\n  data_files:\n  - split: test\n    path: ax/test-*\n- config_name: cola\n  data_files:\n  - split: train\n    path: cola/train-*\n  - split: validation\n    path: cola/validation-*\n  - split: test\n    path: cola/test-*\n- config_name: mnli\n  data_files:\n  - split: train\n    path: mnli/train-*\n  - split: validation_matched\n    path: mnli/validation_matched-*\n  - split: validation_mismatched\n    path: mnli/validation_mismatched-*\n  - split: test_matched\n    path: mnli/test_matched-*\n  - split: test_mismatched\n    path: mnli/test_mismatched-*\n- config_name: mnli_matched\n  data_files:\n  - split: validation\n    path: mnli_matched/validation-*\n  - split: test\n    path: mnli_matched/test-*\n- config_name: mnli_mismatched\n  data_files:\n  - split: validation\n    path: mnli_mismatched/validation-*\n  - split: test\n    path: mnli_mismatched/test-*\n- config_name: mrpc\n  data_files:\n  - split: train\n    path: mrpc/train-*\n  - split: validation\n    path: mrpc/validation-*\n  - split: test\n    path: mrpc/test-*\n- config_name: qnli\n  data_files:\n  - split: train\n    path: qnli/train-*\n  - split: validation\n    path: qnli/validation-*\n  - split: test\n    path: qnli/test-*\n- config_name: qqp\n  data_files:\n  - split: train\n    path: qqp/train-*\n  - split: validation\n    path: qqp/validation-*\n  - split: test\n    path: qqp/test-*\n- config_name: rte\n  data_files:\n  - split: train\n    path: rte/train-*\n  - split: validation\n    path: rte/validation-*\n  - split: test\n    path: rte/test-*\n- config_name: sst2\n  data_files:\n  - split: train\n    path: sst2/train-*\n  - split: validation\n    path: sst2/validation-*\n  - split: test\n    path: sst2/test-*\n- config_name: stsb\n  data_files:\n  - split: train\n    path: stsb/train-*\n  - split: validation\n    path: stsb/validation-*\n  - split: test\n    path: stsb/test-*\n- config_name: wnli\n  data_files:\n  - split: train\n    path: wnli/train-*\n  - split: validation\n    path: wnli/validation-*\n  - split: test\n    path: wnli/test-*\ntrain-eval-index:\n- config: cola\n  task: text-classification\n  task_id: binary_classification\n  splits:\n    train_split: train\n    eval_split: validation\n  col_mapping:\n    sentence: text\n    label: target\n- config: sst2\n  task: text-classification\n  task_id: binary_classification\n  splits:\n    train_split: train\n    eval_split: validation\n  col_mapping:\n    sentence: text\n    label: target\n- config: mrpc\n  task: text-classification\n  task_id: natural_language_inference\n  splits:\n    train_split: train\n    eval_split: validation\n  col_mapping:\n    sentence1: text1\n    sentence2: text2\n    label: target\n- config: qqp\n  task: text-classification\n  task_id: natural_language_inference\n  splits:\n    train_split: train\n    eval_split: validation\n  col_mapping:\n    question1: text1\n    question2: text2\n    label: target\n- config: stsb\n  task: text-classification\n  task_id: natural_language_inference\n  splits:\n    train_split: train\n    eval_split: validation\n  col_mapping:\n    sentence1: text1\n    sentence2: text2\n    label: target\n- config: mnli\n  task: text-classification\n  task_id: natural_language_inference\n  splits:\n    train_split: train\n    eval_split: validation_matched\n  col_mapping:\n    premise: text1\n    hypothesis: text2\n    label: target\n- config: mnli_mismatched\n  task: text-classification\n  task_id: natural_language_inference\n  splits:\n    train_split: train\n    eval_split: validation\n  col_mapping:\n    premise: text1\n    hypothesis: text2\n    label: target\n- config: mnli_matched\n  task: text-classification\n  task_id: natural_language_inference\n  splits:\n    train_split: train\n    eval_split: validation\n  col_mapping:\n    premise: text1\n    hypothesis: text2\n    label: target\n- config: qnli\n  task: text-classification\n  task_id: natural_language_inference\n  splits:\n    train_split: train\n    eval_split: validation\n  col_mapping:\n    question: text1\n    sentence: text2\n    label: target\n- config: rte\n  task: text-classification\n  task_id: natural_language_inference\n  splits:\n    train_split: train\n    eval_split: validation\n  col_mapping:\n    sentence1: text1\n    sentence2: text2\n    label: target\n- config: wnli\n  task: text-classification\n  task_id: natural_language_inference\n  splits:\n    train_split: train\n    eval_split: validation\n  col_mapping:\n    sentence1: text1\n    sentence2: text2\n    label: target",
+  "library_name": null,
+  "pipeline_tag": null,
+  "repo": "nyu-mll/glue",
+  "tags": [
+   "task_categories:text-classification",
+   "task_ids:acceptability-classification",
+   "task_ids:natural-language-inference",
+   "task_ids:semantic-similarity-scoring",
+   "task_ids:sentiment-classification",
+   "task_ids:text-scoring",
+   "annotations_creators:other",
+   "language_creators:other",
+   "multilinguality:monolingual",
+   "source_datasets:original",
+   "language:en",
+   "license:other",
+   "size_categories:1M<n<10M",
+   "format:parquet",
+   "modality:tabular",
+   "modality:text",
+   "library:datasets",
+   "library:pandas",
+   "library:mlcroissant",
+   "library:polars",
+   "arxiv:1804.07461",
+   "region:us",
+   "qa-nli",
+   "coreference-nli",
+   "paraphrase-identification"
+  ],
+  "type": "dataset"
+ },
+ {
+  "cardData": {
+   "configs": [
+    {
+     "config_name": "default",
+     "data_files": [
+      {
+       "path": "data/*/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "sample-10BT",
+     "data_files": [
+      {
+       "path": "sample/10BT/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "sample-100BT",
+     "data_files": [
+      {
+       "path": "sample/100BT/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "sample-350BT",
+     "data_files": [
+      {
+       "path": "sample/350BT/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2025-05",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2025-05/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2025-08",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2025-08/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2025-13",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2025-13/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2025-18",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2025-18/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2025-21",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2025-21/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2025-26",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2025-26/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2024-51",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2024-51/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2024-46",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2024-46/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2024-42",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2024-42/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2024-38",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2024-38/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2024-33",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2024-33/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2024-30",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2024-30/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2024-26",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2024-26/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2024-22",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2024-22/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2024-18",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2024-18/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2024-10",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2024-10/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2023-50",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2023-50/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2023-40",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2023-40/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2023-23",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2023-23/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2023-14",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2023-14/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2023-06",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2023-06/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2022-49",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2022-49/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2022-40",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2022-40/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2022-33",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2022-33/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2022-27",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2022-27/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2022-21",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2022-21/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2022-05",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2022-05/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2021-49",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2021-49/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2021-43",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2021-43/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2021-39",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2021-39/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2021-31",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2021-31/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2021-25",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2021-25/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2021-21",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2021-21/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2021-17",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2021-17/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2021-10",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2021-10/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2021-04",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2021-04/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2020-50",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2020-50/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2020-45",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2020-45/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2020-40",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2020-40/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2020-34",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2020-34/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2020-29",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2020-29/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2020-24",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2020-24/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2020-16",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2020-16/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2020-10",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2020-10/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2020-05",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2020-05/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2019-51",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2019-51/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2019-47",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2019-47/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2019-43",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2019-43/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2019-39",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2019-39/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2019-35",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2019-35/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2019-30",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2019-30/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2019-26",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2019-26/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2019-22",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2019-22/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2019-18",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2019-18/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2019-13",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2019-13/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2019-09",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2019-09/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2019-04",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2019-04/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2018-51",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2018-51/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2018-47",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2018-47/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2018-43",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2018-43/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2018-39",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2018-39/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2018-34",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2018-34/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2018-30",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2018-30/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2018-26",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2018-26/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2018-22",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2018-22/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2018-17",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2018-17/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2018-13",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2018-13/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2018-09",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2018-09/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2018-05",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2018-05/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2017-51",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2017-51/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2017-47",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2017-47/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2017-43",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2017-43/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2017-39",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2017-39/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2017-34",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2017-34/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2017-30",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2017-30/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2017-26",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2017-26/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2017-22",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2017-22/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2017-17",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2017-17/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2017-13",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2017-13/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2017-09",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2017-09/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2017-04",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2017-04/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2016-50",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2016-50/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2016-44",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2016-44/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2016-40",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2016-40/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2016-36",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2016-36/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2016-30",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2016-30/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2016-26",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2016-26/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2016-22",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2016-22/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2016-18",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2016-18/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2016-07",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2016-07/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2015-48",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2015-48/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2015-40",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2015-40/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2015-35",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2015-35/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2015-32",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2015-32/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2015-27",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2015-27/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2015-22",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2015-22/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2015-18",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2015-18/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2015-14",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2015-14/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2015-11",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2015-11/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2015-06",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2015-06/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2014-52",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2014-52/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2014-49",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2014-49/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2014-42",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2014-42/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2014-41",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2014-41/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2014-35",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2014-35/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2014-23",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2014-23/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2014-15",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2014-15/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2014-10",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2014-10/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2013-48",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2013-48/*",
+       "split": "train"
+      }
+     ]
+    },
+    {
+     "config_name": "CC-MAIN-2013-20",
+     "data_files": [
+      {
+       "path": "data/CC-MAIN-2013-20/*",
+       "split": "train"
+      }
+     ]
+    }
+   ],
+   "language": [
+    "en"
+   ],
+   "license": "odc-by",
+   "pretty_name": "FineWeb",
+   "size_categories": [
+    "n>1T"
+   ],
+   "task_categories": [
+    "text-generation"
+   ]
+  },
+  "front_matter": "license: odc-by\ntask_categories:\n  - text-generation\nlanguage:\n  - en\npretty_name: FineWeb\nsize_categories:\n  - n>1T\nconfigs:\n  - config_name: default\n    data_files:\n      - split: train\n        path: data/*/*\n  - config_name: sample-10BT\n    data_files:\n      - split: train\n        path: sample/10BT/*\n  - config_name: sample-100BT\n    data_files:\n      - split: train\n        path: sample/100BT/*\n  - config_name: sample-350BT\n    data_files:\n      - split: train\n        path: sample/350BT/*\n  - config_name: CC-MAIN-2025-05\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2025-05/*\n  - config_name: CC-MAIN-2025-08\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2025-08/*\n  - config_name: CC-MAIN-2025-13\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2025-13/*\n  - config_name: CC-MAIN-2025-18\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2025-18/*\n  - config_name: CC-MAIN-2025-21\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2025-21/*\n  - config_name: CC-MAIN-2025-26\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2025-26/*\n  - config_name: CC-MAIN-2024-51\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2024-51/*\n  - config_name: CC-MAIN-2024-46\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2024-46/*\n  - config_name: CC-MAIN-2024-42\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2024-42/*\n  - config_name: CC-MAIN-2024-38\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2024-38/*\n  - config_name: CC-MAIN-2024-33\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2024-33/*\n  - config_name: CC-MAIN-2024-30\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2024-30/*\n  - config_name: CC-MAIN-2024-26\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2024-26/*\n  - config_name: CC-MAIN-2024-22\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2024-22/*\n  - config_name: CC-MAIN-2024-18\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2024-18/*\n  - config_name: CC-MAIN-2024-10\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2024-10/*\n  - config_name: CC-MAIN-2023-50\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2023-50/*\n  - config_name: CC-MAIN-2023-40\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2023-40/*\n  - config_name: CC-MAIN-2023-23\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2023-23/*\n  - config_name: CC-MAIN-2023-14\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2023-14/*\n  - config_name: CC-MAIN-2023-06\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2023-06/*\n  - config_name: CC-MAIN-2022-49\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2022-49/*\n  - config_name: CC-MAIN-2022-40\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2022-40/*\n  - config_name: CC-MAIN-2022-33\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2022-33/*\n  - config_name: CC-MAIN-2022-27\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2022-27/*\n  - config_name: CC-MAIN-2022-21\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2022-21/*\n  - config_name: CC-MAIN-2022-05\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2022-05/*\n  - config_name: CC-MAIN-2021-49\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2021-49/*\n  - config_name: CC-MAIN-2021-43\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2021-43/*\n  - config_name: CC-MAIN-2021-39\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2021-39/*\n  - config_name: CC-MAIN-2021-31\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2021-31/*\n  - config_name: CC-MAIN-2021-25\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2021-25/*\n  - config_name: CC-MAIN-2021-21\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2021-21/*\n  - config_name: CC-MAIN-2021-17\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2021-17/*\n  - config_name: CC-MAIN-2021-10\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2021-10/*\n  - config_name: CC-MAIN-2021-04\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2021-04/*\n  - config_name: CC-MAIN-2020-50\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2020-50/*\n  - config_name: CC-MAIN-2020-45\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2020-45/*\n  - config_name: CC-MAIN-2020-40\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2020-40/*\n  - config_name: CC-MAIN-2020-34\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2020-34/*\n  - config_name: CC-MAIN-2020-29\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2020-29/*\n  - config_name: CC-MAIN-2020-24\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2020-24/*\n  - config_name: CC-MAIN-2020-16\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2020-16/*\n  - config_name: CC-MAIN-2020-10\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2020-10/*\n  - config_name: CC-MAIN-2020-05\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2020-05/*\n  - config_name: CC-MAIN-2019-51\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2019-51/*\n  - config_name: CC-MAIN-2019-47\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2019-47/*\n  - config_name: CC-MAIN-2019-43\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2019-43/*\n  - config_name: CC-MAIN-2019-39\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2019-39/*\n  - config_name: CC-MAIN-2019-35\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2019-35/*\n  - config_name: CC-MAIN-2019-30\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2019-30/*\n  - config_name: CC-MAIN-2019-26\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2019-26/*\n  - config_name: CC-MAIN-2019-22\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2019-22/*\n  - config_name: CC-MAIN-2019-18\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2019-18/*\n  - config_name: CC-MAIN-2019-13\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2019-13/*\n  - config_name: CC-MAIN-2019-09\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2019-09/*\n  - config_name: CC-MAIN-2019-04\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2019-04/*\n  - config_name: CC-MAIN-2018-51\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2018-51/*\n  - config_name: CC-MAIN-2018-47\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2018-47/*\n  - config_name: CC-MAIN-2018-43\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2018-43/*\n  - config_name: CC-MAIN-2018-39\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2018-39/*\n  - config_name: CC-MAIN-2018-34\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2018-34/*\n  - config_name: CC-MAIN-2018-30\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2018-30/*\n  - config_name: CC-MAIN-2018-26\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2018-26/*\n  - config_name: CC-MAIN-2018-22\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2018-22/*\n  - config_name: CC-MAIN-2018-17\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2018-17/*\n  - config_name: CC-MAIN-2018-13\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2018-13/*\n  - config_name: CC-MAIN-2018-09\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2018-09/*\n  - config_name: CC-MAIN-2018-05\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2018-05/*\n  - config_name: CC-MAIN-2017-51\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2017-51/*\n  - config_name: CC-MAIN-2017-47\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2017-47/*\n  - config_name: CC-MAIN-2017-43\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2017-43/*\n  - config_name: CC-MAIN-2017-39\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2017-39/*\n  - config_name: CC-MAIN-2017-34\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2017-34/*\n  - config_name: CC-MAIN-2017-30\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2017-30/*\n  - config_name: CC-MAIN-2017-26\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2017-26/*\n  - config_name: CC-MAIN-2017-22\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2017-22/*\n  - config_name: CC-MAIN-2017-17\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2017-17/*\n  - config_name: CC-MAIN-2017-13\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2017-13/*\n  - config_name: CC-MAIN-2017-09\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2017-09/*\n  - config_name: CC-MAIN-2017-04\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2017-04/*\n  - config_name: CC-MAIN-2016-50\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2016-50/*\n  - config_name: CC-MAIN-2016-44\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2016-44/*\n  - config_name: CC-MAIN-2016-40\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2016-40/*\n  - config_name: CC-MAIN-2016-36\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2016-36/*\n  - config_name: CC-MAIN-2016-30\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2016-30/*\n  - config_name: CC-MAIN-2016-26\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2016-26/*\n  - config_name: CC-MAIN-2016-22\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2016-22/*\n  - config_name: CC-MAIN-2016-18\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2016-18/*\n  - config_name: CC-MAIN-2016-07\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2016-07/*\n  - config_name: CC-MAIN-2015-48\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2015-48/*\n  - config_name: CC-MAIN-2015-40\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2015-40/*\n  - config_name: CC-MAIN-2015-35\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2015-35/*\n  - config_name: CC-MAIN-2015-32\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2015-32/*\n  - config_name: CC-MAIN-2015-27\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2015-27/*\n  - config_name: CC-MAIN-2015-22\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2015-22/*\n  - config_name: CC-MAIN-2015-18\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2015-18/*\n  - config_name: CC-MAIN-2015-14\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2015-14/*\n  - config_name: CC-MAIN-2015-11\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2015-11/*\n  - config_name: CC-MAIN-2015-06\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2015-06/*\n  - config_name: CC-MAIN-2014-52\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2014-52/*\n  - config_name: CC-MAIN-2014-49\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2014-49/*\n  - config_name: CC-MAIN-2014-42\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2014-42/*\n  - config_name: CC-MAIN-2014-41\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2014-41/*\n  - config_name: CC-MAIN-2014-35\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2014-35/*\n  - config_name: CC-MAIN-2014-23\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2014-23/*\n  - config_name: CC-MAIN-2014-15\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2014-15/*\n  - config_name: CC-MAIN-2014-10\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2014-10/*\n  - config_name: CC-MAIN-2013-48\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2013-48/*\n  - config_name: CC-MAIN-2013-20\n    data_files:\n      - split: train\n        path: data/CC-MAIN-2013-20/*",
+  "library_name": null,
+  "pipeline_tag": null,
+  "repo": "HuggingFaceFW/fineweb",
+  "tags": [
+   "task_categories:text-generation",
+   "language:en",
+   "license:odc-by",
+   "size_categories:10B<n<100B",
+   "modality:tabular",
+   "modality:text",
+   "arxiv:2306.01116",
+   "arxiv:2109.07445",
+   "arxiv:2406.17557",
+   "doi:10.57967/hf/2493",
+   "region:us"
+  ],
+  "type": "dataset"
+ },
+ {
+  "cardData": {
+   "app_file": "run.py",
+   "colorFrom": "indigo",
+   "colorTo": "indigo",
+   "emoji": "🔥",
+   "hf_oauth": true,
+   "hf_oauth_scopes": [
+    "inference-api"
+   ],
+   "pinned": false,
+   "sdk": "gradio",
+   "sdk_version": "6.30.0",
+   "title": "hello_world"
+  },
+  "front_matter": "title: hello_world \nemoji: 🔥\ncolorFrom: indigo\ncolorTo: indigo\nsdk: gradio\nsdk_version: 6.30.0\napp_file: run.py\npinned: false\nhf_oauth: true\nhf_oauth_scopes:\n  - inference-api",
+  "library_name": null,
+  "pipeline_tag": null,
+  "repo": "gradio/hello_world",
+  "tags": [
+   "gradio",
+   "region:us"
+  ],
+  "type": "space"
+ },
+ {
+  "cardData": {
+   "colorFrom": "blue",
+   "colorTo": "red",
+   "duplicated_from": "open-llm-leaderboard/open_llm_leaderboard",
+   "emoji": "🏆",
+   "hf_oauth": true,
+   "license": "apache-2.0",
+   "pinned": true,
+   "sdk": "docker",
+   "short_description": "Track, rank and evaluate open LLMs and chatbots",
+   "tags": [
+    "leaderboard",
+    "modality:text",
+    "submission:automatic",
+    "test:public",
+    "language:english",
+    "eval:code",
+    "eval:math"
+   ],
+   "title": "Open LLM Leaderboard"
+  },
+  "front_matter": "title: Open LLM Leaderboard\nemoji: 🏆\ncolorFrom: blue\ncolorTo: red\nsdk: docker\nhf_oauth: true\npinned: true\nlicense: apache-2.0\nduplicated_from: open-llm-leaderboard/open_llm_leaderboard\ntags:\n- leaderboard\n- modality:text\n- submission:automatic\n- test:public\n- language:english\n- eval:code\n- eval:math\nshort_description: Track, rank and evaluate open LLMs and chatbots",
+  "library_name": null,
+  "pipeline_tag": null,
+  "repo": "open-llm-leaderboard/open_llm_leaderboard",
+  "tags": [
+   "docker",
+   "leaderboard",
+   "modality:text",
+   "submission:automatic",
+   "test:public",
+   "language:english",
+   "eval:code",
+   "eval:math",
+   "region:us"
+  ],
+  "type": "space"
+ }
+]

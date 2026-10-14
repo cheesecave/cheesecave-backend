@@ -7,8 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Duplicate a repository** ([#68](https://github.com/cheesecave/cheesecave-backend/issues/68)).
+  `huggingface_hub`'s `duplicate_repo` and `duplicate_space` called `POST /api/{type}s/{repo}/duplicate`, which was a 404.
+  It copies a repository in LakeFS rather than file by file (the storage keys in parallel, then the commit records): over
+  400 files a second on a local disk. A model or dataset arrives as one commit of `main`'s head, as on the Hub; a Space
+  keeps its whole history under the source's own commit ids, parents and dates, so the two git histories stay in sync.
+  A failed copy is removed (`500`, never `409`, which a client's `exist_ok` would read as "it exists"); one a crash left
+  behind is removed by the worker. Documented in `docs/api/repositories.md`.
+
 ### Fixed
 
+- **`update_repo_settings(gated=...)` no longer pretends** ([#61](https://github.com/cheesecave/cheesecave-backend/issues/61)).
+  `gated=False` and `gated=True` were refused with `422` (the field was a string only), and `"auto"` / `"manual"`
+  answered `200` while the repository stayed public, so a request for a gate looked like it had worked. Gated
+  repositories are not supported, so: `False` (or no `gated`) is accepted and changes nothing, `True`, `"auto"` and
+  `"manual"` answer `501` (`X-Error-Message: gated access is not supported by KohakuHub. ...`, which the client shows its user) before anything is written
+  (the other fields of the same request are not applied either), any other string is `400`.
 - **Branch and tag names with a `/` work** ([#67](https://github.com/cheesecave/cheesecave-backend/issues/67)).
   `create_branch(branch="feature/x")`, `create_tag(tag="release/v1.0")` and every route that takes a branch, tag or
   revision (`upload_file(revision=...)`, `hf_hub_download(revision=...)`, `snapshot_download`, `list_repo_commits`,
@@ -83,6 +99,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The README card in the repository info** (#62). `cardData`, `tags`, `pipeline_tag`, `library_name`
+  (models), `sdk` (spaces) and `paperswithcode_id` (datasets) come from the README front matter of the head
+  commit, cleaned so that one odd README cannot break a client (`huggingface_hub` raised for non-string keys,
+  `ignore_metadata_errors` or non-list tags); list items carry them once indexed, `cardData=true` / `full=true`
+  add the card; `expand[]=` is read like `expand=`; `_id` is a string; datasets and spaces no longer carry
+  model-only keys. Migration 035 adds the table `repository_card` (nothing is backfilled: a repository without
+  a row is read the first time its info is asked for). `POST /api/validate-yaml` follows the Hub:
+  `{errors, warnings}`, `400` for metadata that cannot be read (`huggingface_hub` now refuses such a README
+  before uploading it; `valid` is still answered).
 - **Account routes in the Hub's shapes** (#60, #64, #65). `list_user_followers`, `list_user_following`
   and `list_organization_followers` read a bare array with `Link` paging (they raised `TypeError`
   before); `whoami-v2` carries `avatarUrl` and the Hub's organization fields; user and organization

@@ -1,5 +1,6 @@
 """Repository information and listing endpoints."""
 
+import json
 from datetime import datetime
 from typing import Literal, Optional
 
@@ -9,7 +10,8 @@ from peewee import JOIN, fn
 
 from kohakuhub.config import cfg
 from kohakuhub.constants import DATETIME_FORMAT_ISO
-from kohakuhub.db import Commit, Repository, User
+from kohakuhub import repository_discovery as discovery
+from kohakuhub.db import Commit, Repository, RepositoryCard, RepositoryMetadata, User
 from kohakuhub.db_operations import (
     get_merged_external_tokens,
     get_organization,
@@ -33,6 +35,7 @@ from kohakuhub.utils.datetime_utils import safe_strftime
 from kohakuhub.utils.commit_id import hub_oid
 from kohakuhub.api.repo.utils.hf import (
     HFErrorCode,
+    CARD_PROPERTIES,
     expand_error,
     hf_error_response,
     hf_repo_info_response,
@@ -168,6 +171,18 @@ def _apply_repo_sorting(q, repo_type: str, sort: str):
     return q.order_by(Repository.created_at.desc())
 
 
+def _bracket_expand(request) -> list[str]:
+    """The ``expand[]=`` values of a request. Callers other than the server hand the route a request
+    with its query as a plain mapping (the admin probe), or with none at all."""
+    params = getattr(request, "query_params", None)
+    if params is None:
+        return []
+    if hasattr(params, "getlist"):
+        return params.getlist("expand[]")
+    value = params.get("expand[]")
+    return [value] if isinstance(value, str) else list(value or [])
+
+
 @router.get("/models/{namespace}/{repo_name}")
 @router.get("/datasets/{namespace}/{repo_name}")
 @router.get("/spaces/{namespace}/{repo_name}")
@@ -232,7 +247,8 @@ async def get_repo_info(
     check_repo_read_permission(repo_row, user)
 
     # As on the Hub: an unknown ``expand`` property is a 400
-    expand = [prop for prop in expand or [] if prop] or None  # ``expand=``: none, as on the Hub
+    # ``expand=`` and ``expand[]=`` both spell it, and an empty ``expand=`` asks for none, as on the Hub
+    expand = [prop for prop in (expand or []) + _bracket_expand(request) if prop] or None
     if bad := expand_error(repo_type, expand):
         return bad
 
@@ -273,12 +289,16 @@ async def get_repo_info(
             except Exception as ex:
                 logger.exception(f"Could not fetch siblings for {lakefs_repo}: {str(ex)}", ex)
 
+    card = None
+    if not expand or CARD_PROPERTIES & set(expand):
+        card = await discovery.info_card(repo_row)
     fields = repo_info_fields(
         repo_row,
         repo_type,
         hub_oid(commit_id),
         last_modified,
         storage=bool(user) and (not expand or "storage" in expand),
+        card=card,
     )
     return hf_repo_info_response(fields, expand, siblings)
 
@@ -313,7 +333,7 @@ def _filter_repos_by_privacy(q, user: Optional[User], author: Optional[str] = No
     return filter_readable_repositories(q, user, author)
 
 
-async def _render_local(ids: list[int], tag_source: bool) -> list[dict]:
+async def _render_local(ids: list[int], tag_source: bool, with_card: bool = False) -> list[dict]:
     """The list items of the repositories ``ids``, in that order.
 
     sha + lastModified come from one SQL aggregate; LakeFS answers only for repos missing
@@ -322,6 +342,18 @@ async def _render_local(ids: list[int], tag_source: bool) -> list[dict]:
     if not ids:
         return []
     by_id = {r.id: r for r in Repository.select().where(Repository.id.in_(ids))}
+    indexed = {
+        row.repository_id: row
+        for row in RepositoryCard.select(
+            RepositoryCard.repository, RepositoryCard.derived, *([RepositoryCard.card] if with_card else [])
+        )
+        .join(RepositoryMetadata, on=(RepositoryMetadata.repository == RepositoryCard.repository))
+        .where(
+            RepositoryCard.repository.in_(ids)
+            & (RepositoryMetadata.state == "ready")
+            & (RepositoryMetadata.main_sha == RepositoryCard.main_sha)
+        )
+    }
     heads = _latest_main_commits(ids)
     client = get_lakefs_client()
     result = []
@@ -349,6 +381,17 @@ async def _render_local(ids: list[int], tag_source: bool) -> list[dict]:
             "gated": False,
             "tags": [],
         }
+        row = indexed.get(r.id)
+        if row is not None:
+            declared = json.loads(row.derived)
+            item["tags"] = declared["tags"]
+            if r.repo_type == "model":
+                item["pipeline_tag"] = declared["pipeline_tag"]
+                item["library_name"] = declared["library_name"]
+            elif r.repo_type == "space":
+                item["sdk"] = declared["sdk"]
+            if with_card and (card := json.loads(row.card or "{}")):
+                item["cardData"] = card
         if tag_source:
             item["_source"] = "local"
             item["_source_url"] = cfg.app.base_url
@@ -368,6 +411,8 @@ async def list_repos(
     search: Optional[str] = None,
     cursor: Optional[str] = None,
     partial: Optional[str] = None,
+    cardData: bool = False,
+    full: bool = False,
     fallback: bool = Query(True, description="Enable fallback to external sources"),
     user: User | None = Depends(get_optional_user),
 ):
@@ -411,7 +456,7 @@ async def list_repos(
             user,
             state=state,
             sources=sources,
-            render_local=lambda ids: _render_local(ids, tag_source=bool(sources)),
+            render_local=lambda ids: _render_local(ids, tag_source=bool(sources), with_card=cardData or full),
         )
     except listing.CursorError as error:
         return hf_error_response(400, HFErrorCode.BAD_REQUEST, str(error))
