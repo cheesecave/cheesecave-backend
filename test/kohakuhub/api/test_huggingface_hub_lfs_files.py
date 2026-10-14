@@ -23,9 +23,17 @@ async def _run(func, *args, **kwargs):
     return await asyncio.to_thread(func, *args, **kwargs)
 
 
+def _client(endpoint, token):
+    """The client of the matrix: the oldest ones (0.20) have no ``list_lfs_files`` to call."""
+    api = HfApi(endpoint=endpoint, token=token)
+    if not callable(getattr(api, "list_lfs_files", None)):
+        pytest.skip("this huggingface_hub has no list_lfs_files")
+    return api
+
+
 @pytest.fixture
 async def api(live_server_url, hf_api_token):
-    yield HfApi(endpoint=live_server_url, token=hf_api_token)
+    yield _client(live_server_url, hf_api_token)
 
 
 async def _push(api, payload):
@@ -59,7 +67,7 @@ async def test_permanently_delete_lfs_files_says_it_is_not_supported_and_deletes
 
 
 async def test_listing_a_repository_of_someone_else_is_refused(live_server_url):
-    stranger = HfApi(endpoint=live_server_url, token=None)
+    stranger = _client(live_server_url, None)
     with pytest.raises(HfHubHTTPError) as caught:
         await _run(lambda: list(stranger.list_lfs_files(REPO)))
     assert caught.value.response.status_code in (401, 403, 404)
