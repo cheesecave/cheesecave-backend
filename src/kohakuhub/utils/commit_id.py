@@ -21,11 +21,34 @@ def is_commit_like(value) -> bool:
 
 
 def hub_oid(commit_id: str | None) -> str | None:
-    """A commit id as the Hub says it: the first 40 characters of the full id.
+    """A commit id as the site says it (``commit_id_format``).
 
-    A shorter id (an abbreviation) is left as it is.
+    ``hub`` (the default): the first 40 characters of the full id, which is what the Hub says and what
+    ``huggingface_hub`` accepts as a ``parent_commit`` and names its cache folders by. ``full``: the id as
+    LakeFS has it, a transitional form. An abbreviation is left as it is either way.
     """
-    return commit_id[:HUB_LENGTH] if commit_id else commit_id
+    if not commit_id:
+        return commit_id
+    from kohakuhub.config import cfg  # read when called: the config is registered after this module is imported
+
+    return commit_id if cfg.app.commit_id_format == "full" else commit_id[:HUB_LENGTH]
+
+
+def hub_oids(commit_ids) -> list[str]:
+    """``hub_oid`` of each id of a list (``None`` is an empty list)."""
+    return [hub_oid(commit_id) for commit_id in commit_ids or []]
+
+
+def hub_metadata(metadata: dict | None) -> dict:
+    """The metadata of a commit with the ids it holds said as the site says them.
+
+    LakeFS keeps what a commit's maker wrote: a revert writes the commit it undid (``revert_of``) as a full id.
+    A value that is a full commit id is said by ``hub_oid``; anything else is left as it is.
+    """
+    return {
+        key: hub_oid(value) if isinstance(value, str) and len(value) == FULL_LENGTH and is_commit_like(value) else value
+        for key, value in (metadata or {}).items()
+    }
 
 
 def refers_to(requested, full_id: str) -> bool:

@@ -54,6 +54,19 @@ def _standalone_modules(request):
         yield
 
 
+@pytest.fixture
+def commit_ids_in_full(monkeypatch):
+    """The site says commits as LakeFS has them (``commit_id_format = "full"``).
+
+    For tests about what is recorded for a commit (revert, reset, squash, concurrent commits, usage): they hold an
+    id an API response said and compare it with the full ids LakeFS and the database hold. The form the API says is
+    tested where it is the point (test_commit_id_outbound.py, the huggingface_hub tests).
+    """
+    import importlib
+
+    monkeypatch.setattr(importlib.import_module("kohakuhub.config").cfg.app, "commit_id_format", "full")
+
+
 @pytest.fixture(scope="session")
 def backend_test_state(pytestconfig):
     terminal_reporter = pytestconfig.pluginmanager.get_plugin("terminalreporter")

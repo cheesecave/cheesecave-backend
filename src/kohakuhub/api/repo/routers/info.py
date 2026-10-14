@@ -30,6 +30,7 @@ from kohakuhub.api.fallback.operations import ExternalListError
 from kohakuhub.api.repo.utils import listing
 from kohakuhub.api.utils.paging import next_link
 from kohakuhub.utils.datetime_utils import safe_strftime
+from kohakuhub.utils.commit_id import hub_oid
 from kohakuhub.api.repo.utils.hf import (
     HFErrorCode,
     expand_error,
@@ -275,7 +276,7 @@ async def get_repo_info(
     fields = repo_info_fields(
         repo_row,
         repo_type,
-        commit_id[:40] if commit_id else None,
+        hub_oid(commit_id),
         last_modified,
         storage=bool(user) and (not expand or "storage" in expand),
     )
@@ -340,7 +341,7 @@ async def _render_local(ids: list[int], tag_source: bool) -> list[dict]:
             "id": r.full_id,
             "author": r.namespace,
             "private": r.private,
-            "sha": sha,
+            "sha": hub_oid(sha),
             "lastModified": last_modified,
             "createdAt": safe_strftime(r.created_at, DATETIME_FORMAT_ISO),
             "downloads": r.downloads,
@@ -505,7 +506,7 @@ async def list_user_repos(
                     "id": r.full_id,
                     "author": r.namespace,
                     "private": r.private,
-                    "sha": sha,
+                    "sha": hub_oid(sha),
                     "lastModified": last_modified,
                     "createdAt": safe_strftime(r.created_at, DATETIME_FORMAT_ISO),
                     "downloads": r.downloads,

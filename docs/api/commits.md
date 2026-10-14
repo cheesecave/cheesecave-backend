@@ -17,6 +17,9 @@ takes **all of those forms**: the full 64, the Hub's 40, or an abbreviation (`co
 `paths-info/{id}`, `resolve/{id}/...`, a revision of `branch` or `tag`, a `parentCommit`, the `ref` of a revert or
 reset, the source of a merge). A page or a script that holds 64 hex keeps working, and so does one that holds 40.
 
+**What a response says** is one form, wherever it says a commit (`sha`, `id`, `oid`, `parents`, `commitOid`, `commitUrl`, `new_commit_id`, `targetCommit`, `lastCommit.id`, the `X-Repo-Commit` header, the workspace feed): the one of `commit_id_format`. `hub` (the default) is the Hub's 40 hex. `huggingface_hub` accepts a `parent_commit` of 5 to 40 hex only, and names its cache folders by the sha it is told, so a response that said 40 in one place and 64 in another (`model_info().sha` against `model_info(revision="main").sha` and the `X-Repo-Commit` of a download) broke `snapshot_download(revision=model_info().sha)` and diffusers' `from_pretrained`. `full` is the 64 hex LakeFS has, for downstream systems that stored them; it is a transitional form (`huggingface_hub` refuses it as a `parent_commit`).
+A commit id stored from an earlier response keeps working as a request in either form.
+
 The two list routes below answer **under the id as it was asked**: ask for `c1[:40]` and the answer is keyed
 `c1[:40]`, ask for the full id and it is keyed by the full id. A name that is no commit id (a branch name) is answered
 under the commit's full id, as it always was. What is no commit id, or names no commit, is left out.

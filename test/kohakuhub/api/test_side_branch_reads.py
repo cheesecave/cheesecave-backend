@@ -2,9 +2,21 @@
 identities, not the default branch's File rows (#11). Against the real LakeFS
 and bucket; the database holds main's rows."""
 
+import hashlib
+
 from test.kohakuhub.api.commit.test_availability import Repo, _file, lfs
 from test.kohakuhub.api.test_branch_reset import blob_sha1, sha
 from test.kohakuhub.api.commit.test_availability import m  # noqa: F401 - the fixture
+
+
+def pointer_blob_for(sha256: str, size: int) -> str:
+    """The oid the Hub says of an LFS file: the git blob id of its pointer (#12); its sha256 is lfs.oid."""
+    pointer = f"version https://git-lfs.github.com/spec/v1\noid sha256:{sha256}\nsize {size}\n".encode()
+    return hashlib.sha1(b"blob %d\0" % len(pointer) + pointer).hexdigest()
+
+
+def pointer_blob(content: bytes) -> str:
+    return pointer_blob_for(sha(content), len(content))
 
 
 def _branch_paths(repo_row, branch):
@@ -35,12 +47,12 @@ async def test_a_side_branch_reads_its_own_identities(m, owner_client):
 
     dev = await _tree(owner_client, repo, "dev")
     assert dev["README.md"]["oid"] == blob_sha1("world")
-    assert dev["w.bin"]["oid"] == sha(b"w dev")
+    assert dev["w.bin"]["oid"] == pointer_blob(b"w dev")
     assert dev["w.bin"]["lfs"]["oid"] == sha(b"w dev")
 
     main = await _tree(owner_client, repo, "main")
     assert main["README.md"]["oid"] == blob_sha1("hello")
-    assert main["w.bin"]["oid"] == sha(b"w main")
+    assert main["w.bin"]["oid"] == pointer_blob(b"w main")
 
     response = await owner_client.post(
         f"/api/models/{repo.id}/paths-info/dev", data={"paths": ["README.md", "w.bin"]}
@@ -48,7 +60,7 @@ async def test_a_side_branch_reads_its_own_identities(m, owner_client):
     assert response.status_code == 200, response.text
     by_path = {entry["path"]: entry for entry in response.json()}
     assert by_path["README.md"]["oid"] == blob_sha1("world")
-    assert by_path["w.bin"]["oid"] == sha(b"w dev")
+    assert by_path["w.bin"]["oid"] == pointer_blob(b"w dev")
 
     response = await owner_client.head(f"/models/{repo.id}/resolve/dev/README.md")
     assert response.status_code == 200, response.text
@@ -86,11 +98,11 @@ async def test_a_side_branch_reads_its_rows_not_lakefs(m, owner_client):
     File.update(sha256="f" * 64).where(File.id == row.id).execute()
 
     dev = await _tree(owner_client, repo, "dev")
-    assert dev["w.bin"]["oid"] == "f" * 64
+    assert dev["w.bin"]["oid"] == pointer_blob_for("f" * 64, len(b"w dev"))
     response = await owner_client.post(
         f"/api/models/{repo.id}/paths-info/dev", data={"paths": ["w.bin"]}
     )
-    assert response.json()[0]["oid"] == "f" * 64
+    assert response.json()[0]["oid"] == pointer_blob_for("f" * 64, len(b"w dev"))
     response = await owner_client.head(f"/models/{repo.id}/resolve/dev/w.bin")
     assert response.headers["ETag"] == "f" * 64
 
@@ -138,7 +150,7 @@ async def test_a_branch_without_rows_is_read_from_lakefs_and_recorded(m, owner_c
     File.delete().where((File.repository == repo_row) & (File.branch == "dev")).execute()
 
     dev = await _tree(owner_client, repo, "dev")
-    assert dev["w.bin"]["oid"] == sha(b"w main")
+    assert dev["w.bin"]["oid"] == pointer_blob(b"w main")
     assert dev["w.bin"]["lfs"]["oid"] == sha(b"w main")
     assert dev["README.md"]["oid"] == blob_sha1("hello")
     assert File.select().where((File.repository == repo_row) & (File.branch == "dev")).count() == 2
@@ -153,7 +165,7 @@ async def test_a_commit_id_is_still_read_from_lakefs(m, owner_client):
         f"/api/models/{repo.id}/paths-info/{first}", data={"paths": ["w.bin"]}
     )
     assert response.status_code == 200, response.text
-    assert response.json()[0]["oid"] == sha(b"w one")
+    assert response.json()[0]["oid"] == pointer_blob(b"w one")
 
 
 async def test_deleting_a_branch_over_http_drops_its_rows(m, owner_client):

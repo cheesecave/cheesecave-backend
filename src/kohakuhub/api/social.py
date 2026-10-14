@@ -20,6 +20,7 @@ from kohakuhub.auth.permissions import (
     repository_read_predicate,
 )
 from kohakuhub.db import Repository, User, UserFollow, UserOrganization
+from kohakuhub.utils.commit_id import hub_oid
 
 router = APIRouter()
 
@@ -454,7 +455,7 @@ def _feed(user, scope, repo_type, limit, cursor, organization=None, event_type="
                         "downloads": repo.downloads,
                         "likes": repo.likes_count,
                     },
-                    "commit": {"sha": sha, "message": message[:1000]} if rank == 1 else None,
+                    "commit": {"sha": hub_oid(sha), "message": message[:1000]} if rank == 1 else None,
                 }
             )
         next_cursor = (

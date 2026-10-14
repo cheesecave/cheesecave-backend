@@ -158,3 +158,27 @@ async def test_a_failure_of_lakefs_is_still_a_server_error(owner_client, monkeyp
     response = await owner_client.get(f"{B}/{path.format(commit_id)}")
     assert response.status_code == 500
     assert response.headers["x-error-code"] == "ServerError"
+
+
+# ----- routes with a revision in the path that never read it as a commit: every form answers as `main` does -----
+
+
+@pytest.mark.parametrize("name, length", FORMS)
+async def test_xet_read_token_is_the_same_whatever_the_form_of_the_revision(owner_client, name, length):
+    head = (await owner_client.get(f"{B}/revision/main")).json()["sha"]
+    answer = await owner_client.get(f"{B}/xet-read-token/{head[:length]}/README.md")
+    reference = await owner_client.get(f"{B}/xet-read-token/main/README.md")
+    assert answer.status_code == reference.status_code == 200
+    assert answer.json() == reference.json() == {}
+    assert answer.headers["x-xet-cas-url"] == reference.headers["x-xet-cas-url"]
+
+
+@pytest.mark.parametrize("name, length", FORMS)
+async def test_preupload_is_the_same_whatever_the_form_of_the_revision(owner_client, name, length):
+    head = (await owner_client.get(f"{B}/revision/main")).json()["sha"]
+    body = {"files": [{"path": "new.txt", "size": 5, "sample": base64.b64encode(b"hello").decode()}]}
+    answer = await owner_client.post(f"{B}/preupload/{head[:length]}", json=body)
+    reference = await owner_client.post(f"{B}/preupload/main", json=body)
+    assert answer.status_code == reference.status_code == 200, answer.text
+    assert answer.json() == reference.json()
+    assert answer.json()["files"][0]["uploadMode"] == "regular"

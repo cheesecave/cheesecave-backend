@@ -9,6 +9,7 @@ from pydantic import BaseModel
 from kohakuhub.db import Repository, User
 from kohakuhub.db_operations import get_repository
 from kohakuhub.logger import get_logger
+from kohakuhub.utils.commit_id import hub_oid
 from kohakuhub.storage_cleanup import (
     SCRATCH_BRANCH_PREFIX,
     enqueue_branch_links,
@@ -503,7 +504,7 @@ async def list_repo_refs(
             {
                 "name": branch_name,
                 "ref": f"refs/heads/{branch_name}",
-                "targetCommit": target_commit,
+                "targetCommit": hub_oid(target_commit),
             }
         )
 
@@ -522,7 +523,7 @@ async def list_repo_refs(
             {
                 "name": tag_name,
                 "ref": f"refs/tags/{tag_name}",
-                "targetCommit": target_commit,
+                "targetCommit": hub_oid(target_commit),
             }
         )
 
@@ -635,7 +636,7 @@ async def revert_branch(
     return {
         "success": True,
         "message": f"Successfully reverted commit {commit_id[:8]} on branch '{branch}'",
-        "new_commit_id": new_commit_id,
+        "new_commit_id": hub_oid(new_commit_id),
     }
 
 
@@ -883,7 +884,7 @@ async def reset_branch(
     return {
         "success": True,
         "message": f"Successfully reset branch '{branch}' to commit {commit_id[:8]} (new commit created)",
-        "commit_id": head,
+        "commit_id": hub_oid(head),
     }
 
 
@@ -920,4 +921,4 @@ async def super_squash_branch(
         )
     except records.OperationRefused as e:
         raise HTTPException(status_code=e.status, detail=e.detail)
-    return {"commitOid": commit_id}
+    return {"commitOid": hub_oid(commit_id)}

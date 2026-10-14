@@ -84,6 +84,10 @@ auto_migrate = false  # Auto-confirm database migrations (set true for Docker)
 repository_revert_enabled = true
 repository_reset_enabled = true
 repository_squash_enabled = true
+# The form of a commit id in every response: "hub" (the Hub's 40 hex, what huggingface_hub accepts as a
+# parent_commit) or "full" (the 64 hex LakeFS has; transitional, for downstream systems that stored them).
+# Requests take both either way. See docs/api/commits.md.
+commit_id_format = "hub"
 # LFS Configuration (sizes in decimal: 1MB = 1,000,000 bytes)
 lfs_threshold_bytes = 5_000_000  # 5MB - files larger use LFS
 lfs_multipart_threshold_bytes = 100_000_000  # 100MB - files larger use multipart upload
