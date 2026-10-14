@@ -166,7 +166,9 @@ async def test_a_model_arrives_as_one_commit_of_main_head(d, owner_client, monke
     # Readable, and the regular files are the copy's own
     for path, content in (("sub/b.txt", b"b"), ("sub/c.txt", b"c")):
         read = await owner_client.get(f"/models/owner/dup-model-dst/resolve/main/{path}")
-        assert (read.status_code, read.content) == (200, content)
+        assert read.status_code == 302  # to the object's presigned url
+        lakefs_repo = d.lakefs.resolve_lakefs_repo(d_row)
+        assert await d.client.get_object(repository=lakefs_repo, ref="main", path=path) == content
         stat = await d.client.stat_object(repository=d.lakefs.resolve_lakefs_repo(d_row), ref="main", path=path)
         assert stat["physical_address"].startswith(f"s3://{d.cfg.s3.bucket}/{d.lakefs.resolve_lakefs_repo(d_row)}/")
     # And it takes commits like any repository
@@ -194,8 +196,10 @@ async def test_a_space_keeps_every_commit_under_its_own_id(d, owner_client, monk
 
     s_row, d_row = _row(d, src.id, "space"), _row(d, "owner/dup-space-dst", "space")
     s_log, d_log = await _log(d, s_row), await _log(d, d_row)
-    assert [c["id"] for c in d_log] == [c["id"] for c in s_log]  # the same ids, in the same order
-    assert d_log == s_log  # and the same parents, messages, dates, committers, metadata
+    # The same commits (LakeFS orders those of one second as it likes): ids, parents, messages,
+    # dates, committers, metadata
+    assert d_log[0] == s_log[0]
+    assert {c["id"]: c for c in d_log} == {c["id"]: c for c in s_log}
     assert any(len(c["parents"]) == 2 for c in d_log)  # the merge too
     assert await _tree(d, d_row) == await _tree(d, s_row)
     assert await _refs(d, d_row) == (["main"], [])  # branches and tags are not copied
@@ -203,7 +207,7 @@ async def test_a_space_keeps_every_commit_under_its_own_id(d, owner_client, monk
     # What the site shows: the source's history, ids as the Hub writes them
     s_list = (await owner_client.get(f"/api/spaces/{src.id}/commits/main")).json()
     d_list = (await owner_client.get("/api/spaces/owner/dup-space-dst/commits/main")).json()
-    assert [c["id"] for c in d_list] == [c["id"] for c in s_list]
+    assert sorted(c["id"] for c in d_list) == sorted(c["id"] for c in s_list)
     D = d.db
     # Rows: the commits (with their authors), every LFS version, the heads, the last commits
     rows = lambda row: {(c.commit_id, c.username, c.message, c.branch) for c in D.Commit.select().where(D.Commit.repository == row)}  # noqa: E731
@@ -219,8 +223,7 @@ async def test_a_space_keeps_every_commit_under_its_own_id(d, owner_client, monk
     first = s_log[-1]["id"] if s_log[-1]["message"] == "c1" else next(c["id"] for c in s_log if c["message"] == "c1")
     stat = await d.client.stat_object(repository=d.lakefs.resolve_lakefs_repo(d_row), ref=first, path="app.py")
     assert stat["physical_address"].startswith(f"s3://{d.cfg.s3.bucket}/{d.lakefs.resolve_lakefs_repo(d_row)}/")
-    old = await owner_client.get(f"/spaces/owner/dup-space-dst/resolve/{first}/app.py")
-    assert (old.status_code, old.content) == (200, b"print(1)")
+    assert await d.client.get_object(repository=d.lakefs.resolve_lakefs_repo(d_row), ref=first, path="app.py") == b"print(1)"
     # A copy takes commits, and they are its own
     await Typed(d, owner_client, "dup-space-dst", "space").commit(_file("more.txt", "m"))
     assert len(await _log(d, d_row)) == len(s_log) + 1 and len(await _log(d, s_row)) == len(s_log)
@@ -308,22 +311,23 @@ async def test_a_copy_that_does_not_fit_the_quota_is_refused_before_it_exists(d,
     ],
     ids=["error", "conflict", "text"],
 )
-async def test_a_failed_copy_is_removed_and_never_answers_409(d, owner_client, monkeypatch, failure):
-    src = await Typed(d, owner_client, "dup-fail-src").create()
+async def test_a_failed_copy_is_removed_and_never_answers_409(d, owner_client, monkeypatch, request, failure):
+    kind = request.node.callspec.id  # a repository outlives the test that made it
+    src = await Typed(d, owner_client, f"dup-fail-{kind}-src").create()
     await src.commit(_file("a.txt", "a"))
 
     async def broken(*args, **kwargs):
         raise failure
 
     monkeypatch.setattr(d.dup, "_store_commits", broken)
-    response = await _dup(owner_client, src, "owner/dup-fail-dst")
+    response = await _dup(owner_client, src, f"owner/dup-fail-{kind}-dst")
     # A 409 would read as "the copy exists" to a client's exist_ok
     assert response.status_code == 500, response.text
     assert response.headers["x-error-code"] == "ServerError"
-    assert "Duplicating owner/dup-fail-src failed" in response.headers["x-error-message"]
-    assert _gone(d, "owner/dup-fail-dst")
+    assert f"Duplicating owner/dup-fail-{kind}-src failed" in response.headers["x-error-message"]
+    assert _gone(d, f"owner/dup-fail-{kind}-dst")
     monkeypatch.undo()  # the name is free again
-    assert (await _dup(owner_client, src, "owner/dup-fail-dst")).status_code == 200
+    assert (await _dup(owner_client, src, f"owner/dup-fail-{kind}-dst")).status_code == 200
 
 
 async def test_a_copy_main_cannot_move_to_is_removed(d, owner_client, monkeypatch):
@@ -388,6 +392,12 @@ async def test_the_lock_of_a_slow_copy_is_renewed(d, owner_client, monkeypatch):
         await asyncio.sleep(0.4)
         assert d.db.Repository.get_by_id(row.id).operation_until > first
     assert d.db.Repository.get_by_id(row.id).operation is None
+    # A lock someone else took stops the renewing: it is no longer ours to extend
+    async with d.dup._building(row):
+        d.db.Repository.update(operation="other:1").where(d.db.Repository.id == row.id).execute()
+        await asyncio.sleep(0.3)
+    assert d.db.Repository.get_by_id(row.id).operation == "other:1"  # and the release leaves it alone
+    d.db.Repository.update(operation=None, operation_until=None).where(d.db.Repository.id == row.id).execute()
     # A repository already held cannot be built
     token = d.lock.acquire(row.id, "other")
     with pytest.raises(HTTPException) as refused:
