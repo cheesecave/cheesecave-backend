@@ -56,10 +56,18 @@ async def test_gating_needs_the_permission_to_change_settings(member_client):
     assert response.status_code in (403, 404)  # the permission check comes before the refusal
 
 
+def _api(endpoint, token):
+    """The client of the matrix: the oldest ones (0.20) have no ``update_repo_settings`` to call."""
+    api = HfApi(endpoint=endpoint, token=token)
+    if not callable(getattr(api, "update_repo_settings", None)):
+        pytest.skip("this huggingface_hub has no update_repo_settings")
+    return api
+
+
 @pytest.mark.hf_client
 @pytest.mark.parametrize("value", ["auto", "manual"])
 async def test_update_repo_settings_of_huggingface_hub_raises_on_gating(live_server_url, hf_api_token, value):
-    api = HfApi(endpoint=live_server_url, token=hf_api_token)
+    api = _api(live_server_url, hf_api_token)
     with pytest.raises(HfHubHTTPError) as caught:
         await asyncio.to_thread(api.update_repo_settings, "owner/demo-model", gated=value)
     assert caught.value.response.status_code == 501
@@ -70,7 +78,7 @@ async def test_update_repo_settings_of_huggingface_hub_raises_on_gating(live_ser
 
 @pytest.mark.hf_client
 async def test_update_repo_settings_of_huggingface_hub_with_gating_off_is_accepted(live_server_url, hf_api_token):
-    api = HfApi(endpoint=live_server_url, token=hf_api_token)
+    api = _api(live_server_url, hf_api_token)
     await asyncio.to_thread(api.update_repo_settings, "owner/demo-model", gated=False)
     info = await asyncio.to_thread(api.model_info, "owner/demo-model")
     assert not info.gated
