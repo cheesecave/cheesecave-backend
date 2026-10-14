@@ -16,6 +16,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   keeps its whole history under the source's own commit ids, parents and dates, so the two git histories stay in sync.
   A failed copy is removed (`500`, never `409`, which a client's `exist_ok` would read as "it exists"); one a crash left
   behind is removed by the worker. Documented in `docs/api/repositories.md`.
+- **`list_lfs_files`** ([#66](https://github.com/cheesecave/cheesecave-backend/issues/66)). It answered `404`.
+  `GET /api/{type}s/{repo}/lfs-files` lists the LFS objects a repository stores (the Hub's `LFSFileInfo` shape, newest
+  first, `Link` paging). `permanently_delete_lfs_files` is answered `501` whatever it asks (`X-Error-Message` says why) and
+  deletes nothing: LFS objects are stored once for every repository, so one repository cannot free one on its own.
+  Garbage collection by the repository's LFS keep versions is what frees storage. See `docs/api/git-lfs.md`.
 
 ### Documentation
 

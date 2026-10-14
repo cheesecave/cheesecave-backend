@@ -448,6 +448,28 @@ Files use LFS if they meet **either** condition:
 - Older versions auto-deleted on new uploads
 - Manual GC via admin API
 
+### List a Repository's LFS Files
+
+`HfApi.list_lfs_files`: `GET /api/{repo_type}s/{namespace}/{name}/lfs-files` (write access). A JSON array, newest first,
+one entry per object, paged with `Link: <url>; rel="next"` (`limit` up to 1000):
+
+```json
+[{"filename": "ckpt/model.bin", "oid": "<sha256>", "fileOid": "<sha256>", "pushedAt": "2026-10-14T09:00:00.000000Z",
+  "ref": "refs/heads/main", "size": 52428800}]
+```
+
+`filename` and `size` are those of the object's latest version, `pushedAt` is when it was first pushed, `ref` the branch of
+that version (`null` when history does not say). An object garbage collection removed is not listed.
+
+### Permanently Deleting LFS Files Is Not Supported
+
+`HfApi.permanently_delete_lfs_files` posts to `POST /api/{repo_type}s/{namespace}/{name}/lfs-files/batch`, which answers
+`501` (`X-Error-Message: permanently_delete_lfs_files is not supported ...`) whatever the request says, and deletes nothing.
+
+LFS objects are stored once for every repository (see above), so one repository cannot free one on its own. What frees
+storage today is garbage collection: set the repository's **LFS keep versions** (repository settings) and the older versions
+of a file beyond it are collected once nothing else relies on them.
+
 ---
 
 ## Client Examples
