@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A commit id in the Hub's form (40 hex) or abbreviated is read like the full one** ([#12](https://github.com/cheesecave/cheesecave-backend/issues/12)).
+  `commit/{id}` and `commit/{id}/diff` looked the commit up in the database by the id as given, so a 40 hex id (what
+  `huggingface_hub` holds) found nothing: the author became the LakeFS committer and `user_id`, `committed_at`,
+  `description` were missing. They now use the commit's full id, answer it as `id`/`commit_id`, and answer a commit that
+  does not exist with `404 RevisionNotFound` instead of `500`. The commit list routes
+  (`commits/{branch}/operations`, `commits/unavailable-files`) take any form and answer under the id as it was asked,
+  so an older page that holds 64 hex and a newer one that holds 40 both find their ids; the unavailable-files page
+  returned nothing for a 40 hex id. `kohakuhub.utils.commit_id` holds the syntax of the forms. Nothing a client
+  receives changes.
 - **`resolve` tells a missing revision from a missing file** ([#58](https://github.com/cheesecave/cheesecave-backend/issues/58)).
   `GET`/`HEAD /{repo}/resolve/nope/<file>` answered `EntryNotFound`, so `hf_hub_download(revision="nope")`
   raised `EntryNotFoundError`; it is now `404 RevisionNotFound` (`RevisionNotFoundError`), and

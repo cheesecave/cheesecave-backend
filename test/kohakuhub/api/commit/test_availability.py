@@ -681,3 +681,51 @@ async def test_the_list_proves_nothing_from_an_object_the_head_links(m, owner_cl
     m.db.LfsObjectTombstone.create(sha256=hashlib.sha256(b"b v2").hexdigest(), state=m.gc.DELETED)
     quick = (await repo.quick([c6])).json()["commits"]
     assert quick[c6]["reset"]["reason"] == "lfs_missing"
+
+
+# ----- a commit id in any form (#12) -----
+
+
+async def test_the_list_answers_in_the_forms_it_was_asked_in(m, owner_client):
+    """The Hub says 40 hex, an older page or a script holds 64: each finds its own id among the answers."""
+    repo, (initial, c1, c2, c3, c4, c5) = await _linear(m, owner_client, "avail-forms")
+    full = (await repo.quick([initial, c1, c3, c5])).json()
+    asked = [c1, c1[:40], c3[:40], c5[:7], initial[:12]]
+    body = (await repo.quick(asked)).json()
+    assert set(body["commits"]) == set(asked)
+    assert body["commits"][c1] == body["commits"][c1[:40]] == full["commits"][c1]
+    assert body["commits"][c3[:40]] == full["commits"][c3]
+    assert body["commits"][c5[:7]] == full["commits"][c5]
+    assert body["commits"][initial[:12]] == full["commits"][initial]
+    assert body["head"] == full["head"] == c5
+
+    # What no commit has is left out; a name that is no commit id still answers under the commit's own id
+    body = (await repo.quick([c1[:40], "f" * 40, "%", "main"])).json()
+    assert set(body["commits"]) == {c1[:40], c5}  # "main" is c5, as it always was
+
+
+async def test_the_page_of_unavailable_files_takes_any_form_and_answers_as_asked(m, owner_client):
+    repo, (initial, c1, c2, c3, c4, c5) = await _linear(m, owner_client, "avail-files-forms")
+    url = f"/api/models/{repo.id}/commits/unavailable-files"
+    m.db.LfsObjectTombstone.create(sha256=hashlib.sha256(b"a v1").hexdigest(), state=m.gc.DELETED)
+    m.db.LfsObjectTombstone.create(sha256=hashlib.sha256(b"b v1").hexdigest(), state=m.gc.DELETED)
+
+    asked = [c1[:40], c3[:7], c1, c5, c1[:40].upper()]
+    body = (await owner_client.post(url, json={"commit_ids": asked})).json()
+    assert body == {"commits": {c1[:40]: ["a.bin"], c3[:7]: ["b.bin"], c1: ["a.bin"], c1[:40].upper(): ["a.bin"]}}
+    assert (await owner_client.post(url, json={"commit_ids": [c1]})).json() == {"commits": {c1: ["a.bin"]}}
+
+    # What is no commit id matches nothing, a LIKE wildcard included
+    for token in ("%", "_", "a%", "xyz", "main", "abcd", "ffffffff"):
+        assert (await owner_client.post(url, json={"commit_ids": [token]})).json() == {"commits": {}}, token
+
+
+@pytest.mark.parametrize("form", [64, 40, 12, 7])
+async def test_what_the_commit_page_asks_of_one_commit_is_the_same_in_every_form(m, owner_client, form):
+    repo, (initial, c1, c2, c3, c4, c5) = await _linear(m, owner_client, f"avail-one-{form}")
+    full = (await repo.preflight(c3)).json()
+    other = await repo.preflight(c3[:form])
+    assert other.status_code == 200 and other.json() == full
+    unavailable = await owner_client.get(f"/api/models/{repo.id}/commit/{c3[:form]}/unavailable-files")
+    assert unavailable.status_code == 200
+    assert unavailable.json() == (await owner_client.get(f"/api/models/{repo.id}/commit/{c3}/unavailable-files")).json()
