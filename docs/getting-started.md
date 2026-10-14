@@ -32,6 +32,7 @@ Everything you need to start using KohakuHub.
 ```bash
 export HF_ENDPOINT=http://your-kohakuhub-instance:28080
 export HF_TOKEN=your_token_here
+export HF_HUB_DISABLE_XET=1   # huggingface_hub >= 2.0: uploads of large files fail without it
 
 # Permanent
 echo 'export HF_ENDPOINT=http://localhost:28080' >> ~/.bashrc
@@ -67,6 +68,7 @@ kohub-cli org create my-team
 import os
 os.environ['HF_ENDPOINT'] = 'http://localhost:28080'
 os.environ['HF_TOKEN'] = 'your_token'
+os.environ['HF_HUB_DISABLE_XET'] = '1'  # huggingface_hub >= 2.0: KohakuHub has no Xet; see below
 
 from huggingface_hub import HfApi
 api = HfApi()
@@ -82,6 +84,11 @@ api.upload_file(
 from huggingface_hub import hf_hub_download
 path = hf_hub_download(repo_id="username/model", filename="config.json")
 ```
+
+> **Why `HF_HUB_DISABLE_XET`?** `huggingface_hub` 2.0 and later send large uploads through Xet, which KohakuHub does not
+> implement (and does not plan to); without the variable such an upload fails with
+> `HTTP status client error (404 Not Found) ... /xet-write-token/main`. Downloads and `huggingface_hub` 1.x are not
+> affected. Details: [HuggingFace-compatible API](api/huggingface-compatible.md#huggingface_hub-20-and-later-turn-xet-off-for-uploads).
 
 ---
 

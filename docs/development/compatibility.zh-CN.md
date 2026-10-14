@@ -15,6 +15,8 @@
 
 ## 不声明
 
+- Xet 存储。`huggingface_hub` 2.0 及以后的版本默认让 LFS 大小的文件走 Xet，除非设置 `HF_HUB_DISABLE_XET=1`（测试套件设置了它）。
+  不计划支持，见 issue #71。
 - transformers、diffusers、datasets、`hf` CLI，以及使用 LFS 的 git-over-HTTP 客户端。
 - 除路径式测试之外，bucket 名称出现在 S3 endpoint 中的部署方式。
 - 早于上表所列的 LakeFS 版本，以及 CI runner 之外的 Docker 主机。

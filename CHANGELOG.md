@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Documentation
+
+- **`huggingface_hub` 2.0 and later: how to upload to KohakuHub** ([#52](https://github.com/cheesecave/cheesecave-backend/issues/52),
+  [#71](https://github.com/cheesecave/cheesecave-backend/issues/71)). Those clients send every LFS-sized file through Xet,
+  which KohakuHub does not implement, and the upload fails with `HTTP status client error (404 Not Found) ... /xet-write-token/main`.
+  `HF_HUB_DISABLE_XET=1` makes them use the ordinary LFS upload (checked with 2.0.0 and 2.2.0 on a real stack, files of
+  3 and 20 MiB; 1.6.0 is not affected). The variable is now in the getting-started guide and the compatibility page, and
+  Xet support is recorded as not planned, with the reasons.
+
 ### Fixed
 
 - **One form of a commit id in every response: the Hub's 40 hex** ([#12](https://github.com/cheesecave/cheesecave-backend/issues/12)).

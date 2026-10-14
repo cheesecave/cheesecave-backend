@@ -392,9 +392,54 @@ pipe = StableDiffusionPipeline.from_pretrained(
 # Set HF_ENDPOINT=http://localhost:28080
 ```
 
+### `huggingface_hub` 2.0 and later: turn Xet off for uploads
+
+`huggingface_hub` 2.0 and later install `hf_xet` and send every LFS-sized file (a file above the repository's LFS
+threshold) through Hugging Face's Xet protocol first. KohakuHub stores files as Git LFS objects and does not implement
+Xet, so that upload fails before a byte is sent:
+
+```
+ConnectionError: Network error: Request error: HTTP status client error (404 Not Found),
+domain: http://<host>/api/models/<namespace>/<name>/xet-write-token/main
+```
+
+(a larger upload says `RuntimeError: Previous task error: Network error: ...` with the same `xet-write-token` URL).
+The switch is on the client side and no server answer can turn it off, so set `HF_HUB_DISABLE_XET=1` next to
+`HF_ENDPOINT`; the client then uses the ordinary LFS upload:
+
+```bash
+export HF_ENDPOINT=http://localhost:28080
+export HF_HUB_DISABLE_XET=1
+```
+
+In Python, set it before `huggingface_hub` is first imported:
+
+```python
+import os
+os.environ["HF_ENDPOINT"] = "http://localhost:28080"
+os.environ["HF_HUB_DISABLE_XET"] = "1"
+
+from huggingface_hub import HfApi
+```
+
+In a container or a CI job, pass it in the environment (`docker run -e HF_HUB_DISABLE_XET=1`, `env:` in a workflow).
+
+- **Affected:** uploads of LFS-sized files (`upload_file`, `upload_folder`, `create_commit`, `hf upload`) with
+  `huggingface_hub` 2.0 and later (checked with 2.0.0 and 2.2.0). Small files, downloads, and `huggingface_hub` 1.x and
+  older are not affected (checked with 1.6.0).
+- **Checked:** with the variable set, 2.0.0 and 2.2.0 upload a 3 MiB file and a 20 MiB file (three parts) against a real
+  stack.
+- **Cost:** the 2.x client uploads the parts of an LFS file one after the other on one connection, so a large upload can
+  be slower than Xet is on huggingface.co, where the client sends many parts in parallel.
+- **Not planned:** Xet needs a service in front of the object store that receives every uploaded byte. KohakuHub
+  uploads go to object storage directly through presigned URLs, and moving them through the application server would
+  send each byte through its network about four times and keep memory busy for the length of every upload. See
+  [#71](https://github.com/cheesecave/cheesecave-backend/issues/71) for the measurements and the options.
+
 ### Differences from HuggingFace Hub:
 
 **Not implemented:**
+- Xet storage (see above: set `HF_HUB_DISABLE_XET=1`)
 - Gated repositories (always `gated: false`)
 - Pipeline tags (always `null`)
 - Model cards parsing (use README.md YAML frontmatter)

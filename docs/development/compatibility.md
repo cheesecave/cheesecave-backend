@@ -15,6 +15,8 @@ What is exercised, where, and what is not claimed. Versions come from the CI wor
 
 ## Not claimed
 
+- Xet storage. `huggingface_hub` 2.0 and later upload LFS-sized files through Xet unless `HF_HUB_DISABLE_XET=1` is set;
+  the suite sets it. Not planned, see issue #71.
 - transformers, diffusers, datasets, the `hf` CLI, and git-over-HTTP clients with LFS.
 - Deployments where the bucket name appears inside the S3 endpoint, beyond the path-style test.
 - Older LakeFS releases than those listed, and any Docker host other than the CI runner.
