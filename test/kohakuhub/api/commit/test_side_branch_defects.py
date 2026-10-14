@@ -40,6 +40,12 @@ def sha(content: bytes) -> str:
     return hashlib.sha256(content).hexdigest()
 
 
+def pointer_blob(content: bytes) -> str:
+    """The oid the Hub says of an LFS file: the git blob id of its pointer (#12); its sha256 is lfs.oid."""
+    pointer = f"version https://git-lfs.github.com/spec/v1\noid sha256:{sha(content)}\nsize {len(content)}\n".encode()
+    return hashlib.sha1(b"blob %d\0" % len(pointer) + pointer).hexdigest()
+
+
 async def _tree(client, repo, ref):
     response = await client.get(f"/api/models/{repo.id}/tree/{ref}")
     assert response.status_code == 200, response.text
@@ -168,7 +174,7 @@ async def test_d3_branch_from_populated_main_during_the_window_is_200_without_an
         assert _rows(_repo_row(repo), "dev") == {}
         assert await _tree(owner_client, repo, "dev") == {
             "README.md": blob("hello"),
-            "w.bin": sha(b"w main"),
+            "w.bin": pointer_blob(b"w main"),
         }
 
 
@@ -252,7 +258,7 @@ async def test_d4_a_row_less_side_branch_path_reports_the_git_blob_id(m, owner_c
         assert response.status_code != 200, response.text  # refused (D2)
         tree = await _tree(owner_client, repo, "dev")
         assert tree["README.md"] == blob("hello")
-        assert tree["w.bin"] == sha(b"w main")
+        assert tree["w.bin"] == pointer_blob(b"w main")
         # The download and paths-info answer the same ids while the rows stay absent
         # (after the window, the first read seeds them and these read the rows instead)
         response = await owner_client.head(f"/models/{repo.id}/resolve/dev/README.md")
@@ -261,7 +267,7 @@ async def test_d4_a_row_less_side_branch_path_reports_the_git_blob_id(m, owner_c
             f"/api/models/{repo.id}/paths-info/dev", data={"paths": ["README.md", "w.bin"]}
         )
         by_path = {entry["path"]: entry["oid"] for entry in response.json()}
-        assert by_path == {"README.md": blob("hello"), "w.bin": sha(b"w main")}
+        assert by_path == {"README.md": blob("hello"), "w.bin": pointer_blob(b"w main")}
 
 
 # --- D5: an identical re-commit with no row is a no-op, not a 500 ---------------------

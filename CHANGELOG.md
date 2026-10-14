@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **One form of a commit id in every response: the Hub's 40 hex** ([#12](https://github.com/cheesecave/cheesecave-backend/issues/12)).
+  Repository info said `sha` in 40 hex while `revision/main`, the commit list, `X-Repo-Commit` and the rest said the
+  64 hex LakeFS has. `huggingface_hub` accepts a `parent_commit` of at most 40 hex (every other source of a sha made
+  `create_commit(parent_commit=...)` raise before it sent anything, a chain of commits included) and keeps its cache in a
+  folder named by the sha it is told: `snapshot_download(revision=model_info().sha)` returned a folder that did not exist
+  (2.0 and later) and diffusers' `from_pretrained` failed. Every place that says a commit now says the same form:
+  `sha`, `commit.oid`, `id`, `oid`, `parents`, `commitOid`, `commitUrl`, `new_commit_id`, `targetCommit`, `lastCommit.id`,
+  the `X-Repo-Commit` header, the workspace feed, and the ids in a commit's metadata. The form is set by
+  `commit_id_format` (`KOHAKU_HUB_COMMIT_ID_FORMAT`): `hub` (the default, 40 hex) or `full` (the 64 hex LakeFS has), a
+  transitional form for downstream systems that stored 64 hex and compare them with what a response says; `huggingface_hub`
+  refuses `full` as a `parent_commit`. **A system that stores the ids a response says and compares them with ids stored
+  earlier sees 40 hex where it saw 64: set `full` until it takes both.** Every request takes 64 hex, 40 hex or an
+  abbreviation, in either form, so an id stored earlier still works. Nothing is stored differently (no migration).
+- **The oid of an LFS file in a tree is the Hub's** (#12). `list_repo_tree` and `get_paths_info` said the sha256 as `oid`
+  (`RepoFile.blob_id`); the Hub says the git blob id of the LFS pointer, as `model_info(files_metadata=True)` already did.
+  The sha256 stays in `lfs.oid`.
 - **A commit id in the Hub's form (40 hex) or abbreviated is read like the full one** ([#12](https://github.com/cheesecave/cheesecave-backend/issues/12)).
   `commit/{id}` and `commit/{id}/diff` looked the commit up in the database by the id as given, so a 40 hex id (what
   `huggingface_hub` holds) found nothing: the author became the LakeFS committer and `user_id`, `committed_at`,

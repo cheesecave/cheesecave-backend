@@ -37,6 +37,7 @@ from kohakuhub.utils.lakefs import (
     resolve_revision,
 )
 from kohakuhub.utils.s3 import generate_download_presigned_url, parse_s3_uri
+from kohakuhub.utils.commit_id import hub_oid
 from kohakuhub.api.fallback import with_repo_fallback
 from kohakuhub.api.xet import XET_ENABLE
 from kohakuhub.api.quota.util import check_quota
@@ -387,7 +388,7 @@ async def get_revision(
     fields = repo_info_fields(
         repo_row,
         repo_type.value,
-        commit_id,
+        hub_oid(commit_id),
         last_modified,
         storage=bool(user) and bool(expand) and "storage" in expand,
     )
@@ -397,7 +398,7 @@ async def get_revision(
             "type": repo_type.value,
             "revision": revision,
             "commit": {
-                "oid": commit_id,
+                "oid": hub_oid(commit_id),
                 "date": commit_info.get("creation_date") if commit_info else None,
             },
             "xetEnabled": False,
@@ -558,7 +559,7 @@ async def _get_file_metadata(
 
     response_headers = {
         # Critical headers for HuggingFace client
-        "X-Repo-Commit": commit_hash or "",
+        "X-Repo-Commit": hub_oid(commit_hash) or "",
         "X-Linked-Etag": etag_value,  # Plain hex, not quoted
         "X-Linked-Size": str(file_size) if file_size else "0",
         "ETag": etag_value,  # Plain hex, not quoted

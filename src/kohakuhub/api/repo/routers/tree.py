@@ -21,6 +21,7 @@ from kohakuhub.db import File, Repository, User
 from kohakuhub.db_operations import get_repository, should_use_lfs
 from kohakuhub.lakefs_rest_client import get_lakefs_rest_client
 from kohakuhub.logger import get_logger
+from kohakuhub.utils.commit_id import hub_oid
 from kohakuhub.utils.lakefs import (
     get_lakefs_client,
     resolve_lakefs_repo,
@@ -28,6 +29,7 @@ from kohakuhub.utils.lakefs import (
 )
 from kohakuhub.api.fallback import with_repo_fallback
 from kohakuhub.api.repo.utils.hf import (
+    git_blob_id,
     hf_bad_request,
     hf_entry_not_found,
     hf_repo_not_found,
@@ -35,6 +37,7 @@ from kohakuhub.api.repo.utils.hf import (
     hf_server_error,
     is_lakefs_not_found_error,
     is_lakefs_revision_error,
+    lfs_pointer,
 )
 
 logger = get_logger("REPO")
@@ -116,13 +119,33 @@ def _format_commit_date(value) -> str | None:
     return value
 
 
+def _said(last_commit: dict | None) -> dict | None:
+    """A last commit as the response says it: the cache keeps the full id, the site says its form."""
+    return {**last_commit, "id": hub_oid(last_commit["id"])} if last_commit else last_commit
+
+
 def _serialize_last_commit(commit: dict) -> dict:
-    """Convert a LakeFS commit payload to the HF wire format."""
+    """Convert a LakeFS commit payload to the HF wire format (the id is the full one)."""
     return {
         "id": commit["id"],
         "title": commit.get("message", ""),
         "date": _format_commit_date(commit.get("creation_date")),
     }
+
+
+_SHA256 = re.compile(r"^[0-9a-f]{64}$")
+
+
+def _file_oid(checksum: str, size_bytes: int, is_lfs: bool) -> str:
+    """The Hub's oid of a file: its git blob id (``RepoFile.blob_id``).
+
+    An LFS file is a pointer in git, so its oid is the blob id of that pointer; its sha256 is ``lfs.oid``.
+    A regular file's checksum already is its blob id. Where an LFS file has no sha256 to build the pointer
+    from (a LakeFS checksum is all that is kept) the checksum stays, as it was.
+    """
+    if is_lfs and _SHA256.match(checksum or ""):
+        return git_blob_id(lfs_pointer(checksum, size_bytes))
+    return checksum
 
 
 def _build_lfs_payload(checksum: str, size_bytes: int) -> dict:
@@ -208,7 +231,7 @@ def _make_tree_item(
 
         file_obj = {
             "type": "file",
-            "oid": checksum,
+            "oid": _file_oid(checksum, size_bytes, is_lfs),
             "size": size_bytes,
             "path": path,
         }
@@ -221,7 +244,7 @@ def _make_tree_item(
             file_obj["lfs"] = _build_lfs_payload(checksum, size_bytes)
 
         if expand:
-            file_obj["lastCommit"] = last_commit
+            file_obj["lastCommit"] = _said(last_commit)
             file_obj["securityFileStatus"] = None
 
         return file_obj
@@ -238,7 +261,7 @@ def _make_tree_item(
         dir_obj["lastModified"] = last_modified
 
     if expand:
-        dir_obj["lastCommit"] = last_commit
+        dir_obj["lastCommit"] = _said(last_commit)
 
     return dir_obj
 
@@ -390,7 +413,7 @@ async def _process_single_path(
                 "type": "file",
                 "path": clean_path,
                 "size": size_bytes,
-                "oid": checksum,
+                "oid": _file_oid(checksum, size_bytes, is_lfs),
             }
 
             last_modified = _format_last_modified(obj_stats.get("mtime"))
@@ -670,7 +693,7 @@ async def get_paths_info(
             last_commit_map = {}
 
         for entry in existing_entries:
-            entry["lastCommit"] = last_commit_map.get(entry["path"])
+            entry["lastCommit"] = _said(last_commit_map.get(entry["path"]))
             if entry["type"] == "file":
                 entry["securityFileStatus"] = None
 

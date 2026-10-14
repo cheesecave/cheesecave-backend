@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 from types import SimpleNamespace
 from urllib.parse import parse_qs, urlparse
@@ -1674,6 +1675,9 @@ async def test_last_commit_cache_keeps_to_its_size(last_commit_log, monkeypatch)
 
 SIDE_OID = "d" * 64  # the LFS object the side branch links at weights.bin
 BLOB_HELLO = "b6fc4c620b67d95f953a5c1c1230aaab5db5a1b0"  # git blob of "hello"
+# The oid of an LFS file is the git blob id of its pointer, as on the Hub (#12); its sha256 is lfs.oid
+_SIDE_POINTER = f"version https://git-lfs.github.com/spec/v1\noid sha256:{SIDE_OID}\nsize 10\n".encode()
+SIDE_POINTER_OID = hashlib.sha1(b"blob %d\0" % len(_SIDE_POINTER) + _SIDE_POINTER).hexdigest()
 
 
 class _BranchLakeFS(_FakeLakeFSClient):
@@ -1745,7 +1749,7 @@ async def test_list_repo_tree_on_a_side_branch_reports_its_own_identities(monkey
         limit=None,
     )
     items = {item["path"]: item for item in _json_body(response)}
-    assert items["weights.bin"]["oid"] == SIDE_OID
+    assert items["weights.bin"]["oid"] == SIDE_POINTER_OID
     assert items["weights.bin"]["lfs"]["oid"] == SIDE_OID
     assert items["README.md"]["oid"] == BLOB_HELLO
     assert "lfs" not in items["README.md"]
@@ -1808,6 +1812,6 @@ async def test_get_paths_info_on_a_side_branch_reports_its_own_identities(monkey
         expand=False,
     )
     by_path = {entry["path"]: entry for entry in entries}
-    assert by_path["weights.bin"]["oid"] == SIDE_OID
+    assert by_path["weights.bin"]["oid"] == SIDE_POINTER_OID
     assert by_path["weights.bin"]["lfs"]["oid"] == SIDE_OID
     assert by_path["README.md"]["oid"] == BLOB_HELLO

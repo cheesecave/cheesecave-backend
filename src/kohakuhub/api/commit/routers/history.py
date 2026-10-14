@@ -17,6 +17,7 @@ from kohakuhub.logger import get_logger
 from kohakuhub.auth.dependencies import get_optional_user
 from kohakuhub.auth.permissions import check_repo_read_permission
 from kohakuhub.utils.lakefs import resolve_lakefs_repo
+from kohakuhub.utils.commit_id import hub_metadata, hub_oid, hub_oids
 from kohakuhub.api.commit.availability import mark_lfs_statuses
 from kohakuhub.api.repo.utils.hf import (
     ensure_revision_in_history,
@@ -47,7 +48,7 @@ def _to_hf_commit_response(commit: dict, include_formatted: bool) -> dict:
         )
 
     payload = {
-        "id": commit["id"],
+        "id": hub_oid(commit["id"]),
         "title": title,
         "message": message,
         "date": created_at,
@@ -151,14 +152,14 @@ async def list_commits(
 
                 commits.append(
                     {
-                        "id": commit["id"],
-                        "oid": commit["id"],
+                        "id": hub_oid(commit["id"]),
+                        "oid": hub_oid(commit["id"]),
                         "title": commit.get("message", ""),
                         "message": commit.get("message", ""),
                         "date": commit.get("creation_date"),
                         "author": author,
                         "email": commit.get("metadata", {}).get("email", ""),
-                        "parents": commit.get("parents", []),
+                        "parents": hub_oids(commit.get("parents", [])),
                     }
                 )
             except Exception as ex:
@@ -238,13 +239,13 @@ async def get_commit_detail(
 
         # Build response
         response = {
-            "id": lakefs_commit["id"],
-            "oid": lakefs_commit["id"],
+            "id": hub_oid(lakefs_commit["id"]),
+            "oid": hub_oid(lakefs_commit["id"]),
             "title": lakefs_commit.get("message", ""),
             "message": lakefs_commit.get("message", ""),
             "date": lakefs_commit.get("creation_date"),
-            "parents": lakefs_commit.get("parents", []),
-            "metadata": lakefs_commit.get("metadata", {}),
+            "parents": hub_oids(lakefs_commit.get("parents", [])),
+            "metadata": hub_metadata(lakefs_commit.get("metadata", {})),
         }
 
         # Add user info if we have it in our database
@@ -507,8 +508,8 @@ async def get_commit_diff(
         our_commit = get_commit(lakefs_commit["id"], repo_row)
 
         response = {
-            "commit_id": lakefs_commit["id"],
-            "parent_commit": parent_id,
+            "commit_id": hub_oid(lakefs_commit["id"]),
+            "parent_commit": hub_oid(parent_id),
             "message": lakefs_commit.get("message", ""),
             "author": (
                 our_commit.author.username  # Use FK relationship

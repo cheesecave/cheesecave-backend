@@ -13,6 +13,7 @@ dependencies. Web/admin maintain their own package scripts and CI.
 | generate_secret.py | Generate credentials for manual configuration |
 | migrate_config.py | Preserve/convert legacy backend config formats |
 | clear_s3_storage.py / show_s3_usage.py | Storage administration; review targets before destructive use |
+| commit_id_consumers.sh | Read-only: counts, from the gateway log, who sends 64 hex commit ids and who reads commit ids from responses; run on the host before changing `commit_id_format` (see docs/api/commits.md) |
 | dev/run_backend.sh / dev/run_worker.sh | Start API / background worker against local persisted services |
 | dev/up_infra.sh / dev/down_infra.sh | Manage local development dependencies |
 | dev/seed_demo_data.py / dev/verify_seed_data.py | Deterministic local demo fixtures |

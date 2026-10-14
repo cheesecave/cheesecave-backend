@@ -301,3 +301,28 @@ def test_lakefs_operation_concurrency_defaults_and_rejects_zero():
     assert hub_config.LakeFSConfig().operation_concurrency == 8
     with pytest.raises(ValueError):
         hub_config.LakeFSConfig(operation_concurrency=0)
+
+
+def test_commit_id_format_is_the_hubs_unless_the_site_says_otherwise(monkeypatch):
+    """Settings are read from CHEESE_CAVE_<NAME> first, then KOHAKU_HUB_<NAME> (#12)."""
+
+    def load():
+        hub_config.load_config.cache_clear()
+        monkeypatch.setattr(hub_config.os.path, "exists", lambda _path: False)
+        try:
+            return hub_config.load_config(path="/tmp/missing.toml").app.commit_id_format
+        finally:
+            hub_config.load_config.cache_clear()
+
+    for key in list(hub_config.os.environ):
+        if key.startswith(("KOHAKU_HUB_", "CHEESE_CAVE_")):
+            monkeypatch.delenv(key, raising=False)
+    assert hub_config.AppConfig().commit_id_format == "hub"
+    assert load() == "hub"
+    monkeypatch.setenv("KOHAKU_HUB_COMMIT_ID_FORMAT", "FULL")
+    assert load() == "full"  # any case
+    monkeypatch.setenv("CHEESE_CAVE_COMMIT_ID_FORMAT", "hub")
+    assert load() == "hub"  # the new prefix wins
+    monkeypatch.setenv("CHEESE_CAVE_COMMIT_ID_FORMAT", "git")
+    with pytest.raises(ValueError, match="commit_id_format"):
+        load()

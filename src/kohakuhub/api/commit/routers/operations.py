@@ -27,6 +27,7 @@ from kohakuhub.logger import get_logger
 from kohakuhub.auth.dependencies import get_current_user
 from kohakuhub.auth.permissions import check_repo_write_permission
 from kohakuhub.utils.lakefs import get_lakefs_client, resolve_lakefs_repo
+from kohakuhub.utils.commit_id import hub_oid
 from kohakuhub.utils.repo_paths import MAX_PATH_BYTES, too_long
 from kohakuhub.lfs_scope import may_reference
 from kohakuhub.utils.s3 import get_object_metadata, object_exists
@@ -988,10 +989,10 @@ async def _no_change_response(client, lakefs_repo: str, revision: str, repo_type
         commit_id = branch["commit_id"]
     except Exception:
         commit_id = "no-changes"
-    commit_url = f"{build_public_repo_path(repo_type, repo_id)}/commit/{commit_id}"
+    commit_url = f"{build_public_repo_path(repo_type, repo_id)}/commit/{hub_oid(commit_id)}"
     return {
         "commitUrl": commit_url,
-        "commitOid": commit_id,
+        "commitOid": hub_oid(commit_id),
         "pullRequestUrl": None,
     }
 
@@ -1300,7 +1301,7 @@ async def _commit_on_leased_branch(
 
     # Generate commit URL
     commit_url = (
-        f"{build_public_repo_path(repo_type, repo_id)}/commit/{commit_result['id']}"
+        f"{build_public_repo_path(repo_type, repo_id)}/commit/{hub_oid(commit_result['id'])}"
     )
     logger.success(f"Commit URL: {commit_url}")
 
@@ -1346,6 +1347,6 @@ async def _commit_on_leased_branch(
 
     return {
         "commitUrl": commit_url,
-        "commitOid": commit_result["id"],
+        "commitOid": hub_oid(commit_result["id"]),
         "pullRequestUrl": None,
     }

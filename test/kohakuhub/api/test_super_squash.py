@@ -21,6 +21,8 @@ from test.kohakuhub.api.commit.test_availability import Repo, _delete, _file, _l
 from test.kohakuhub.api.helpers import encode_ndjson
 from test.kohakuhub.support.db import history_operations_need_postgres, put_the_old_file_key_back
 
+pytestmark = pytest.mark.usefixtures("commit_ids_in_full")
+
 MIGRATION = (
     Path(__file__).resolve().parents[3]
     / "scripts"
