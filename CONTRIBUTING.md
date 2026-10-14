@@ -743,6 +743,28 @@ configuration change: `src/**` (except Markdown), `test/**`, `scripts/**`, `dock
 files, `pyproject.toml`, `pytest.ini`, `.coveragerc`, `Makefile` and the workflow itself. Changes that
 touch only documentation, images or other resources do not start the full test matrix.
 
+**How the suite is split.** One pull request runs 20 jobs, the size of the organization's runner pool,
+so it finishes in one wave (about 16 minutes) instead of queueing behind itself:
+
+- Every full cell runs the whole suite cut into 3 slices of whole files (`scripts/ci/shard.py`;
+  `scripts/ci/shard_durations.json` holds the seconds each file takes). The cells: Python 3.12 with the
+  newest `huggingface_hub`, Python 3.10 with the oldest (0.20.3), Python 3.11 with 1.0.1, the oldest
+  supported LakeFS (1.48.1) with the cache off, an S3 endpoint with a path, and SQLite.
+- Two more `huggingface_hub` versions (0.36.2, 2.0.0) run only the tests marked `hf_client`, the ones that
+  call the client. The rest of the suite does not care which client is installed.
+- The daily run and a manual dispatch add the other client versions, the bundled LakeFS with the cache
+  off, and SQLite on 3.10 (`scripts/ci/matrix.py` lists every cell).
+- `backend tests gate` adds up the coverage of every slice and cell, fails under 80 %, uploads the total
+  to Codecov once and fails if any test job failed. Use it as the one required check.
+
+A slice runs on your machine like this (a new test file counts as the median until the table is
+refreshed with `python -m scripts.ci.shard junit.xml > scripts/ci/shard_durations.json`):
+
+```bash
+PYTEST_ADDOPTS="-p scripts.ci.shard --shard 2/3" make test-backend COV_FAIL_UNDER=0
+PYTEST_ADDOPTS="-m hf_client" make test-backend COV_FAIL_UNDER=0   # the client-only cell
+```
+
 **What coverage measures.** Coverage counts the application's runtime code: all of `src/kohakuhub/`,
 including its `utils/` modules when the application imports them. It excludes:
 

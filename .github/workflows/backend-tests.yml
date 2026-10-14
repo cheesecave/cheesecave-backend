@@ -2,6 +2,8 @@ name: Backend tests
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: "17 3 * * *"  # the daily run adds the cells scripts/ci/matrix.py keeps off pull requests
   # Only code, tests, build and deployment configuration start this workflow.
   # Documentation, images and other resources do not.
   pull_request:
@@ -45,25 +47,32 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  backend-tests:
-    name: backend unit tests
+  plan:
+    name: plan the test cells
     runs-on: ubuntu-latest
-    timeout-minutes: 120  # the suite takes 45 to 60 minutes on a runner: 60 cancelled jobs that were passing
+    timeout-minutes: 5
+    outputs:
+      main: ${{ steps.plan.outputs.main }}
+      cache: ${{ steps.plan.outputs.cache }}
+      s3: ${{ steps.plan.outputs.s3 }}
+      sqlite: ${{ steps.plan.outputs.sqlite }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - id: plan
+        run: python3 -m scripts.ci.matrix "${{ github.event_name }}"
+
+  backend-tests:
+    name: >-
+      backend unit tests (${{ matrix.python-version }}, ${{ matrix.huggingface-hub-version }}${{
+      matrix.subset == 'hf' && ', client only' || '' }}${{ matrix.shard && format(', slice {0}', matrix.shard) || '' }})
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 45  # a slice of the suite takes about 15 minutes; the whole suite took 45 to 60
     strategy:
       fail-fast: false
-      matrix:
-        python-version:
-          - "3.10"
-          - "3.11"
-          - "3.12"
-        huggingface-hub-version:
-          - "0.20.3"
-          - "0.30.2"
-          - "0.36.2"
-          - "1.0.1"
-          - "1.6.0"
-          - "2.0.0"
-          - "latest"
+      matrix: ${{ fromJSON(needs.plan.outputs.main) }}
     env:
       KOHAKU_HUB_DB_BACKEND: postgres
       KOHAKU_HUB_DATABASE_URL: postgresql://hub_test:hub_test_password@127.0.0.1:25432/kohakuhub_test
@@ -131,6 +140,10 @@ jobs:
           LAKEFS_AUTH_ENCRYPT_SECRET_KEY: 0123456789abcdef0123456789abcdef
           LAKEFS_LOGGING_FORMAT: text
           LAKEFS_LISTEN_ADDRESS: 0.0.0.0:8000
+          # LakeFS keeps a deleted repository readable for 5 s (its repository cache), and the
+          # test fixture waits for the 404 on every restore: 6 s of the 9 s. 100 ms removes it.
+          LAKEFS_GRAVELER_REPOSITORY_CACHE_EXPIRY: 100ms
+          LAKEFS_GRAVELER_REPOSITORY_CACHE_JITTER: 0s
         ports:
           - 28000:8000
         options: >-
@@ -172,28 +185,28 @@ jobs:
           fi
 
       - name: Run backend tests with coverage
+        env:
+          SHARD: ${{ matrix.shard }}
+          SUBSET: ${{ matrix.subset }}
+          COVERAGE_FILE: .coverage.${{ github.job }}.${{ strategy.job-index }}
         run: |
-          make test-backend
+          # PYTEST_ADDOPTS carries the slice and the marker into the Makefile's pytest line;
+          # the coverage gate runs once over every slice (backend-gate), not in each job.
+          opts=""
+          [ -n "$SHARD" ] && opts="$opts -p scripts.ci.shard --shard $SHARD"
+          [ "$SUBSET" = hf ] && opts="$opts -m hf_client"
+          PYTEST_ADDOPTS="$opts" make test-backend COV_FAIL_UNDER=0 COV_TYPES=term-missing
 
-      - name: Upload backend coverage to Codecov
+      - name: Keep the coverage data for the gate
         if: ${{ !cancelled() }}
-        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
-        with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          files: coverage.xml
-          disable_search: true
-          flags: backend,py${{ matrix.python-version }},hf${{ matrix.huggingface-hub-version }}
-          name: backend-tests-py${{ matrix.python-version }}-hf${{ matrix.huggingface-hub-version }}
-          fail_ci_if_error: false
-          verbose: true
-
-      - name: Upload backend coverage artifact
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
-          name: backend-coverage-py${{ matrix.python-version }}-hf${{ matrix.huggingface-hub-version }}
-          path: coverage.xml
+          name: coverage-data-${{ github.job }}-${{ strategy.job-index }}
+          path: .coverage.*
+          include-hidden-files: true
 
   backend-tests-cache-disabled:
+    needs: plan
     # The "cache must never be on the correctness critical path" contract
     # has its own dedicated job: a single Python / huggingface_hub combo
     # with KOHAKU_HUB_CACHE_ENABLED=false. If the suite ever takes a hard
@@ -204,15 +217,12 @@ jobs:
     #
     # It also runs on the oldest LakeFS release KohakuHub supports, so that
     # claim stays true (docs/deployment/lakefs.md, kohakuhub.lakefs_compat).
-    name: backend tests (cache disabled, LakeFS ${{ matrix.lakefs }})
+    name: backend tests (cache disabled, LakeFS ${{ matrix.lakefs }}, slice ${{ matrix.shard }})
     runs-on: ubuntu-latest
-    timeout-minutes: 120  # the suite takes 45 to 60 minutes on a runner: 60 cancelled jobs that were passing
+    timeout-minutes: 45
     strategy:
       fail-fast: false
-      matrix:
-        lakefs:
-          - "1.86.0" # bundled
-          - "1.48.1" # oldest supported
+      matrix: ${{ fromJSON(needs.plan.outputs.cache) }}  # 1.48.1, the oldest supported, on every PR; the bundled 1.86.0 daily
     env:
       KOHAKU_HUB_DB_BACKEND: postgres
       KOHAKU_HUB_DATABASE_URL: postgresql://hub_test:hub_test_password@127.0.0.1:25432/kohakuhub_test
@@ -275,6 +285,10 @@ jobs:
           LAKEFS_AUTH_ENCRYPT_SECRET_KEY: 0123456789abcdef0123456789abcdef
           LAKEFS_LOGGING_FORMAT: text
           LAKEFS_LISTEN_ADDRESS: 0.0.0.0:8000
+          # LakeFS keeps a deleted repository readable for 5 s (its repository cache), and the
+          # test fixture waits for the 404 on every restore: 6 s of the 9 s. 100 ms removes it.
+          LAKEFS_GRAVELER_REPOSITORY_CACHE_EXPIRY: 100ms
+          LAKEFS_GRAVELER_REPOSITORY_CACHE_JITTER: 0s
         ports:
           - 28000:8000
         options: >-
@@ -312,29 +326,39 @@ jobs:
           python -m pip install --upgrade huggingface_hub
 
       - name: Run backend tests with cache disabled
+        env:
+          SHARD: ${{ matrix.shard }}
+          SUBSET: ${{ matrix.subset }}
+          COVERAGE_FILE: .coverage.${{ github.job }}.${{ strategy.job-index }}
         run: |
-          make test-backend
+          # PYTEST_ADDOPTS carries the slice and the marker into the Makefile's pytest line;
+          # the coverage gate runs once over every slice (backend-gate), not in each job.
+          opts=""
+          [ -n "$SHARD" ] && opts="$opts -p scripts.ci.shard --shard $SHARD"
+          [ "$SUBSET" = hf ] && opts="$opts -m hf_client"
+          PYTEST_ADDOPTS="$opts" make test-backend COV_FAIL_UNDER=0 COV_TYPES=term-missing
 
-      - name: Upload backend coverage to Codecov
+      - name: Keep the coverage data for the gate
         if: ${{ !cancelled() }}
-        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          files: coverage.xml
-          flags: backend,cache-off,lakefs${{ matrix.lakefs }}
-          name: backend-tests-cache-off-lakefs${{ matrix.lakefs }}
-          disable_search: true
-          fail_ci_if_error: false
+          name: coverage-data-${{ github.job }}-${{ strategy.job-index }}
+          path: .coverage.*
+          include-hidden-files: true
 
   backend-tests-s3-endpoint-path:
+    needs: plan
     # Production's layout (#133): the real bucket sits in the S3 endpoint's
     # path, KohakuHub's bucket is a key prefix inside it, and the one key
     # (shared with LakeFS) may only touch that bucket, as an R2 API token
     # scoped to one bucket. The whole suite runs this way, plus the tests in
     # test_s3_bucket_in_endpoint_stack.py, which check what is really stored.
-    name: backend tests (S3 endpoint with a path)
+    name: backend tests (S3 endpoint with a path, slice ${{ matrix.shard }})
     runs-on: ubuntu-latest
-    timeout-minutes: 120  # the suite takes 45 to 60 minutes on a runner: 60 cancelled jobs that were passing
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.s3) }}
     env:
       KOHAKU_HUB_DB_BACKEND: postgres
       KOHAKU_HUB_DATABASE_URL: postgresql://hub_test:hub_test_password@127.0.0.1:25432/kohakuhub_test
@@ -392,6 +416,10 @@ jobs:
           LAKEFS_AUTH_ENCRYPT_SECRET_KEY: 0123456789abcdef0123456789abcdef
           LAKEFS_LOGGING_FORMAT: text
           LAKEFS_LISTEN_ADDRESS: 0.0.0.0:8000
+          # LakeFS keeps a deleted repository readable for 5 s (its repository cache), and the
+          # test fixture waits for the 404 on every restore: 6 s of the 9 s. 100 ms removes it.
+          LAKEFS_GRAVELER_REPOSITORY_CACHE_EXPIRY: 100ms
+          LAKEFS_GRAVELER_REPOSITORY_CACHE_JITTER: 0s
         ports:
           - 28000:8000
         options: >-
@@ -441,34 +469,38 @@ jobs:
           python -m pip install --upgrade huggingface_hub
 
       - name: Run backend tests against an endpoint with a path
+        env:
+          SHARD: ${{ matrix.shard }}
+          SUBSET: ${{ matrix.subset }}
+          COVERAGE_FILE: .coverage.${{ github.job }}.${{ strategy.job-index }}
         run: |
-          make test-backend
+          # PYTEST_ADDOPTS carries the slice and the marker into the Makefile's pytest line;
+          # the coverage gate runs once over every slice (backend-gate), not in each job.
+          opts=""
+          [ -n "$SHARD" ] && opts="$opts -p scripts.ci.shard --shard $SHARD"
+          [ "$SUBSET" = hf ] && opts="$opts -m hf_client"
+          PYTEST_ADDOPTS="$opts" make test-backend COV_FAIL_UNDER=0 COV_TYPES=term-missing
 
-      - name: Upload backend coverage to Codecov
+      - name: Keep the coverage data for the gate
         if: ${{ !cancelled() }}
-        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          files: coverage.xml
-          flags: backend,s3-endpoint-path
-          name: backend-tests-s3-endpoint-path
-          disable_search: true
-          fail_ci_if_error: false
+          name: coverage-data-${{ github.job }}-${{ strategy.job-index }}
+          path: .coverage.*
+          include-hidden-files: true
 
   backend-tests-sqlite:
+    needs: plan
     # The full suite on the SQLite backend, with the same MinIO, LakeFS and Valkey
     # services as the PostgreSQL jobs but no PostgreSQL service: a green run proves
     # the suite has no Postgres dependency, and that SQLite behaves the same on
     # every test, not only the unit tests that need no services.
-    name: backend tests (sqlite, Python ${{ matrix.python-version }})
+    name: backend tests (sqlite, Python ${{ matrix.python-version }}, slice ${{ matrix.shard }})
     runs-on: ubuntu-latest
-    timeout-minutes: 120  # the suite takes 45 to 60 minutes on a runner: 60 cancelled jobs that were passing
+    timeout-minutes: 45
     strategy:
       fail-fast: false
-      matrix:
-        python-version:
-          - "3.10"
-          - "3.12"
+      matrix: ${{ fromJSON(needs.plan.outputs.sqlite) }}
     env:
       KOHAKU_HUB_DB_BACKEND: sqlite
       # A file, not ":memory:": the live-server tests reach the database from another thread.
@@ -514,6 +546,10 @@ jobs:
           LAKEFS_AUTH_ENCRYPT_SECRET_KEY: 0123456789abcdef0123456789abcdef
           LAKEFS_LOGGING_FORMAT: text
           LAKEFS_LISTEN_ADDRESS: 0.0.0.0:8000
+          # LakeFS keeps a deleted repository readable for 5 s (its repository cache), and the
+          # test fixture waits for the 404 on every restore: 6 s of the 9 s. 100 ms removes it.
+          LAKEFS_GRAVELER_REPOSITORY_CACHE_EXPIRY: 100ms
+          LAKEFS_GRAVELER_REPOSITORY_CACHE_JITTER: 0s
         ports:
           - 28000:8000
         options: >-
@@ -550,6 +586,61 @@ jobs:
       - name: Point the test database at a file in the runner temp directory
         run: echo "KOHAKU_HUB_DATABASE_URL=sqlite:///${RUNNER_TEMP}/kohakuhub-test.db" >> "$GITHUB_ENV"
 
-      - name: Run the full backend suite on SQLite
+      - name: Run the backend suite on SQLite
         run: |
-          python -m pytest test/kohakuhub -q -p no:cacheprovider
+          python -m pytest test/kohakuhub -q -p no:cacheprovider -p scripts.ci.shard --shard "${{ matrix.shard }}"
+
+  backend-gate:
+    # One place that says whether the backend suite is green, and the only place that judges
+    # coverage: the slices and cells each ran part of the suite, so the numbers add up here.
+    name: backend tests gate
+    needs: [plan, backend-tests, backend-tests-cache-disabled, backend-tests-s3-endpoint-path, backend-tests-sqlite]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
+        with:
+          pattern: coverage-data-*
+          merge-multiple: true
+
+      - name: Add up the coverage of every slice and cell
+        env:
+          PYTHONPATH: src
+        run: |
+          python -m pip install coverage
+          coverage combine
+          coverage report --fail-under=80 --skip-covered
+          coverage xml -o coverage.xml
+
+      - name: Upload the combined backend coverage to Codecov
+        if: ${{ !cancelled() }}
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: coverage.xml
+          disable_search: true
+          flags: backend
+          name: backend-tests
+          fail_ci_if_error: false
+          verbose: true
+
+      - name: Every test job must have passed
+        if: ${{ always() }}
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          python3 - <<'PY'
+          import json, os, sys
+          bad = {k: v["result"] for k, v in json.loads(os.environ["NEEDS"]).items() if v["result"] != "success"}
+          print(bad or "all green")
+          sys.exit(1 if bad else 0)
+          PY
