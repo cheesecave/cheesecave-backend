@@ -12,7 +12,7 @@ from test.kohakuhub.api.commit.test_availability import Repo, _delete, _file, _l
 from test.kohakuhub.support.db import history_operations_need_postgres
 
 
-pytestmark = history_operations_need_postgres
+pytestmark = [history_operations_need_postgres, pytest.mark.usefixtures("commit_ids_in_full")]
 
 
 @pytest.fixture

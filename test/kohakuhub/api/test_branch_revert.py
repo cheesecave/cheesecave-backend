@@ -19,6 +19,8 @@ from test.kohakuhub.api.test_branch_reset import (
 )
 from test.kohakuhub.support.db import history_operations_need_postgres
 
+pytestmark = pytest.mark.usefixtures("commit_ids_in_full")
+
 
 @pytest.fixture
 def m(prepared_backend_test_state, monkeypatch):

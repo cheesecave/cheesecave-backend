@@ -2,6 +2,7 @@
 
 import os
 from functools import lru_cache
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -161,6 +162,10 @@ class AppConfig(BaseModel):
     repository_revert_enabled: bool = True
     repository_reset_enabled: bool = True
     repository_squash_enabled: bool = True
+    # The form of a commit id in every response (#12). "hub": the 40 hex of the Hub, which huggingface_hub
+    # accepts as a parent_commit and names its cache folders by. "full": the 64 hex LakeFS says, a transitional
+    # form for downstream systems that stored them; huggingface_hub refuses it as a parent_commit.
+    commit_id_format: Literal["hub", "full"] = "hub"
     database_url: str = "sqlite:///./hub.db"
     database_key: str = (
         ""  # Encryption key for external tokens (generate with: openssl rand -hex 32)
@@ -543,6 +548,8 @@ def load_config(path: str = None) -> Config:
         app_env["repository_squash_enabled"] = (
             read_env("REPOSITORY_SQUASH_ENABLED").lower() == "true"
         )
+    if read_env("COMMIT_ID_FORMAT") is not None:
+        app_env["commit_id_format"] = read_env("COMMIT_ID_FORMAT").lower()
     if read_env("DB_BACKEND") is not None:
         app_env["db_backend"] = read_env("DB_BACKEND")
     if read_env("DATABASE_URL") is not None:

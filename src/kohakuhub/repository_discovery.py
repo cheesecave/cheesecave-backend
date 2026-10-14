@@ -11,6 +11,7 @@ from peewee import JOIN, fn
 from kohakuhub import repo_card
 from kohakuhub.db import Commit, Repository, RepositoryCard, RepositoryFacet, RepositoryMetadata, utcnow
 from kohakuhub.logger import get_logger
+from kohakuhub.utils.commit_id import hub_oid
 from kohakuhub.utils.lakefs import get_lakefs_client, resolve_lakefs_repo
 
 logger = get_logger("DISCOVERY")
@@ -432,7 +433,7 @@ def serialize_items(rows: list) -> list[dict]:
                 "id": row.full_id,
                 "author": row.namespace,
                 "private": row.private,
-                "sha": record.main_sha if record else None,
+                "sha": hub_oid(record.main_sha) if record else None,
                 "createdAt": row.created_at.isoformat(),
                 "lastModified": (
                     heads[row.id][1].isoformat() if row.id in heads else row.created_at.isoformat()

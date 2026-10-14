@@ -30,7 +30,7 @@ from test.kohakuhub.api.commit.test_concurrent_commits import (  # noqa: F401 - 
     m,
 )
 
-pytestmark = pytest.mark.hf_client
+pytestmark = [pytest.mark.hf_client, pytest.mark.usefixtures("commit_ids_in_full")]
 
 
 def _upload(api, repo_id, i, content):
@@ -138,8 +138,10 @@ async def test_parallel_uploads_that_try_again_all_land(
 
 
 async def test_create_commit_on_a_stale_parent_commit(
-    m, owner_client, live_server_url, hf_api_token
+    m, owner_client, live_server_url, hf_api_token, monkeypatch
 ):
+    # The client holds a sha as the Hub says it: huggingface_hub refuses a parent_commit longer than 40 hex
+    monkeypatch.setattr(m.cfg.app, "commit_id_format", "hub")
     api = HfApi(endpoint=live_server_url, token=hf_api_token)
     repo = await _new(m, owner_client, "hf-parent")
 

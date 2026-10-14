@@ -21,6 +21,8 @@ from kohakuhub import lakefs_rest_client
 from test.kohakuhub.api.commit.test_availability import Repo, _file, _live, lfs
 from test.kohakuhub.api.helpers import encode_ndjson
 
+pytestmark = pytest.mark.usefixtures("commit_ids_in_full")
+
 
 @pytest.fixture
 def m(prepared_backend_test_state, monkeypatch):

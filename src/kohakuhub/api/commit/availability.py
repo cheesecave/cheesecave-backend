@@ -34,6 +34,7 @@ from kohakuhub.config import cfg
 from kohakuhub.db import LFSObjectHistory, LfsHeadRef, LfsObjectTombstone, Repository
 from kohakuhub.lfs_gc import deleted_shas, lfs_key, lfs_oid
 from kohakuhub.logger import get_logger
+from kohakuhub.utils.commit_id import FULL_LENGTH, is_commit_like, refers_to
 from kohakuhub.utils.s3 import get_s3_client
 
 logger = get_logger("AVAILABILITY")
@@ -301,18 +302,35 @@ def introduced_unavailable(repo: Repository, commit_ids: list[str]) -> dict[str,
     """The LFS files each commit committed (added, changed, restored, or
     re-committed unchanged) whose object garbage collection removed.
 
-    One query over the LFS history, whatever the history's length.
+    One query over the LFS history, whatever the history's length. A commit
+    is asked for by its full id, by the Hub's 40 hex or by an abbreviation
+    (a prefix), and answered under the id as it was asked: a page that holds
+    40 hex finds its own ids, and so does one that holds 64. What is no
+    commit id matches nothing.
     """
     H, T = LFSObjectHistory, LfsObjectTombstone
+    asked = [c for c in dict.fromkeys(commit_ids) if is_commit_like(c)]
+    wanted = None
+    for commit_id in asked:
+        lowered = commit_id.lower()
+        match = H.commit_id == lowered if len(lowered) == FULL_LENGTH else H.commit_id.startswith(lowered)
+        wanted = match if wanted is None else (wanted | match)
+    if wanted is None:
+        return {}
     found: dict[str, set[str]] = {}
-    for commit_id, path in (
+    for stored, path in (
         H.select(H.commit_id, H.path_in_repo)
         .join(T, on=(H.sha256 == T.sha256))
-        .where((H.repository == repo) & H.commit_id.in_(commit_ids))
+        .where((H.repository == repo) & wanted)
         .tuples()
     ):
-        found.setdefault(commit_id, set()).add(path)
-    return {commit_id: sorted(paths) for commit_id, paths in found.items()}
+        found.setdefault(stored, set()).add(path)
+    answers: dict[str, list[str]] = {}
+    for commit_id in asked:
+        paths = {path for stored, files in found.items() if refers_to(commit_id, stored) for path in files}
+        if paths:
+            answers[commit_id] = sorted(paths)
+    return answers
 
 
 async def revert_plan(

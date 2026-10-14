@@ -18,6 +18,7 @@ from kohakuhub.auth.dependencies import get_optional_user
 from kohakuhub.auth.permissions import check_repo_read_permission, check_repo_write_permission
 from kohakuhub.db import User
 from kohakuhub.db_operations import get_repository
+from kohakuhub.utils.commit_id import hub_oid, hub_oids, refers_to
 from kohakuhub.utils.lakefs import get_lakefs_client, resolve_lakefs_repo
 
 router = APIRouter()
@@ -100,12 +101,12 @@ async def commit_operations(
             client, lakefs_repo, commit, head, branch
         )
     return {
-        "commit": commit["id"],
+        "commit": hub_oid(commit["id"]),
         "branch": branch,
-        "head": head,
+        "head": hub_oid(head),
         "can_write": can_write,
         "operations": caps,
-        "parents": commit.get("parents") or [],
+        "parents": hub_oids(commit.get("parents")),
         **result,
     }
 
@@ -133,7 +134,7 @@ async def commits_operations(
     await ensure_revision_in_history(client, repo, lakefs_repo, branch)
     head = await _branch_head(client, lakefs_repo, branch)
     caps, can_write = availability.capabilities(), _can_write(repo, user)
-    response = {"branch": branch, "head": head, "can_write": can_write, "operations": caps}
+    response = {"branch": branch, "head": hub_oid(head), "can_write": can_write, "operations": caps}
     if not can_write or not any(caps.values()):
         return {**response, "commits": {}}
 
@@ -143,14 +144,26 @@ async def commits_operations(
         async with limit:
             return await _commit(client, lakefs_repo, commit_id)
 
-    found = await asyncio.gather(*(lookup(c) for c in dict.fromkeys(payload.commit_ids)))
-    commits = [commit for commit in found if commit is not None]
+    asked = list(dict.fromkeys(payload.commit_ids))
+    found = await asyncio.gather(*(lookup(c) for c in asked))
+    # Answered under the id as it was asked (the Hub's 40 hex, 64, an abbreviation): the commit's own
+    # id only for what is no commit id, such as a branch name
+    names: dict[str, list[str]] = {}
+    for commit_id, commit in zip(asked, found):
+        if commit is not None:
+            names.setdefault(commit["id"], []).append(
+                commit_id if refers_to(commit_id, commit["id"]) else hub_oid(commit["id"])
+            )
+    commits = [commit for commit in {c["id"]: c for c in found if c is not None}.values()]
     verdicts = await availability.quick_verdicts(client, lakefs_repo, repo, commits, head)
     for commit_verdicts in verdicts.values():
         for op in ("revert", "reset"):
             if not caps[op]:
                 commit_verdicts[op] = availability.verdict("disabled", op)
-    return {**response, "commits": verdicts}
+    return {
+        **response,
+        "commits": {name: v for full, v in verdicts.items() for name in dict.fromkeys(names[full])},
+    }
 
 
 @router.get("/{repo_type}s/{namespace}/{name}/commit/{commit_id}/unavailable-files")
@@ -181,7 +194,7 @@ async def commit_unavailable_files(
     files = await availability.unavailable_files(
         client, lakefs_repo, repo, commit["id"], branch, head
     )
-    response = {"commit": commit["id"], "branch": branch, "files": files}
+    response = {"commit": hub_oid(commit["id"]), "branch": branch, "files": files}
     if files is None:
         response["reason"] = "too_large"
     return response

@@ -20,6 +20,7 @@ By default, the application looks for `config.toml` in the current working direc
 | `KOHAKU_HUB_DEBUG_LOG_PAYLOADS`| If `true`, logs request and response payloads for debugging. | `false` |
 | `KOHAKU_HUB_REPOSITORY_REVERT_ENABLED` | Enables Revert, effective only when `db_backend` is exactly `postgres`. Set `false` to switch it off; see [Defaults](../api/branches.md#defaults). | `true` |
 | `KOHAKU_HUB_REPOSITORY_RESET_ENABLED` | Enables Reset, effective only when `db_backend` is exactly `postgres` and LakeFS is 1.48.1 or later ([LakeFS compatibility](../deployment/lakefs.md)). Set `false` to switch it off; see [Defaults](../api/branches.md#defaults). | `true` |
+| `KOHAKU_HUB_COMMIT_ID_FORMAT` | The form of a commit id in every response: `hub` is the 40 hex of the Hugging Face Hub, which `huggingface_hub` accepts as a `parent_commit` and names its cache folders by; `full` is the 64 hex LakeFS has, a **transitional** form for downstream systems that stored them (`huggingface_hub` refuses 64 hex as a `parent_commit`, so `datasets.push_to_hub` and chained `create_commit` calls fail with it). Requests take both forms whatever this says; see [Commit ids](../api/commits.md#commit-ids). | `hub` |
 | `KOHAKU_HUB_REPOSITORY_SQUASH_ENABLED` | Enables Super Squash, effective only when `db_backend` is exactly `postgres`. Set `false` to switch it off; see [Defaults](../api/branches.md#defaults). | `true` |
 
 ## Database Settings
