@@ -41,6 +41,10 @@ services:
       LAKEFS_BLOCKSTORE_S3_REGION: us-east-1
       LAKEFS_AUTH_ENCRYPT_SECRET_KEY: 0123456789abcdef0123456789abcdef
       LAKEFS_LISTEN_ADDRESS: 0.0.0.0:8000
+      # A deleted repository stays readable for the 5 s repository cache, and the test fixture
+      # waits for the 404 on every restore (6 s of 9 s). 100 ms removes the wait.
+      LAKEFS_GRAVELER_REPOSITORY_CACHE_EXPIRY: 100ms
+      LAKEFS_GRAVELER_REPOSITORY_CACHE_JITTER: 0s
       LAKEFS_LOGGING_FORMAT: text
     ports: ["127.0.0.1:${CI_LAKEFS_PORT:-28000}:8000"]
     volumes: ["lakefs-data:/home/lakefs"]
