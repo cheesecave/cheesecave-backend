@@ -13,7 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `gated=False` and `gated=True` were refused with `422` (the field was a string only), and `"auto"` / `"manual"`
   answered `200` while the repository stayed public, so a request for a gate looked like it had worked. Gated
   repositories are not supported, so: `False` (or no `gated`) is accepted and changes nothing, `True`, `"auto"` and
-  `"manual"` answer `501 {"error": "Gated repositories are not supported by this server."}` before anything is written
+  `"manual"` answer `501` (`X-Error-Message: gated access is not supported by KohakuHub. ...`, which the client shows its user) before anything is written
   (the other fields of the same request are not applied either), any other string is `400`.
 - **One form of a commit id in every response: the Hub's 40 hex** ([#12](https://github.com/cheesecave/cheesecave-backend/issues/12)).
   Repository info said `sha` in 40 hex while `revision/main`, the commit list, `X-Repo-Commit` and the rest said the

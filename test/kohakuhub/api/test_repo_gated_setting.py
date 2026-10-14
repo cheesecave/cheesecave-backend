@@ -27,14 +27,15 @@ async def test_turning_gating_off_succeeds_and_changes_nothing(owner_client, val
 async def test_turning_gating_on_is_refused_not_ignored(owner_client, value):
     response = await owner_client.put(f"{B}/settings", json={"gated": value})
     assert response.status_code == 501
-    assert "gated" in response.json()["detail"]["error"].lower()
+    assert response.headers["x-error-code"] == "NotImplemented"
+    assert "gated access is not supported" in response.headers["x-error-message"]
     assert (await owner_client.get(B)).json()["gated"] is False
 
 
 async def test_an_unknown_value_is_a_bad_request(owner_client):
     response = await owner_client.put(f"{B}/settings", json={"gated": "sometimes"})
     assert response.status_code == 400
-    assert "sometimes" in response.json()["detail"]["error"]
+    assert "sometimes" in response.headers["x-error-message"]
 
 
 async def test_a_refused_gating_applies_none_of_the_other_fields(owner_client):
@@ -62,6 +63,7 @@ async def test_update_repo_settings_of_huggingface_hub_raises_on_gating(live_ser
     with pytest.raises(HfHubHTTPError) as caught:
         await asyncio.to_thread(api.update_repo_settings, "owner/demo-model", gated=value)
     assert caught.value.response.status_code == 501
+    assert "gated access is not supported" in str(caught.value)  # the user reads why
     info = await asyncio.to_thread(api.model_info, "owner/demo-model")
     assert not info.gated
 

@@ -25,7 +25,7 @@ from kohakuhub.storage_cleanup import enqueue_lfs_window_review
 from kohakuhub.api.fallback import with_user_fallback
 from kohakuhub.api.fallback.cache import get_cache as get_fallback_cache
 from kohakuhub.api.quota.util import check_quota
-from kohakuhub.api.repo.utils.hf import hf_repo_not_found
+from kohakuhub.api.repo.utils.hf import hf_bad_request, hf_not_implemented, hf_repo_not_found
 from kohakuhub.auth.dependencies import get_current_user
 from kohakuhub.auth.permissions import check_repo_delete_permission
 from kohakuhub.utils.datetime_utils import safe_isoformat
@@ -343,16 +343,13 @@ async def update_repo_settings(
     # request that asks for a gate never answers 200 over a repository that stays public.
     if payload.gated not in (None, False):
         if payload.gated not in (True, "auto", "manual"):
-            raise HTTPException(
-                400,
-                detail={
-                    "error": f"Unsupported value for gated: {payload.gated!r}. "
-                    "Use False, 'auto' or 'manual'."
-                },
+            return hf_bad_request(
+                f"Unsupported value for gated: {payload.gated!r}. Use False, 'auto' or 'manual'."
             )
-        raise HTTPException(
-            501,
-            detail={"error": "Gated repositories are not supported by this server."},
+        # X-Error-Message is what the client shows its user
+        return hf_not_implemented(
+            "gated access",
+            "Nothing in this request was applied; gated=False is accepted",
         )
 
     # Update fields if provided
