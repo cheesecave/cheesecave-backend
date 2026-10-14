@@ -1,8 +1,9 @@
 """The cells of the "Backend tests" workflow, one JSON matrix per job.
 
 A pull request (and a push to main) runs the cells below in a single wave of the
-organization's runner pool (20 jobs at once on the free plan; test_ci_matrix.py checks the
-count). The daily run and a manual dispatch add the cells that only guard against drift.
+organization's runner pool (20 jobs at once on the free plan): keep it at 20 jobs or fewer,
+or a push queues behind itself. The daily run and a manual dispatch add the cells that only
+guard against drift.
 
 * ``full`` cells run the whole suite, cut into SHARDS slices of whole files (shard.py).
 * ``subset: hf`` cells run only the tests marked ``hf_client`` (the ones that call
