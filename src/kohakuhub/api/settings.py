@@ -25,7 +25,7 @@ from kohakuhub.storage_cleanup import enqueue_lfs_window_review
 from kohakuhub.api.fallback import with_user_fallback
 from kohakuhub.api.fallback.cache import get_cache as get_fallback_cache
 from kohakuhub.api.quota.util import check_quota
-from kohakuhub.api.repo.utils.hf import hf_repo_not_found
+from kohakuhub.api.repo.utils.hf import hf_bad_request, hf_not_implemented, hf_repo_not_found
 from kohakuhub.auth.dependencies import get_current_user
 from kohakuhub.auth.permissions import check_repo_delete_permission
 from kohakuhub.utils.datetime_utils import safe_isoformat
@@ -300,7 +300,7 @@ class UpdateRepoSettingsPayload(BaseModel):
 
     private: Optional[bool] = None
     visibility: Optional[str] = None
-    gated: Optional[str] = None  # "auto", "manual", or False/None
+    gated: bool | str | None = None  # the Hub takes False, "auto" and "manual"
     lfs_threshold_bytes: Optional[int] = None  # NULL = use server default
     lfs_keep_versions: Optional[int] = None  # NULL = use server default
     lfs_suffix_rules: Optional[list[str]] = None  # NULL = no suffix rules
@@ -338,6 +338,19 @@ async def update_repo_settings(
 
     # Check if user has permission to update this repository
     check_repo_delete_permission(repo_row, user)
+
+    # Gated repositories are not supported (#61): refuse before anything is written, so a
+    # request that asks for a gate never answers 200 over a repository that stays public.
+    if payload.gated not in (None, False):
+        if payload.gated not in (True, "auto", "manual"):
+            return hf_bad_request(
+                f"Unsupported value for gated: {payload.gated!r}. Use False, 'auto' or 'manual'."
+            )
+        # X-Error-Message is what the client shows its user
+        return hf_not_implemented(
+            "gated access",
+            "Nothing in this request was applied; gated=False is accepted",
+        )
 
     # Update fields if provided
     update_fields = {}
@@ -453,9 +466,6 @@ async def update_repo_settings(
     # only fire the eviction when ``private`` was the changed field.
     if "private" in update_fields:
         get_fallback_cache().invalidate_repo(repo_type, namespace, name)
-
-    # Note: gated functionality not yet implemented in database schema
-    # Would require adding a 'gated' field to Repository model
 
     return {"success": True, "message": "Repository settings updated successfully"}
 

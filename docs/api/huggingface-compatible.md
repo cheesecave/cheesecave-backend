@@ -440,7 +440,7 @@ In a container or a CI job, pass it in the environment (`docker run -e HF_HUB_DI
 
 **Not implemented:**
 - Xet storage (see above: set `HF_HUB_DISABLE_XET=1`)
-- Gated repositories (always `gated: false`)
+- Gated repositories (always `gated: false`; `update_repo_settings(gated="auto"|"manual")` answers `501` instead of pretending, `gated=False` is accepted)
 - Pipeline tags (always `null`)
 - Model cards parsing (use README.md YAML frontmatter)
 - Discussions/Community features
