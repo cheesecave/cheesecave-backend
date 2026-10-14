@@ -183,6 +183,8 @@ ensure_lakefs() {
     -e "LAKEFS_AUTH_ENCRYPT_SECRET_KEY=${DEV_LAKEFS_ENCRYPT_SECRET_KEY}" \
     -e LAKEFS_LOGGING_FORMAT=text \
     -e LAKEFS_LISTEN_ADDRESS=0.0.0.0:28000 \
+    -e LAKEFS_GRAVELER_REPOSITORY_CACHE_EXPIRY=100ms \
+    -e LAKEFS_GRAVELER_REPOSITORY_CACHE_JITTER=0s \
     -v "${LAKEFS_DATA_DIR}:/var/lakefs/data" \
     -v "${LAKEFS_CACHE_DIR}:/lakefs/data/cache" \
     treeverse/lakefs:1.86.0 >/dev/null  # docs/deployment/lakefs.md
