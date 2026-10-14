@@ -9,14 +9,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Duplicate a repository** ([#68](https://github.com/cheesecave/cheesecave-backend/issues/68)).
+  `huggingface_hub`'s `duplicate_repo` and `duplicate_space` called `POST /api/{type}s/{repo}/duplicate`, which was a 404.
+  It copies a repository in LakeFS rather than file by file (the storage keys in parallel, then the commit records): over
+  400 files a second on a local disk. A model or dataset arrives as one commit of `main`'s head, as on the Hub; a Space
+  keeps its whole history under the source's own commit ids, parents and dates, so the two git histories stay in sync.
+  A failed copy is removed (`500`, never `409`, which a client's `exist_ok` would read as "it exists"); one a crash left
+  behind is removed by the worker. Documented in `docs/api/repositories.md`.
 - **`list_lfs_files`** ([#66](https://github.com/cheesecave/cheesecave-backend/issues/66)). It answered `404`.
   `GET /api/{type}s/{repo}/lfs-files` lists the LFS objects a repository stores (the Hub's `LFSFileInfo` shape, newest
   first, `Link` paging). `permanently_delete_lfs_files` is answered `501` whatever it asks (`X-Error-Message` says why) and
   deletes nothing: LFS objects are stored once for every repository, so one repository cannot free one on its own.
   Garbage collection by the repository's LFS keep versions is what frees storage. See `docs/api/git-lfs.md`.
 
+### Documentation
+
+- **`huggingface_hub` 2.0 and later: how to upload to KohakuHub** ([#52](https://github.com/cheesecave/cheesecave-backend/issues/52),
+  [#71](https://github.com/cheesecave/cheesecave-backend/issues/71)). Those clients send every LFS-sized file through Xet,
+  which KohakuHub does not implement, and the upload fails with `HTTP status client error (404 Not Found) ... /xet-write-token/main`.
+  `HF_HUB_DISABLE_XET=1` makes them use the ordinary LFS upload (checked with 2.0.0 and 2.2.0 on a real stack, files of
+  3 and 20 MiB; 1.6.0 is not affected). The variable is now in the getting-started guide and the compatibility page, and
+  Xet support is recorded as not planned, with the reasons.
+
 ### Fixed
 
+- **`update_repo_settings(gated=...)` no longer pretends** ([#61](https://github.com/cheesecave/cheesecave-backend/issues/61)).
+  `gated=False` and `gated=True` were refused with `422` (the field was a string only), and `"auto"` / `"manual"`
+  answered `200` while the repository stayed public, so a request for a gate looked like it had worked. Gated
+  repositories are not supported, so: `False` (or no `gated`) is accepted and changes nothing, `True`, `"auto"` and
+  `"manual"` answer `501` (`X-Error-Message: gated access is not supported by KohakuHub. ...`, which the client shows its user) before anything is written
+  (the other fields of the same request are not applied either), any other string is `400`.
+- **Branch and tag names with a `/` work** ([#67](https://github.com/cheesecave/cheesecave-backend/issues/67)).
+  `create_branch(branch="feature/x")`, `create_tag(tag="release/v1.0")` and every route that takes a branch, tag or
+  revision (`upload_file(revision=...)`, `hf_hub_download(revision=...)`, `snapshot_download`, `list_repo_commits`,
+  `list_repo_tree`, `get_paths_info`, merge, revert, reset, super squash) answered `404` for such a name, because the
+  routes took one path segment and LakeFS takes only letters, digits, `_` and `-` in an id. The name is now spelled for
+  LakeFS in one place (`kohakuhub.utils.ref_name`, applied by the LakeFS client; a name LakeFS already took is
+  unchanged; nothing is stored differently, no migration). Where a revision is followed by a path the revision is the
+  longest branch or tag that starts it. Names git refuses (`a..b`, `x.lock`, a space...) are `400`, and as in git `a`
+  and `a/b` cannot both exist (`409`), which keeps `resolve/a/b/file` unambiguous. A tag that already exists is `409`
+  (it was `500`).
 - **One form of a commit id in every response: the Hub's 40 hex** ([#12](https://github.com/cheesecave/cheesecave-backend/issues/12)).
   Repository info said `sha` in 40 hex while `revision/main`, the commit list, `X-Repo-Commit` and the rest said the
   64 hex LakeFS has. `huggingface_hub` accepts a `parent_commit` of at most 40 hex (every other source of a sha made

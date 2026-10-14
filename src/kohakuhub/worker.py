@@ -15,6 +15,7 @@ import uuid
 from kohakuhub import tasks
 from kohakuhub import storage_cleanup  # noqa: F401 - registers the storage cleanup tasks
 from kohakuhub import usage  # noqa: F401 - registers the usage recount tasks
+from kohakuhub import duplicate_sweep  # noqa: F401 - registers the sweep of failed duplicates
 from kohakuhub import path_commits
 from kohakuhub.config import cfg
 from kohakuhub.db import BackgroundTask, BackgroundWorker, db

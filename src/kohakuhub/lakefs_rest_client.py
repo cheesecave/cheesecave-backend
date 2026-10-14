@@ -19,8 +19,22 @@ from pydantic import BaseModel, Field
 
 from kohakuhub.config import cfg
 from kohakuhub.logger import get_logger
+from kohakuhub.utils.ref_name import from_lakefs_ref, to_lakefs_ref, to_lakefs_revision
 
 logger = get_logger("LAKEFS_REST")
+
+
+def _named(payload):
+    """A LakeFS ref (or a page of them) with the Hub's names as ``id`` (#67).
+
+    Branch and tag names go to LakeFS spelled as ``to_lakefs_ref`` says and come back through here, so
+    nothing above this client sees the spelling. Pagination (``next_offset``) stays LakeFS's own.
+    """
+    if isinstance(payload, dict) and isinstance(payload.get("results"), list):
+        return {**payload, "results": [_named(ref) for ref in payload["results"]]}
+    if isinstance(payload, dict) and isinstance(payload.get("id"), str):
+        return {**payload, "id": from_lakefs_ref(payload["id"])}
+    return payload
 
 
 # httpx.Limits values picked so a single FastAPI worker can sustain
@@ -167,7 +181,7 @@ class LakeFSRestClient:
         Returns:
             Object content as bytes
         """
-        url = f"{self.base_url}/repositories/{repository}/refs/{ref}/objects"
+        url = f"{self.base_url}/repositories/{repository}/refs/{to_lakefs_revision(ref)}/objects"
         headers = {}
         if range_header:
             headers["Range"] = range_header
@@ -187,7 +201,7 @@ class LakeFSRestClient:
         self, repository: str, ref: str, path: str, max_bytes: int
     ) -> bytes:
         """Read a bounded prefix, even if storage ignores the Range header."""
-        url = f"{self.base_url}/repositories/{repository}/refs/{ref}/objects"
+        url = f"{self.base_url}/repositories/{repository}/refs/{to_lakefs_revision(ref)}/objects"
         chunks = bytearray()
         async with self._httpx().stream(
             "GET",
@@ -220,7 +234,7 @@ class LakeFSRestClient:
         Returns:
             ObjectStats dict with keys: path, path_type, physical_address, checksum, size_bytes, mtime, metadata, content_type
         """
-        url = f"{self.base_url}/repositories/{repository}/refs/{ref}/objects/stat"
+        url = f"{self.base_url}/repositories/{repository}/refs/{to_lakefs_revision(ref)}/objects/stat"
 
         client = self._httpx()
         response = await client.get(
@@ -252,7 +266,7 @@ class LakeFSRestClient:
         Returns:
             ObjectStats dict
         """
-        url = f"{self.base_url}/repositories/{repository}/branches/{branch}/objects"
+        url = f"{self.base_url}/repositories/{repository}/branches/{to_lakefs_ref(branch)}/objects"
 
         client = self._httpx()
         response = await client.post(
@@ -311,7 +325,7 @@ class LakeFSRestClient:
         Returns:
             ObjectStats dict
         """
-        url = f"{self.base_url}/repositories/{repository}/branches/{branch}/staging/backing"
+        url = f"{self.base_url}/repositories/{repository}/branches/{to_lakefs_ref(branch)}/staging/backing"
 
         # Convert StagingMetadata to dict if needed
         if isinstance(staging_metadata, StagingMetadata):
@@ -352,7 +366,7 @@ class LakeFSRestClient:
         Returns:
             Commit dict with keys: id, parents, committer, message, creation_date, meta_range_id, metadata
         """
-        url = f"{self.base_url}/repositories/{repository}/branches/{branch}/commits"
+        url = f"{self.base_url}/repositories/{repository}/branches/{to_lakefs_ref(branch)}/commits"
 
         commit_data = {"message": message}
         if metadata:
@@ -382,6 +396,7 @@ class LakeFSRestClient:
         parents: list[str],
         metadata: dict[str, str],
         generation: int,
+        version: int = 1,
     ) -> None:
         """Store a commit made of an existing metarange (LakeFS internal API).
 
@@ -393,7 +408,7 @@ class LakeFSRestClient:
         url = f"{self.base_url}/repositories/{repository}/commits"
         body = {
             "commit_id": commit_id,
-            "version": 1,
+            "version": version,
             "committer": committer,
             "message": message,
             "metarange_id": metarange_id,
@@ -411,7 +426,7 @@ class LakeFSRestClient:
     async def find_merge_base(self, repository: str, left: str, right: str) -> str | None:
         """The merge base of two refs (commit ids accepted), or ``None`` when
         they share no history."""
-        url = f"{self.base_url}/repositories/{repository}/refs/{left}/merge/{right}"
+        url = f"{self.base_url}/repositories/{repository}/refs/{to_lakefs_revision(left)}/merge/{to_lakefs_revision(right)}"
         client = self._httpx()
         response = await client.get(url, auth=self.auth, timeout=None)
         if response.status_code >= 400 and "no merge base" in response.text:
@@ -429,7 +444,7 @@ class LakeFSRestClient:
         Returns:
             Commit dict
         """
-        url = f"{self.base_url}/repositories/{repository}/commits/{commit_id}"
+        url = f"{self.base_url}/repositories/{repository}/commits/{to_lakefs_ref(commit_id)}"
 
         client = self._httpx()
         response = await client.get(url, auth=self.auth, timeout=None)
@@ -474,7 +489,7 @@ class LakeFSRestClient:
         Returns:
             Dict with results (list of Commit) and pagination.
         """
-        url = f"{self.base_url}/repositories/{repository}/refs/{ref}/commits"
+        url = f"{self.base_url}/repositories/{repository}/refs/{to_lakefs_revision(ref)}/commits"
         params: list[tuple[str, Any]] = []
         if after:
             params.append(("after", after))
@@ -525,7 +540,7 @@ class LakeFSRestClient:
         Returns:
             Dict with results (list of Diff) and pagination
         """
-        url = f"{self.base_url}/repositories/{repository}/refs/{left_ref}/diff/{right_ref}"
+        url = f"{self.base_url}/repositories/{repository}/refs/{to_lakefs_revision(left_ref)}/diff/{to_lakefs_revision(right_ref)}"
         params = {}
         if after:
             params["after"] = after
@@ -563,7 +578,7 @@ class LakeFSRestClient:
         Returns:
             Dict with results (list of ObjectStats) and pagination
         """
-        url = f"{self.base_url}/repositories/{repository}/refs/{ref}/objects/ls"
+        url = f"{self.base_url}/repositories/{repository}/refs/{to_lakefs_revision(ref)}/objects/ls"
 
         # Build params - only include non-empty values to avoid LakeFS issues
         params: dict[str, Any] = {"amount": amount}
@@ -594,7 +609,7 @@ class LakeFSRestClient:
             path: Object path
             force: Force deletion
         """
-        url = f"{self.base_url}/repositories/{repository}/branches/{branch}/objects"
+        url = f"{self.base_url}/repositories/{repository}/branches/{to_lakefs_ref(branch)}/objects"
 
         client = self._httpx()
         response = await client.delete(
@@ -604,7 +619,7 @@ class LakeFSRestClient:
 
     async def delete_objects(self, repository: str, branch: str, paths: list[str]) -> None:
         """Delete up to 1000 objects from ``branch`` in one request."""
-        url = f"{self.base_url}/repositories/{repository}/branches/{branch}/objects/delete"
+        url = f"{self.base_url}/repositories/{repository}/branches/{to_lakefs_ref(branch)}/objects/delete"
         client = self._httpx()
         response = await client.post(url, json={"paths": paths}, auth=self.auth, timeout=None)
         self._check_response(response)
@@ -703,18 +718,19 @@ class LakeFSRestClient:
         Returns:
             Reference dict with commit_id, id (branch name)
         """
-        url = f"{self.base_url}/repositories/{repository}/branches/{branch}"
+        url = f"{self.base_url}/repositories/{repository}/branches/{to_lakefs_ref(branch)}"
 
         client = self._httpx()
         response = await client.get(url, auth=self.auth, timeout=None)
         self._check_response(response)
-        return response.json()
+        return _named(response.json())
 
     async def list_branches(
         self,
         repository: str,
         after: str | None = None,
         amount: int | None = None,
+        prefix: str | None = None,
     ) -> dict[str, Any] | list[dict[str, Any]]:
         """List repository branches.
 
@@ -722,6 +738,7 @@ class LakeFSRestClient:
             repository: Repository name
             after: Pagination cursor
             amount: Number of branches to return
+            prefix: Only the ones whose name starts with this (a Hub name; a `/` is allowed)
 
         Returns:
             LakeFS branch list payload
@@ -732,6 +749,8 @@ class LakeFSRestClient:
             params["after"] = after
         if amount:
             params["amount"] = amount
+        if prefix:
+            params["prefix"] = to_lakefs_ref(prefix)
 
         client = self._httpx()
         response = await client.get(
@@ -741,7 +760,7 @@ class LakeFSRestClient:
             timeout=None,
         )
         self._check_response(response)
-        return response.json()
+        return _named(response.json())
 
     async def create_branch(self, repository: str, name: str, source: str) -> None:
         """Create branch.
@@ -756,7 +775,7 @@ class LakeFSRestClient:
         """
         url = f"{self.base_url}/repositories/{repository}/branches"
 
-        branch_data = {"name": name, "source": source}
+        branch_data = {"name": to_lakefs_ref(name), "source": to_lakefs_revision(source)}
 
         client = self._httpx()
         response = await client.post(
@@ -776,13 +795,22 @@ class LakeFSRestClient:
             branch: Branch name
             force: Force deletion
         """
-        url = f"{self.base_url}/repositories/{repository}/branches/{branch}"
+        url = f"{self.base_url}/repositories/{repository}/branches/{to_lakefs_ref(branch)}"
 
         client = self._httpx()
         response = await client.delete(
             url, params={"force": force}, auth=self.auth, timeout=None
         )
         self._check_response(response)
+
+    async def get_tag(self, repository: str, tag: str) -> dict[str, Any]:
+        """Get tag details (``id`` is the tag's name, ``commit_id`` what it points at)."""
+        url = f"{self.base_url}/repositories/{repository}/tags/{to_lakefs_ref(tag)}"
+
+        client = self._httpx()
+        response = await client.get(url, auth=self.auth, timeout=None)
+        self._check_response(response)
+        return _named(response.json())
 
     async def create_tag(
         self, repository: str, id: str, ref: str, force: bool = False
@@ -800,20 +828,21 @@ class LakeFSRestClient:
         """
         url = f"{self.base_url}/repositories/{repository}/tags"
 
-        tag_data = {"id": id, "ref": ref, "force": force}
+        tag_data = {"id": to_lakefs_ref(id), "ref": to_lakefs_revision(ref), "force": force}
 
         client = self._httpx()
         response = await client.post(
             url, json=tag_data, auth=self.auth, timeout=None
         )
         self._check_response(response)
-        return response.json()
+        return _named(response.json())
 
     async def list_tags(
         self,
         repository: str,
         after: str | None = None,
         amount: int | None = None,
+        prefix: str | None = None,
     ) -> dict[str, Any] | list[dict[str, Any]]:
         """List repository tags.
 
@@ -821,6 +850,7 @@ class LakeFSRestClient:
             repository: Repository name
             after: Pagination cursor
             amount: Number of tags to return
+            prefix: Only the ones whose name starts with this (a Hub name; a `/` is allowed)
 
         Returns:
             LakeFS tag list payload
@@ -831,6 +861,8 @@ class LakeFSRestClient:
             params["after"] = after
         if amount:
             params["amount"] = amount
+        if prefix:
+            params["prefix"] = to_lakefs_ref(prefix)
 
         client = self._httpx()
         response = await client.get(
@@ -840,7 +872,7 @@ class LakeFSRestClient:
             timeout=None,
         )
         self._check_response(response)
-        return response.json()
+        return _named(response.json())
 
     async def delete_tag(self, repository: str, tag: str, force: bool = False) -> None:
         """Delete tag.
@@ -850,7 +882,7 @@ class LakeFSRestClient:
             tag: Tag name
             force: Force deletion
         """
-        url = f"{self.base_url}/repositories/{repository}/tags/{tag}"
+        url = f"{self.base_url}/repositories/{repository}/tags/{to_lakefs_ref(tag)}"
 
         client = self._httpx()
         response = await client.delete(
@@ -881,10 +913,10 @@ class LakeFSRestClient:
             force: Force revert
             allow_empty: Allow empty commit (revert without changes)
         """
-        url = f"{self.base_url}/repositories/{repository}/branches/{branch}/revert"
+        url = f"{self.base_url}/repositories/{repository}/branches/{to_lakefs_ref(branch)}/revert"
 
         revert_data: dict[str, Any] = {
-            "ref": ref,
+            "ref": to_lakefs_revision(ref),
             "parent_number": parent_number,
             "force": force,
             "allow_empty": allow_empty,
@@ -932,7 +964,7 @@ class LakeFSRestClient:
         Returns:
             MergeResult dict with reference and summary
         """
-        url = f"{self.base_url}/repositories/{repository}/refs/{source_ref}/merge/{destination_branch}"
+        url = f"{self.base_url}/repositories/{repository}/refs/{to_lakefs_revision(source_ref)}/merge/{to_lakefs_ref(destination_branch)}"
 
         merge_data: dict[str, Any] = {
             "force": force,
@@ -976,10 +1008,10 @@ class LakeFSRestClient:
         Raises:
             httpx.HTTPStatusError: If reset fails
         """
-        url = f"{self.base_url}/repositories/{repository}/branches/{branch}/hard_reset"
+        url = f"{self.base_url}/repositories/{repository}/branches/{to_lakefs_ref(branch)}/hard_reset"
 
         params = {
-            "ref": ref,
+            "ref": to_lakefs_revision(ref),
             "force": force,
         }
 
@@ -994,7 +1026,7 @@ class LakeFSRestClient:
     ) -> None:
         """Drop the uncommitted change at ``path`` on ``branch`` (everything
         under it with ``prefix``), back to the branch's head."""
-        url = f"{self.base_url}/repositories/{repository}/branches/{branch}"
+        url = f"{self.base_url}/repositories/{repository}/branches/{to_lakefs_ref(branch)}"
         body = {"type": "common_prefix" if prefix else "object", "path": path}
         response = await self._httpx().put(url, json=body, auth=self.auth, timeout=None)
         self._check_response(response)

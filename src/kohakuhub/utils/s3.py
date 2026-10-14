@@ -176,11 +176,13 @@ def _client_settings() -> dict:
     }
 
 
-def _build_client(endpoint: str, settings: dict):
+def _build_client(endpoint: str, settings: dict, pool: int | None = None):
     """A client of ``endpoint`` (a path in it names the real bucket, see
-    ``bucket_in_endpoint``) for ``settings`` (``_client_settings()``)."""
+    ``bucket_in_endpoint``) for ``settings`` (``_client_settings()``); ``pool``
+    connections for callers that run many requests at once (boto3 keeps 10)."""
     # Build S3-specific config
     s3_config = {}
+    extra = {"max_pool_connections": pool} if pool else {}
 
     if settings["force_path_style"]:
         s3_config["addressing_style"] = "path"
@@ -192,11 +194,13 @@ def _build_client(endpoint: str, settings: dict):
         boto_config = BotoConfig(
             signature_version=sig_version,
             s3=s3_config,
+            **extra,
         )
     else:
         logger.debug("Using default S3 signature version (s3v2 compatible)")
         boto_config = BotoConfig(
             s3=s3_config,
+            **extra,
         )
 
     layout = bucket_in_endpoint(endpoint, settings["bucket"])
@@ -211,7 +215,7 @@ def _build_client(endpoint: str, settings: dict):
     return readdress(client, settings["bucket"], layout) if layout else client
 
 
-def get_s3_client():
+def get_s3_client(pool: int | None = None):
     """Create configured S3 client with configurable signature version.
 
     Signature versions:
@@ -228,7 +232,7 @@ def get_s3_client():
     Returns:
         Configured boto3 S3 client.
     """
-    return _build_client(cfg.s3.endpoint, _client_settings())
+    return _build_client(cfg.s3.endpoint, _client_settings(), pool)
 
 
 def _signing_endpoint(endpoint: str, public_endpoint: str | None) -> str:

@@ -154,6 +154,64 @@ of the moved one.
 
 ---
 
+## Duplicate Repository
+
+Copies a repository into a namespace you can write to, as `huggingface_hub`'s `duplicate_repo` (and the older
+`duplicate_space`) does.
+
+**Pattern:** `POST /api/{type}s/{namespace}/{name}/duplicate` (`type` is `model`, `dataset` or `space`)
+
+**Authentication:** Required; read access to the source and write access to the target namespace
+
+**Request Body:**
+```json
+{
+  "repository": "bob/my-copy",
+  "private": false
+}
+```
+
+`private` (or `visibility`: `public` or `private`) defaults to the source's. Space settings a client sends (hardware,
+sleep time, secrets, variables, volumes) are accepted and ignored: there is no Space runtime to configure.
+
+**What is copied:**
+
+| Type | Result |
+|------|--------|
+| model, dataset | One commit holding the head of `main` ("Duplicate of alice/model"), as on the Hub |
+| space | `main` with its whole history: every commit under **its own id**, with its parents, message, committer and date, so the copy's git history is the source's and the two can be synced |
+
+Other branches and tags are not copied. LFS objects are linked, not copied (they are shared); a regular file gets its own
+object, so the copy does not depend on the source's storage. The copy counts against the target namespace's quota
+(a Space's every LFS version counts, as in the source's own usage).
+
+**How:** the copy is made in LakeFS, not file by file: the source's storage keys are copied on the storage side, in
+parallel, commit records are stored under their ids, and `main` is moved to the copy. A few thousand files take a few
+seconds (over 400 files per second on a local disk); the request answers when the copy is complete, so
+`filesCopyPending` is always `false`.
+
+**Failure:** a copy that fails is removed, and the answer is `500`. While it is built, the new repository is held
+(writes to it get a retryable `409`). One a crash left behind is removed by the background worker after a few minutes.
+
+**Response:**
+```json
+{
+  "url": "http://localhost:28080/spaces/bob/my-copy",
+  "filesCopyPending": false
+}
+```
+
+**Status Codes:**
+- `200 OK` - Copied
+- `400 Bad Request` - `repository` is not `namespace/name`, or a visibility this server does not have
+- `403 Forbidden` - No write access to the target namespace
+- `404 Not Found` - The source does not exist, or is private and not yours
+- `409 Conflict` - The target exists (the body carries its `url`, as `exist_ok=True` reads it)
+- `413 Payload Too Large` - The copy does not fit the target namespace's quota
+- `500 Internal Server Error` - The copy failed and was removed
+
+---
+
 ## Squash Repository
 
 **Pattern:** `POST /api/repos/squash`

@@ -997,7 +997,7 @@ async def _no_change_response(client, lakefs_repo: str, revision: str, repo_type
     }
 
 
-@router.post("/{repo_type}s/{namespace}/{name}/commit/{revision}")
+@router.post("/{repo_type}s/{namespace}/{name}/commit/{revision:path}")
 async def commit(
     repo_type: RepoType,
     namespace: str,

@@ -47,6 +47,11 @@ class _FakeClient:
         self._maybe_raise("get_branch")
         return self.branch_data
 
+    async def get_tag(self, **kwargs):
+        self.calls.append(("get_tag", kwargs))
+        self._maybe_raise("get_tag")
+        return self.branch_data
+
     async def create_branch(self, **kwargs):
         self.calls.append(("create_branch", kwargs))
         self._maybe_raise("create_branch")
@@ -70,11 +75,15 @@ class _FakeClient:
     async def list_branches(self, **kwargs):
         self.calls.append(("list_branches", kwargs))
         self._maybe_raise("list_branches")
+        if not self.list_branch_payloads:  # nothing queued: no branch (the name check of a new branch asks)
+            return {"results": [], "pagination": {"has_more": False}}
         return self.list_branch_payloads.pop(0)
 
     async def list_tags(self, **kwargs):
         self.calls.append(("list_tags", kwargs))
         self._maybe_raise("list_tags")
+        if not self.list_tag_payloads:
+            return {"results": [], "pagination": {"has_more": False}}
         return self.list_tag_payloads.pop(0)
 
     async def get_commit(self, **kwargs):
