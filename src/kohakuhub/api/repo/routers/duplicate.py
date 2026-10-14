@@ -251,13 +251,14 @@ def _write_rows(dest: Repository, rows: dict, commit_ids: set[str], single: str 
 async def _retrying(call):
     """``await call()``, again after a 5xx: LakeFS fails the first read of a metaranges that
     several repositories open at once (its local cache, "open file after download")."""
-    for attempt in range(READ_TRIES):
+    for attempt in range(READ_TRIES - 1):
         try:
             return await call()
         except httpx.HTTPStatusError as error:
-            if error.response.status_code < 500 or attempt == READ_TRIES - 1:
+            if error.response.status_code < 500:
                 raise
             await asyncio.sleep(0.5 * 2**attempt)
+    return await call()  # the last try says what it says
 
 
 async def _store_commits(client, dest_lakefs: str, commits: list[dict]) -> None:
