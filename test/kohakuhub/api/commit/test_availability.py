@@ -686,6 +686,7 @@ async def test_the_list_proves_nothing_from_an_object_the_head_links(m, owner_cl
 # ----- a commit id in any form (#12) -----
 
 
+@history_operations_need_postgres
 async def test_the_list_answers_in_the_forms_it_was_asked_in(m, owner_client):
     """The Hub says 40 hex, an older page or a script holds 64: each finds its own id among the answers."""
     repo, (initial, c1, c2, c3, c4, c5) = await _linear(m, owner_client, "avail-forms")

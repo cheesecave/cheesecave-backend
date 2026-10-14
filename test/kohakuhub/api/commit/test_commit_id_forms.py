@@ -6,6 +6,8 @@ as given, so a 40 hex id found nothing and the author became LakeFS's committer.
 
 import pytest
 
+from test.kohakuhub.support.db import history_operations_need_postgres
+
 B = "/api/models/owner/demo-model"
 FORMS = [("full", 64), ("hub", 40), ("abbreviated", 12), ("short", 7)]
 
@@ -94,6 +96,7 @@ async def test_a_commit_on_a_parent_in_any_form_lands_and_a_stale_one_is_refused
     assert stale.headers["x-error-message"] == "A commit has happened since. Please refresh and try again."
 
 
+@history_operations_need_postgres  # revert and reset are PostgreSQL only
 @pytest.mark.parametrize("name, length", FORMS)
 async def test_reset_revert_and_merge_by_a_commit_in_any_form(owner_client, name, length):
     c = owner_client
