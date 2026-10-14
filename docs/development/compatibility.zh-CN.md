@@ -7,9 +7,9 @@
 | 组件 | 覆盖版本 | 运行位置 |
 | --- | --- | --- |
 | Python | 3.10、3.11、3.12（单元测试）；3.12（服务与 HF） | `backend-tests`、`backend-regression` |
-| huggingface_hub | 0.20.3、0.36.2、1.6.0（固定）；latest（每日） | `backend-regression` 的 `hf`，[前瞻性 CI](hf-forward-ci.zh-CN.md) |
+| huggingface_hub | 0.20.3、1.0.1、latest（整套）；0.36.2、2.0.0（仅客户端用例）每个 PR；0.30.2、1.6.0 每日 | `backend-tests`，[前瞻性 CI](hf-forward-ci.zh-CN.md) |
 | PostgreSQL | 15 | 服务栈 |
-| LakeFS | 1.86.0；1.48.1（关闭缓存） | 服务栈、`backend-tests` |
+| LakeFS | 1.86.0；1.48.1（关闭缓存，每个 PR）、1.86.0（关闭缓存，每日） | 服务栈、`backend-tests` |
 | MinIO（S3 API） | compose 中固定的 `pgsty/minio` 版本 | 服务栈 |
 | Valkey（缓存） | 8 | 服务栈 |
 
