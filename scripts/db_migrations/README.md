@@ -337,3 +337,16 @@ migrations").
 
 Rollback facts and the command are in
 [docs/deployment/production.md](../../docs/deployment/production.md#rollback-of-the-file-key-migration).
+
+## Repository card (#62): 035
+
+- **035** (`035_repository_card.py`) creates `repository_card`: one row per repository with the README front matter of the
+  head commit it was read at (`card`, cleaned, as JSON; `"{}"` for a repository without a card), that head (`main_sha`),
+  and what the card declares as fields of their own (`derived`: tags, pipeline_tag, library_name, sdk).
+- **A table of its own on purpose.** Migration 029 compares the columns of `repository_metadata` exactly, so a column added
+  there made every later run of the migrations (and an older release's run after a rollback) report a failure; the drill
+  for this migration found it. The older code does not know the new table and ignores it, so rolling back is leaving it.
+- Nothing is backfilled. A repository without a row is read the first time its info is asked for (`info_card`: a README
+  prefix read with a 4 s budget) and by the next scheduled index, like any snapshot that is due. Until then the info answers
+  `tags: []` and no `cardData`, as before the migration.
+- `CREATE TABLE IF NOT EXISTS` on an empty table; two containers starting together take turns on an advisory lock.

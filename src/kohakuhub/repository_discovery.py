@@ -3,21 +3,21 @@
 import asyncio
 from datetime import timedelta
 import json
-import re
 from uuid import uuid4
 
 import httpx
 from peewee import JOIN, fn
-import yaml
 
-from kohakuhub.db import Commit, Repository, RepositoryFacet, RepositoryMetadata, utcnow
+from kohakuhub import repo_card
+from kohakuhub.db import Commit, Repository, RepositoryCard, RepositoryFacet, RepositoryMetadata, utcnow
 from kohakuhub.logger import get_logger
 from kohakuhub.utils.lakefs import get_lakefs_client, resolve_lakefs_repo
 
 logger = get_logger("DISCOVERY")
 M = RepositoryMetadata
 F = RepositoryFacet
-MAX_README_BYTES = 65536
+MAX_README_BYTES = repo_card.MAX_CARD_BYTES
+INFO_INDEX_SECONDS = 4  # how long an info request waits for the card of a repository not indexed yet
 README_CANDIDATES = ("README.md", "readme.md", "Readme.md")
 README_TIMEOUT_SECONDS = 3
 REFRESH_AFTER = timedelta(minutes=5)
@@ -48,49 +48,13 @@ FIELDS = {
 _batches: set[asyncio.Task] = set()
 
 
-class CardLoader(yaml.SafeLoader):
-    """No aliases, recursive objects or unbounded YAML node expansion."""
-
-    def compose_node(self, parent, index):
-        self.card_nodes = getattr(self, "card_nodes", 0) + 1
-        self.card_depth = getattr(self, "card_depth", 0) + 1
-        if self.card_nodes > 2048 or self.card_depth > 20 or self.check_event(yaml.AliasEvent):
-            raise yaml.YAMLError("Card metadata exceeds parsing limits")
-        try:
-            return super().compose_node(parent, index)
-        finally:
-            self.card_depth -= 1
+CardLoader = repo_card.CardLoader
 
 
-CardLoader.yaml_implicit_resolvers = {
-    key: [(tag, pattern) for tag, pattern in resolvers if tag != "tag:yaml.org,2002:bool"]
-    for key, resolvers in yaml.SafeLoader.yaml_implicit_resolvers.items()
-}
-CardLoader.add_implicit_resolver(
-    "tag:yaml.org,2002:bool", re.compile(r"^(?:true|false)$", re.IGNORECASE), list("tTfF")
-)
-
-
-def parse_card(content: bytes) -> tuple[dict, dict[str, list[str]]]:
+def _facets_of(raw: dict | None) -> tuple[dict, dict[str, list[str]]]:
     """Only declared README metadata supplies facets; never fetch referenced URLs."""
     empty = {key: [] for key in FACETS}
-    try:
-        text = content[:MAX_README_BYTES].decode("utf-8-sig", errors="replace")
-    except UnicodeDecodeError:
-        return {}, empty
-    lines = text.splitlines()
-    if not lines or lines[0].strip() != "---":
-        return {}, empty
-    closing = next(
-        (n for n, line in enumerate(lines[1:], 1) if line.rstrip() in {"---", "..."}), None
-    )
-    if closing is None:
-        return {}, empty
-    try:
-        raw = yaml.load("\n".join(lines[1:closing]), Loader=CardLoader)
-    except (yaml.YAMLError, ValueError, RecursionError):
-        return {}, empty
-    if not isinstance(raw, dict):
+    if raw is None:
         return {}, empty
     metadata = {}
     for field in {name for names in FIELDS.values() for name in names} | {
@@ -127,6 +91,20 @@ def parse_card(content: bytes) -> tuple[dict, dict[str, list[str]]]:
                 if value not in facets[key]:
                     facets[key].append(value)
     return metadata, facets
+
+
+def parse_card(content: bytes) -> tuple[dict, dict[str, list[str]]]:
+    return _facets_of(repo_card.load_front_matter(content))
+
+
+def parse_card_record(content: bytes, repo_type: str) -> tuple[dict, dict[str, list[str]], str, str]:
+    """Everything one index of a README keeps: facet metadata and facets, the cleaned card as
+    JSON ("{}" for none) and what it declares as JSON. CPU-bound: run it off the event loop."""
+    raw = repo_card.load_front_matter(content)
+    metadata, facets = _facets_of(raw)
+    card = repo_card.clean_card(raw)
+    derived = {**repo_card.declared(card), "tags": repo_card.compose_tags(card, repo_type)}
+    return metadata, facets, json.dumps(card or {}), json.dumps(derived)
 
 
 def mark_dirty(repo_id: int) -> None:
@@ -232,7 +210,9 @@ async def index_repository(repo_id: int) -> None:
         content = b""
         if head:
             content = await read_card_prefix(client, source, head)
-        metadata, facets = parse_card(content)
+        metadata, facets, card, derived = await asyncio.to_thread(
+            parse_card_record, content, repo.repo_type
+        )
         actual = (await asyncio.wait_for(client.get_branch(repository=source, branch="main"), 3))[
             "commit_id"
         ]
@@ -259,6 +239,10 @@ async def index_repository(repo_id: int) -> None:
             )
             if not published:
                 return
+            RepositoryCard.insert(repository=repo_id, main_sha=head, card=card, derived=derived).on_conflict(
+                conflict_target=[RepositoryCard.repository],
+                update={RepositoryCard.main_sha: head, RepositoryCard.card: card, RepositoryCard.derived: derived},
+            ).execute()
             F.delete().where(F.repository == repo_id).execute()
             rows = [
                 {"repository": repo_id, "key": key, "value": value}
@@ -279,6 +263,30 @@ async def index_repository(repo_id: int) -> None:
             lease_until=None,
         ).where(fence).execute()
         logger.debug(f"Metadata indexing failed for repository {repo_id}: {type(exc).__name__}")
+
+
+def _known(repo_id: int) -> dict | None:
+    """The indexed card and declared fields of a repository, if its snapshot is ready and the card
+    was read at that snapshot's head."""
+    record = M.get_or_none(M.repository == repo_id)
+    row = RepositoryCard.get_or_none(RepositoryCard.repository == repo_id)
+    if record is None or row is None or record.state != "ready" or row.main_sha != record.main_sha:
+        return None
+    return {"card": json.loads(row.card) or None, "derived": json.loads(row.derived)}
+
+
+async def info_card(repo) -> dict | None:
+    """The card of ``repo`` for its info response: ``{"card": dict | None, "derived": {...}}``,
+    or ``None`` when it cannot be known now (storage down, another worker indexing it, too
+    slow). A repository not indexed yet is indexed here, so a README just pushed shows at once."""
+    known = _known(repo.id)
+    if known is not None:
+        return known
+    try:
+        await asyncio.wait_for(index_repository(repo.id), INFO_INDEX_SECONDS)
+    except asyncio.TimeoutError:
+        return None
+    return _known(repo.id)
 
 
 def schedule_indexing(scope) -> None:
