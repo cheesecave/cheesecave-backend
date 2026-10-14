@@ -29,17 +29,18 @@ async def test_version_site_config_and_yaml_validation(client):
 
     valid_yaml_response = await client.post(
         "/api/validate-yaml",
-        json={"content": "model:\\n  name: demo\\n"},
+        json={"content": "---\nlicense: mit\n---\n# Model"},
     )
     assert valid_yaml_response.status_code == 200
-    assert valid_yaml_response.json()["valid"] is True
+    assert valid_yaml_response.json() == {"valid": True, "errors": [], "warnings": []}
 
     invalid_yaml_response = await client.post(
         "/api/validate-yaml",
-        json={"content": "model: [broken"},
+        json={"content": "---\nmodel: [broken\n---\n"},
     )
-    assert invalid_yaml_response.status_code == 200
+    assert invalid_yaml_response.status_code == 400
     assert invalid_yaml_response.json()["valid"] is False
+    assert invalid_yaml_response.json()["errors"][0]["message"].startswith("Invalid YAML in README.md")
 
 
 @pytest.mark.asyncio
@@ -348,3 +349,18 @@ async def test_version_reports_the_build(client):
 
     assert response.json()["api"] == "kohakuhub"
     assert set(response.json()["build"]) == {"git_sha", "build_time"}
+
+
+@pytest.mark.parametrize("key", ["repoType", "repo_type"])
+async def test_validate_yaml_takes_the_hubs_field_name_and_the_old_one(client, key):
+    response = await client.post("/api/validate-yaml", json={"content": "---\nlicense: mit\n---\n", key: "dataset"})
+
+    assert response.status_code == 200 and response.json()["errors"] == []
+
+
+async def test_validate_yaml_warns_about_a_readme_without_metadata_and_refuses_a_non_mapping(client):
+    bare = await client.post("/api/validate-yaml", json={"content": "# Title", "repoType": "model"})
+    listed = await client.post("/api/validate-yaml", json={"content": "---\n- a\n---\n", "repoType": "model"})
+
+    assert bare.status_code == 200 and bare.json()["warnings"][0]["message"] == "empty or missing yaml metadata in repo card"
+    assert listed.status_code == 400 and listed.json()["errors"] == [{"message": '"value" must be of type object', "path": []}]

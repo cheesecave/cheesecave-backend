@@ -22,7 +22,8 @@ KohakuHub implements HuggingFace Hub API for compatibility with `huggingface_hub
 - `GET /api/spaces/user/gradio-app`
 
 **Query Parameters:**
-- None
+- `expand` (repeatable, also spelled `expand[]`): answer only these properties (plus `_id` and `id`); the names are the Hub's
+- `blobs`: size, blob id and LFS data per file in `siblings`
 
 **Request Headers:**
 - `Authorization: Bearer {token}` (optional, for private repos)
@@ -30,7 +31,9 @@ KohakuHub implements HuggingFace Hub API for compatibility with `huggingface_hub
 **Response:**
 ```json
 {
+  "_id": "42",
   "id": "username/bert-base",
+  "modelId": "username/bert-base",
   "author": "username",
   "sha": "abc123def456...",
   "lastModified": "2025-01-20T10:15:32.123Z",
@@ -40,9 +43,10 @@ KohakuHub implements HuggingFace Hub API for compatibility with `huggingface_hub
   "gated": false,
   "downloads": 150,
   "likes": 25,
-  "tags": [],
-  "pipeline_tag": null,
-  "library_name": null,
+  "tags": ["transformers", "fill-mask", "en", "license:mit", "region:us"],
+  "pipeline_tag": "fill-mask",
+  "library_name": "transformers",
+  "cardData": {"license": "mit", "language": "en", "pipeline_tag": "fill-mask", "library_name": "transformers"},
   "siblings": [
     {"rfilename": "config.json"},
     {"rfilename": "model.safetensors"}
@@ -62,6 +66,9 @@ KohakuHub implements HuggingFace Hub API for compatibility with `huggingface_hub
 - `siblings`: the name of every file by default, as on the Hub. `blobs=true` (`files_metadata=True`) adds `blobId`, `size` and `lfs`; `expand=...` returns only the named properties. See [Get Repository Info](./repositories.md#get-repository-info).
 - `storage`: Only included for authenticated users
 - `sha`: Latest commit hash on main branch
+- **The README card.** `cardData` is the README front matter as the Hub returns it (keys as written; only what JSON can carry: non-string keys become strings, dates ISO strings, `tags` always a list of strings, `ignore_metadata_errors` dropped, every `model-index` metric `verified: false` as the Hub forces it). `tags`, `pipeline_tag`, `library_name` (models) and `sdk` (spaces) are what the card declares; `tags` follow the Hub's order and are `[]` for a repository whose card cannot be read now. A repository without a card has no `cardData` and no `model-index`. The card is read from the head commit, so a README pushed shows at once.
+- Per type: datasets have `paperswithcode_id` (from the card) and no `modelId`, `pipeline_tag` or `library_name`; spaces have `sdk` and no download counts.
+- Not answered yet (the Hub derives them from the files or computes them in its own services): framework tags such as `pytorch` or `safetensors`, `config`, `transformersInfo`, `safetensors`, `widgetData`, the `text-generation-inference` / `endpoints_compatible` / `deploy:*` tags, a dataset's `size_categories` / `modality:*` tags.
 - Compatible with `transformers.from_pretrained()` and `diffusers`
 
 ---
@@ -85,6 +92,7 @@ KohakuHub implements HuggingFace Hub API for compatibility with `huggingface_hub
 - `filter` (repeatable), `pipeline_tag`, `library`, `language`, `task_categories`, `size_categories` (optional): match the indexed facets of the repository; a tag with a prefix this hub does not index (`base_model:`, ...) matches nothing
 - `fallback` (optional): Enable external sources (default: true)
 - `partial` (optional): `ok` to skip an external source that cannot answer instead of failing (see below)
+- `cardData` / `full` (optional): add `cardData` to every item
 - `cursor`: opaque, only ever taken from a `Link` header
 
 Unknown parameters are ignored.
@@ -139,6 +147,10 @@ incomplete. With `partial=ok` the source is skipped and the response says so in
 ```
 
 ---
+
+### Validate a README card
+
+`POST /api/validate-yaml` with `{"content": "<README text>", "repoType": "model"}` (`repo_type` is accepted too), as `huggingface_hub` sends it before it uploads a README: `200 {"errors": [], "warnings": [...]}`, or `400 {"errors": [{"message", "path"}]}` when the metadata cannot be read (invalid YAML, or not a mapping). A README without metadata is a warning ("empty or missing yaml metadata in repo card"). The Hub's own lists (licenses, languages, tasks) are not checked. `valid` is the older answer of this route and is kept. The client refuses to upload a README this route refuses.
 
 ## Access Preflight and Tag Vocabularies
 

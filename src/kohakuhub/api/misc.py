@@ -4,11 +4,12 @@ import os
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
-import yaml
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, ConfigDict, Field
 
 from kohakuhub.api.utils.accounts import avatar_url
 from kohakuhub.config import cfg, read_env
+from kohakuhub.repo_card import check_readme
 from kohakuhub.db import User, UserOrganization
 from kohakuhub.logger import get_logger
 from kohakuhub.site_branding import get_public_branding
@@ -97,32 +98,30 @@ MAX_YAML_BYTES = 1024 * 1024
 
 
 class ValidateYamlPayload(BaseModel):
-    """Payload for YAML validation endpoint."""
+    """Payload for the README validation endpoint (``huggingface_hub`` sends ``repoType``)."""
+
+    model_config = ConfigDict(populate_by_name=True)
 
     content: str
-    repo_type: str = "model"
+    repo_type: str = Field("model", alias="repoType")
 
 
 @router.post("/validate-yaml")
 def validate_yaml(body: ValidateYamlPayload):
-    """Validate YAML content (e.g., model card, dataset card).
+    """Validate the metadata of a README (model, dataset or space card), as the Hub does.
 
-    Args:
-        body: Validation payload with YAML content
-
-    Returns:
-        Validation result
+    ``200 {"errors": [], "warnings": [...]}``, or ``400`` with the errors when the metadata
+    cannot be read. ``valid`` is the older answer of this route, kept for its callers.
     """
     if len(body.content.encode()) > MAX_YAML_BYTES:
         raise HTTPException(
             413, detail=f"YAML content too large (limit {MAX_YAML_BYTES} bytes)"
         )
-    try:
-        yaml.safe_load(body.content)
-    except Exception as e:
-        return {"valid": False}
-
-    return {"valid": True}
+    errors, warnings = check_readme(body.content)
+    return JSONResponse(
+        {"valid": not errors, "errors": errors, "warnings": warnings},
+        status_code=400 if errors else 200,
+    )
 
 
 @router.get("/whoami-v2")
