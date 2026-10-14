@@ -798,3 +798,20 @@ async def test_bulk_delete_objects(monkeypatch):
         await client.delete_objects("repo", "scratch", ["c.txt"])
 
     assert factory.calls[0][2]["json"] == {"paths": ["a.txt", "b.txt"]}
+
+
+@pytest.mark.asyncio
+async def test_create_commit_record_sends_the_commits_own_version(monkeypatch):
+    client = lakefs_rest.LakeFSRestClient("https://lakefs.example.com", "ak", "sk")
+    url = "https://lakefs.example.com/api/v1/repositories/repo/commits"
+    factory = _AsyncClientFactory([_response("POST", url, status=201), _response("POST", url, status=201)])
+    monkeypatch.setattr(lakefs_rest.httpx, "AsyncClient", factory)
+    fields = dict(
+        repository="repo", commit_id="c", committer="owner", message="m", metarange_id="r",
+        creation_date=1, parents=[], metadata={}, generation=1,
+    )
+
+    await client.create_commit_record(**fields)  # a version-1 commit unless told otherwise
+    await client.create_commit_record(**fields, version=0)
+
+    assert [call[2]["json"]["version"] for call in factory.calls] == [1, 0]

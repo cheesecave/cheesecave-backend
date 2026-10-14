@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Duplicate a repository** ([#68](https://github.com/cheesecave/cheesecave-backend/issues/68)).
+  `huggingface_hub`'s `duplicate_repo` and `duplicate_space` called `POST /api/{type}s/{repo}/duplicate`, which was a 404.
+  It copies a repository in LakeFS rather than file by file (the storage keys in parallel, then the commit records): over
+  400 files a second on a local disk. A model or dataset arrives as one commit of `main`'s head, as on the Hub; a Space
+  keeps its whole history under the source's own commit ids, parents and dates, so the two git histories stay in sync.
+  A failed copy is removed (`500`, never `409`, which a client's `exist_ok` would read as "it exists"); one a crash left
+  behind is removed by the worker. Documented in `docs/api/repositories.md`.
+
 ### Documentation
 
 - **`huggingface_hub` 2.0 and later: how to upload to KohakuHub** ([#52](https://github.com/cheesecave/cheesecave-backend/issues/52),
