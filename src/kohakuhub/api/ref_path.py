@@ -6,8 +6,8 @@ and the route then reads ``refs`` as the revision. The Hub reads that segment as
 branch ``dev`` on ``resolve``, ``revision`` and ``tree``; a literal ``refs/heads/dev`` is
 split at its slashes there as it is here.
 
-A branch whose own name has a slash (``refs%2Fheads%2Ffeature%2Fx``) is left as it is:
-that is #67.
+A branch whose own name has a slash (``refs%2Fheads%2Ffeature%2Fx``) is cut to ``feature%2Fx``, which
+the routes read as the branch ``feature/x`` (#67).
 """
 
 import re
@@ -17,7 +17,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 _FULL_REF = re.compile(
     rb"^(?P<head>/(?:api/)?(?:(?:models|datasets|spaces)/)?[^/]+/[^/]+/(?:resolve|revision|tree)/)"
-    rb"refs%2[fF]heads%2[fF](?P<name>(?:(?!%2[fF])[^/])+)(?=/|$)"
+    rb"refs%2[fF]heads%2[fF](?P<name>[^/]+)(?=/|$)"
 )
 
 

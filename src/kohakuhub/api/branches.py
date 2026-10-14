@@ -24,9 +24,11 @@ from kohakuhub.auth.permissions import (
 )
 from kohakuhub.utils.lakefs import (
     get_lakefs_client,
+    ref_name_conflict,
     resolve_lakefs_repo,
     resolve_revision,
 )
+from kohakuhub.utils.ref_name import is_valid_ref_name
 from kohakuhub.api.commit import records, reset, revert, squash
 from kohakuhub.api.repo.utils import operation_lock
 from kohakuhub.api.repo.utils.hf import (
@@ -67,6 +69,23 @@ async def _delete_new_branch(client, lakefs_repo: str, name: str) -> None:
         await client.delete_branch(repository=lakefs_repo, branch=name)
     except Exception as e:
         logger.warning(f"Could not remove branch {name} after a failed create: {e}")
+
+
+async def _refused_name(client, lakefs_repo: str, name: str, kind: str):
+    """The error response when ``name`` cannot be a new ``kind`` (``branch`` or ``tag``), else ``None`` (#67)."""
+    if not is_valid_ref_name(name):
+        return hf_error_response(
+            400, HFErrorCode.BAD_REQUEST, f"Invalid {kind} name '{name}': it is not a name git accepts"
+        )
+    other = await ref_name_conflict(client, lakefs_repo, name, kind)
+    if other is not None:
+        return hf_error_response(
+            409,
+            HFErrorCode.BAD_REQUEST,
+            f"Cannot create {kind} '{name}': it would conflict with the {kind} '{other}' "
+            "(as in git, a name cannot be inside another or hold one)",
+        )
+    return None
 
 
 @router.post("/{repo_type}s/{namespace}/{name}/branch")
@@ -111,6 +130,9 @@ async def create_branch(
     client = get_lakefs_client()
 
     try:
+        refused = await _refused_name(client, lakefs_repo, payload.branch, "branch")
+        if refused is not None:
+            return refused
         # Resolve source revision — accept branch name, tag, or commit sha
         # (huggingface_hub.create_branch(revision=…) passes any of the three).
         source_ref = payload.revision or "main"
@@ -165,7 +187,6 @@ async def create_branch(
     return {"success": True, "message": f"Branch '{payload.branch}' created"}
 
 
-@router.post("/{repo_type}s/{namespace}/{name}/branch/{branch}")
 async def create_branch_compat(
     repo_type: str,
     namespace: str,
@@ -187,7 +208,7 @@ async def create_branch_compat(
     )
 
 
-@router.delete("/{repo_type}s/{namespace}/{name}/branch/{branch}")
+@router.delete("/{repo_type}s/{namespace}/{name}/branch/{branch:path}")
 async def delete_branch(
     repo_type: str,
     namespace: str,
@@ -329,6 +350,9 @@ async def create_tag(
     client = get_lakefs_client()
 
     try:
+        refused = await _refused_name(client, lakefs_repo, payload.tag, "tag")
+        if refused is not None:
+            return refused
         # Resolve source revision — accept branch, tag, or commit sha.
         source_ref = payload.revision or "main"
         async with operation_lock.writing(repo_row):  # the source is read inside
@@ -349,12 +373,14 @@ async def create_tag(
             str(e),
         )
     except Exception as e:
+        if getattr(getattr(e, "response", None), "status_code", None) == 409:
+            return hf_error_response(409, HFErrorCode.BAD_REQUEST, f"Tag '{payload.tag}' already exists")
         return hf_server_error(f"Failed to create tag: {str(e)}")
 
     return {"success": True, "message": f"Tag '{payload.tag}' created"}
 
 
-@router.post("/{repo_type}s/{namespace}/{name}/tag/{revision}")
+@router.post("/{repo_type}s/{namespace}/{name}/tag/{revision:path}")
 async def create_tag_compat(
     repo_type: str,
     namespace: str,
@@ -377,7 +403,7 @@ async def create_tag_compat(
     )
 
 
-@router.delete("/{repo_type}s/{namespace}/{name}/tag/{tag}")
+@router.delete("/{repo_type}s/{namespace}/{name}/tag/{tag:path}")
 async def delete_tag(
     repo_type: str,
     namespace: str,
@@ -538,7 +564,7 @@ async def list_repo_refs(
 
 
 @router.post(
-    "/{repo_type}s/{namespace}/{name}/branch/{branch}/revert",
+    "/{repo_type}s/{namespace}/{name}/branch/{branch:path}/revert",
     dependencies=[Depends(require_repository_revert_enabled)],
 )
 async def revert_branch(
@@ -641,7 +667,7 @@ async def revert_branch(
 
 
 @router.post(
-    "/{repo_type}s/{namespace}/{name}/merge/{source_ref}/into/{destination_branch}"
+    "/{repo_type}s/{namespace}/{name}/merge/{source_ref:path}/into/{destination_branch:path}"
 )
 async def merge_branches(
     repo_type: str,
@@ -780,7 +806,7 @@ async def merge_branches(
 
 
 @router.post(
-    "/{repo_type}s/{namespace}/{name}/branch/{branch}/reset",
+    "/{repo_type}s/{namespace}/{name}/branch/{branch:path}/reset",
     dependencies=[Depends(require_repository_reset_enabled)],
 )
 async def reset_branch(
@@ -889,7 +915,7 @@ async def reset_branch(
 
 
 @router.post(
-    "/{repo_type}s/{namespace}/{name}/super-squash/{branch}",
+    "/{repo_type}s/{namespace}/{name}/super-squash/{branch:path}",
     dependencies=[Depends(require_repository_squash_enabled)],
 )
 async def super_squash_branch(
@@ -922,3 +948,8 @@ async def super_squash_branch(
     except records.OperationRefused as e:
         raise HTTPException(status_code=e.status, detail=e.detail)
     return {"commitOid": hub_oid(commit_id)}
+
+
+# Registered last: ``branch/{branch:path}`` takes everything after ``branch/``, so ``.../branch/x/revert``
+# and ``.../branch/x/reset`` must meet their own routes first.
+router.post("/{repo_type}s/{namespace}/{name}/branch/{branch:path}")(create_branch_compat)

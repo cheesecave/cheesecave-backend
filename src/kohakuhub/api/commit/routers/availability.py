@@ -111,7 +111,7 @@ async def commit_operations(
     }
 
 
-@router.post("/{repo_type}s/{namespace}/{name}/commits/{branch}/operations")
+@router.post("/{repo_type}s/{namespace}/{name}/commits/{branch:path}/operations")
 async def commits_operations(
     repo_type: str,
     namespace: str,

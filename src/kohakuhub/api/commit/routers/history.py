@@ -62,7 +62,7 @@ def _to_hf_commit_response(commit: dict, include_formatted: bool) -> dict:
     return payload
 
 
-@router.get("/{repo_type}s/{namespace}/{name}/commits/{branch}")
+@router.get("/{repo_type}s/{namespace}/{name}/commits/{branch:path}")
 async def list_commits(
     repo_type: str,
     namespace: str,

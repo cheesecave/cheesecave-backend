@@ -24,6 +24,7 @@ from kohakuhub.logger import get_logger
 from kohakuhub.utils.commit_id import hub_oid
 from kohakuhub.utils.lakefs import (
     get_lakefs_client,
+    resolve_revision_and_path,
     resolve_lakefs_repo,
     resolve_revision,
 )
@@ -510,11 +511,16 @@ async def list_repo_tree(
     page_size = min(limit or default_limit, default_limit)
 
     try:
-        resolved_revision, _ = await resolve_revision(
-            get_lakefs_client(), lakefs_repo, revision, repo_row
+        # A branch or tag with a slash may start the path (#67)
+        resolved_revision, _, revision, rest = await resolve_revision_and_path(
+            resolve_revision, get_lakefs_client(), lakefs_repo, repo_row, revision, path.lstrip("/")
         )
     except Exception:
         return hf_revision_not_found(repo_id, revision)
+    if rest != path.lstrip("/"):  # the revision took a part of what was taken for the path
+        clean_path = _normalize_repo_path(f"/{rest}" if rest else "")
+        base_prefix = f"{clean_path}/" if clean_path else ""
+        lakefs_prefix = f"{base_prefix}{normalized_prefix or ''}"
 
     try:
         page = await fetch_lakefs_objects_page(
@@ -607,7 +613,7 @@ async def list_repo_tree(
     return JSONResponse(content=result_list, headers=headers)
 
 
-@router.post("/{repo_type}s/{namespace}/{repo_name}/paths-info/{revision}")
+@router.post("/{repo_type}s/{namespace}/{repo_name}/paths-info/{revision:path}")
 @with_repo_fallback("paths_info")
 async def get_paths_info(
     repo_type: str,

@@ -70,6 +70,27 @@ An operation is available only when:
   verified on. On an older LakeFS it is disabled and its `503` says so. See
   [LakeFS compatibility](../deployment/lakefs.md).
 
+## Branch and tag names
+
+A branch or tag name is what git accepts as a ref name: `feature/x`, `release/v1.0`, `fix-1`. A name with a `/` goes in
+a path either percent-encoded (`feature%2Fx`, as `huggingface_hub` sends it) or with its slashes as they are
+(`feature/x`); both reach the same route, on every route that takes a branch, tag or revision (`branch/…`, `tag/…`,
+`commit/…`, `commits/…`, `revision/…`, `tree/…`, `paths-info/…`, `resolve/…`, `merge/…`, `super-squash/…`).
+
+- A name git refuses (`a..b`, a space, `~ ^ : ? * [ \`, `x.lock`, a leading `-` or `.`, `//`, a trailing `/` or `.`) is
+  `400 BadRequest`.
+- As in git, a name cannot be inside another or hold one: with `feat` there is no `feat/x`, and with `feat/x/y` there is
+  no `feat` and no `feat/x`. Creating one is `409 Conflict`. This is what makes `resolve/feat/x/file` unambiguous: it is
+  the file `file` of branch `feat/x`, or the file `x/file` of branch `feat`, never both. Branches and tags are separate
+  namespaces.
+- Where a revision is followed by a path (`resolve`, `tree`), the revision is the first part when that is a branch, tag or
+  commit; otherwise the longest branch or tag that starts the rest. A first part that is hex and shorter than a commit id
+  (`a`, `cafe`) is a branch's start when a branch begins with it, as a branch named like a commit wins over the commit.
+- LakeFS itself takes only letters, digits, `_` and `-` in an id. A name is spelled for it in one place (a character it does
+  not take becomes `_-<hex>-_`, so `feature/x` is `feature_-2F-_x` there); nothing is stored differently, no migration. A
+  name LakeFS already took is unchanged. Only a branch made earlier with `_-` in its name is spelled differently (none is
+  known); LakeFS's own tools show the spelling.
+
 ## Branches
 
 ### Create Branch
@@ -100,8 +121,9 @@ An operation is available only when:
 
 **Status Codes:**
 - `200 OK` - Branch created
+- `400 Bad Request` - Not a name git accepts
 - `404 Not Found` - Repository or source revision not found
-- `409 Conflict` - Branch already exists
+- `409 Conflict` - Branch already exists, or the name is inside another branch or holds one
 
 ---
 

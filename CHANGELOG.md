@@ -34,6 +34,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   repositories are not supported, so: `False` (or no `gated`) is accepted and changes nothing, `True`, `"auto"` and
   `"manual"` answer `501` (`X-Error-Message: gated access is not supported by KohakuHub. ...`, which the client shows its user) before anything is written
   (the other fields of the same request are not applied either), any other string is `400`.
+- **Branch and tag names with a `/` work** ([#67](https://github.com/cheesecave/cheesecave-backend/issues/67)).
+  `create_branch(branch="feature/x")`, `create_tag(tag="release/v1.0")` and every route that takes a branch, tag or
+  revision (`upload_file(revision=...)`, `hf_hub_download(revision=...)`, `snapshot_download`, `list_repo_commits`,
+  `list_repo_tree`, `get_paths_info`, merge, revert, reset, super squash) answered `404` for such a name, because the
+  routes took one path segment and LakeFS takes only letters, digits, `_` and `-` in an id. The name is now spelled for
+  LakeFS in one place (`kohakuhub.utils.ref_name`, applied by the LakeFS client; a name LakeFS already took is
+  unchanged; nothing is stored differently, no migration). Where a revision is followed by a path the revision is the
+  longest branch or tag that starts it. Names git refuses (`a..b`, `x.lock`, a space...) are `400`, and as in git `a`
+  and `a/b` cannot both exist (`409`), which keeps `resolve/a/b/file` unambiguous. A tag that already exists is `409`
+  (it was `500`).
 - **One form of a commit id in every response: the Hub's 40 hex** ([#12](https://github.com/cheesecave/cheesecave-backend/issues/12)).
   Repository info said `sha` in 40 hex while `revision/main`, the commit list, `X-Repo-Commit` and the rest said the
   64 hex LakeFS has. `huggingface_hub` accepts a `parent_commit` of at most 40 hex (every other source of a sha made

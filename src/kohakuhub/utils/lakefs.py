@@ -8,6 +8,7 @@ import httpx
 import numpy as np
 
 from kohakuhub.lakefs_rest_client import LakeFSRestClient, get_lakefs_rest_client
+from kohakuhub.utils.ref_name import ref_prefixes
 
 
 def get_lakefs_client() -> LakeFSRestClient:
@@ -150,6 +151,94 @@ async def resolve_revision(
     if not await in_history(client, repo, lakefs_repo, commit_info["id"]):
         raise ValueError(f"Revision '{revision}' not found as branch or commit")
     return commit_info["id"], commit_info
+
+
+async def _ref_names(
+    list_refs, lakefs_repo: str, prefix: str, first_page_only: bool = False
+) -> list[str]:
+    """The Hub names of the branches (or tags) that start with ``prefix``."""
+    names, after = [], None
+    while True:
+        page = await list_refs(repository=lakefs_repo, after=after, amount=HEADS_PAGE, prefix=prefix)
+        names += [ref["id"] for ref in page["results"]]
+        if first_page_only or not page["pagination"]["has_more"]:
+            return names
+        after = page["pagination"]["next_offset"]
+
+
+async def longer_revision(
+    client: LakeFSRestClient, lakefs_repo: str, first: str, rest: str
+) -> tuple[str, str] | None:
+    """The branch or tag that starts ``<first>/<rest>``, and the path after it (#67).
+
+    A route that carries a revision and then a path cannot tell where a branch named ``feature/x`` ends:
+    ``resolve/feature/x/a.txt`` reaches the handler as revision ``feature`` and path ``x/a.txt``. A caller
+    asks this only after ``first`` alone was not a revision (so the usual names cost nothing more): the
+    longest branch or tag that is a leading part of the whole is the revision. ``None`` when there is none
+    (or LakeFS cannot say: the caller's own lookup reports the failure).
+    """
+    whole = f"{first}/{rest}" if rest else first
+    try:
+        named = [
+            name
+            for list_refs in (client.list_branches, client.list_tags)
+            for name in await _ref_names(list_refs, lakefs_repo, f"{first}/")
+            if whole == name or whole.startswith(f"{name}/")
+        ]
+    except Exception:
+        return None
+    if not named:
+        return None
+    revision = max(named, key=len)
+    return revision, whole[len(revision) + 1 :]
+
+
+_SHORT_HEX = re.compile(r"^[0-9a-fA-F]{1,39}$")
+
+
+async def resolve_revision_and_path(
+    resolve, client: LakeFSRestClient, lakefs_repo: str, repo, revision: str, path: str
+) -> tuple[str, dict | None, str, str]:
+    """``resolve`` (``resolve_revision``, as the caller has it) for the revision at the front of ``revision/path``.
+
+    Returns the commit id, its info, and the revision and path as they were understood (#67): a branch or tag
+    named ``feature/x`` reaches a route as revision ``feature`` and path ``x/a.txt``. The usual names cost one
+    lookup, as before. A first part that is hex and shorter than a commit id (``a``, ``cafe``) is a commit
+    abbreviation to LakeFS, but a branch that starts with it wins, as a branch named like a commit already wins
+    over the commit. Raises ``ValueError`` as ``resolve`` does.
+    """
+    asked_longer = False
+    if _SHORT_HEX.match(revision):
+        asked_longer = True
+        if longer := await longer_revision(client, lakefs_repo, revision, path):
+            revision, path = longer
+    try:
+        commit_id, info = await resolve(client, lakefs_repo, revision, repo)
+    except ValueError:
+        if asked_longer or not (longer := await longer_revision(client, lakefs_repo, revision, path)):
+            raise
+        revision, path = longer
+        commit_id, info = await resolve(client, lakefs_repo, revision, repo)
+    return commit_id, info, revision, path
+
+
+async def ref_name_conflict(client: LakeFSRestClient, lakefs_repo: str, name: str, kind: str) -> str | None:
+    """The existing ``kind`` (``branch`` or ``tag``) that ``name`` could not live beside, if any (#67).
+
+    As in git, ``a`` and ``a/b`` cannot both exist. Besides keeping to what the Hub allows, this is what makes
+    a name inside a path unambiguous: ``resolve/a/b/f`` is branch ``a/b`` or branch ``a``, never both.
+    """
+    get = client.get_branch if kind == "branch" else client.get_tag
+    list_refs = client.list_branches if kind == "branch" else client.list_tags
+    for directory in ref_prefixes(name):
+        try:
+            await get(repository=lakefs_repo, **{kind: directory})
+            return directory
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code != 404:
+                raise
+    inside = await _ref_names(list_refs, lakefs_repo, f"{name}/", first_page_only=True)
+    return inside[0] if inside else None
 
 
 def _base36_encode(num: int) -> str:
