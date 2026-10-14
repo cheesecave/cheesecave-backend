@@ -383,7 +383,7 @@ pipe = StableDiffusionPipeline.from_pretrained(
 ### Differences from HuggingFace Hub:
 
 **Not implemented:**
-- Gated repositories (always `gated: false`)
+- Gated repositories (always `gated: false`; `update_repo_settings(gated="auto"|"manual")` answers `501` instead of pretending, `gated=False` is accepted)
 - Pipeline tags (always `null`)
 - Model cards parsing (use README.md YAML frontmatter)
 - Discussions/Community features

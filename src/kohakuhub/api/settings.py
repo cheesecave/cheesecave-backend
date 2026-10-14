@@ -300,7 +300,7 @@ class UpdateRepoSettingsPayload(BaseModel):
 
     private: Optional[bool] = None
     visibility: Optional[str] = None
-    gated: Optional[str] = None  # "auto", "manual", or False/None
+    gated: bool | str | None = None  # the Hub takes False, "auto" and "manual"
     lfs_threshold_bytes: Optional[int] = None  # NULL = use server default
     lfs_keep_versions: Optional[int] = None  # NULL = use server default
     lfs_suffix_rules: Optional[list[str]] = None  # NULL = no suffix rules
@@ -338,6 +338,22 @@ async def update_repo_settings(
 
     # Check if user has permission to update this repository
     check_repo_delete_permission(repo_row, user)
+
+    # Gated repositories are not supported (#61): refuse before anything is written, so a
+    # request that asks for a gate never answers 200 over a repository that stays public.
+    if payload.gated not in (None, False):
+        if payload.gated not in (True, "auto", "manual"):
+            raise HTTPException(
+                400,
+                detail={
+                    "error": f"Unsupported value for gated: {payload.gated!r}. "
+                    "Use False, 'auto' or 'manual'."
+                },
+            )
+        raise HTTPException(
+            501,
+            detail={"error": "Gated repositories are not supported by this server."},
+        )
 
     # Update fields if provided
     update_fields = {}
@@ -453,9 +469,6 @@ async def update_repo_settings(
     # only fire the eviction when ``private`` was the changed field.
     if "private" in update_fields:
         get_fallback_cache().invalidate_repo(repo_type, namespace, name)
-
-    # Note: gated functionality not yet implemented in database schema
-    # Would require adding a 'gated' field to Repository model
 
     return {"success": True, "message": "Repository settings updated successfully"}
 
