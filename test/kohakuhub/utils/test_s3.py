@@ -448,3 +448,19 @@ def test_copy_s3_folder_supports_exclusions_and_partial_failures(monkeypatch):
 
     monkeypatch.setattr(s3_module, "get_s3_client", lambda: MismatchPaginatorClient(service))
     assert s3_module._copy_s3_folder_sync("bucket", "from/", "to/") == 0
+
+
+@pytest.mark.parametrize("signature", ["s3v4", None])
+def test_get_s3_client_pool_size_is_opt_in(monkeypatch, signature):
+    """boto3 keeps 10 connections: a caller running many requests at once asks for more."""
+    seen = []
+    monkeypatch.setattr(s3_module.cfg.s3, "endpoint", "https://s3.example.com")
+    monkeypatch.setattr(s3_module.cfg.s3, "signature_version", signature)
+    monkeypatch.setattr(s3_module, "BotoConfig", lambda **kwargs: kwargs)
+    monkeypatch.setattr(s3_module.boto3, "client", lambda service_name, **kwargs: seen.append(kwargs["config"]) or "client")
+
+    s3_module.get_s3_client()
+    s3_module.get_s3_client(64)
+
+    assert "max_pool_connections" not in seen[0]
+    assert seen[1]["max_pool_connections"] == 64

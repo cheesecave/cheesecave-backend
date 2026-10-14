@@ -92,7 +92,7 @@ async def _entries(client, lakefs_repo: str, commit: str) -> list[dict]:
     fetch = lambda after: client.list_objects(  # noqa: E731
         repository=lakefs_repo, ref=commit, after=after, amount=PAGE
     )
-    return [e async for e in _pages(fetch) if e.get("path_type", "object") == "object"]
+    return [e async for e in _pages(fetch)]
 
 
 async def _ancestors(client, lakefs_repo: str, head: str) -> list[dict]:
