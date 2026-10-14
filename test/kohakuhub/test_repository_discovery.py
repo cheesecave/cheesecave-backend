@@ -19,6 +19,7 @@ from kohakuhub.db import (
     Commit,
     DailyRepoStats,
     Repository,
+    RepositoryCard,
     RepositoryFacet,
     RepositoryMetadata,
     User,
@@ -34,6 +35,7 @@ MODELS = [
     Commit,
     DailyRepoStats,
     RepositoryMetadata,
+    RepositoryCard,
     RepositoryFacet,
 ]
 
@@ -506,3 +508,172 @@ async def test_prefix_download_is_bounded_when_storage_ignores_range():
         assert body.closed
     finally:
         await client.aclose()
+
+
+# --- the card and what it declares (#62) -------------------------------------
+
+
+def _readme_client(monkeypatch, readme: bytes | None, head="head-sha"):
+    """LakeFS as the one external boundary: a branch head and a README prefix."""
+    request = httpx.Request("GET", "https://storage.test/README.md")
+    missing = httpx.HTTPStatusError("missing", request=request, response=httpx.Response(404, request=request))
+    client = SimpleNamespace(
+        get_branch=AsyncMock(return_value={"commit_id": head}),
+        get_object_prefix=AsyncMock(return_value=readme) if readme is not None else AsyncMock(side_effect=missing),
+    )
+    monkeypatch.setattr(discovery, "get_lakefs_client", lambda: client)
+    return client
+
+
+@pytest.mark.asyncio
+async def test_indexing_keeps_the_cleaned_card_and_the_fields_it_declares(catalog, monkeypatch):
+    repo = repository(catalog, "sample")
+    _readme_client(monkeypatch, b"---\nlicense: MIT\nlibrary_name: transformers\npipeline_tag: fill-mask\ntags: [exbert]\nlanguage: en\n---\n# Model")
+
+    await discovery.index_repository(repo.id)
+
+    record = RepositoryCard.get_by_id(repo.id)
+    assert json.loads(record.card) == {"license": "MIT", "library_name": "transformers", "pipeline_tag": "fill-mask", "tags": ["exbert"], "language": "en"}
+    assert json.loads(record.derived) == {
+        "tags": ["transformers", "fill-mask", "exbert", "en", "license:mit", "region:us"],
+        "pipeline_tag": "fill-mask",
+        "library_name": "transformers",
+        "sdk": None,
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("readme", [None, b"# a README without a card", b"---\n---\n"])
+async def test_a_repository_without_a_card_is_indexed_as_having_none(catalog, monkeypatch, readme):
+    repo = repository(catalog, "sample", repo_type="dataset")
+    _readme_client(monkeypatch, readme)
+
+    await discovery.index_repository(repo.id)
+
+    record = RepositoryCard.get_by_id(repo.id)
+    assert record.card == "{}" and json.loads(record.derived)["tags"] == ["region:us"]
+
+
+@pytest.mark.asyncio
+async def test_a_changed_readme_replaces_the_card_and_a_removed_card_empties_it(catalog, monkeypatch):
+    repo = repository(catalog, "sample", repo_type="space")
+    client = _readme_client(monkeypatch, b"---\nsdk: gradio\n---\n")
+    await discovery.index_repository(repo.id)
+    assert json.loads(RepositoryCard.get_by_id(repo.id).derived)["sdk"] == "gradio"
+
+    discovery.mark_dirty(repo.id)
+    client.get_object_prefix.return_value = b"# no card any more"
+    await discovery.index_repository(repo.id)
+
+    record = RepositoryCard.get_by_id(repo.id)
+    assert record.card == "{}" and json.loads(record.derived)["sdk"] is None and RepositoryCard.select().count() == 1
+
+
+@pytest.mark.asyncio
+async def test_a_huge_readme_is_parsed_off_the_event_loop(catalog, monkeypatch):
+    repo = repository(catalog, "sample")
+    _readme_client(monkeypatch, b"---\nlicense: mit\n---\n")
+    threads = []
+    real = discovery.parse_card_record
+
+    def spy(content, repo_type):
+        import threading
+
+        threads.append(threading.current_thread() is threading.main_thread())
+        return real(content, repo_type)
+
+    monkeypatch.setattr(discovery, "parse_card_record", spy)
+
+    await discovery.index_repository(repo.id)
+
+    assert threads == [False]
+
+
+@pytest.mark.asyncio
+async def test_the_info_of_an_indexed_repository_costs_no_storage_read(catalog, monkeypatch):
+    repo = repository(catalog, "sample")
+    client = _readme_client(monkeypatch, b"---\nlicense: mit\n---\n")
+    await discovery.index_repository(repo.id)
+    reads = client.get_object_prefix.await_count
+
+    info = await discovery.info_card(repo)
+
+    assert info == {"card": {"license": "mit"}, "derived": {"tags": ["license:mit", "region:us"], "pipeline_tag": None, "library_name": None, "sdk": None}}
+    assert client.get_object_prefix.await_count == reads
+
+
+@pytest.mark.asyncio
+async def test_a_repository_not_indexed_yet_is_indexed_when_its_info_is_asked(catalog, monkeypatch):
+    repo = repository(catalog, "sample")
+    _readme_client(monkeypatch, b"---\nlicense: apache-2.0\n---\n")
+
+    info = await discovery.info_card(repo)
+
+    assert info["card"] == {"license": "apache-2.0"} and RepositoryMetadata.get_by_id(repo.id).state == "ready"
+
+
+@pytest.mark.asyncio
+async def test_a_row_indexed_before_the_card_existed_is_read_again(catalog, monkeypatch):
+    repo = repository(catalog, "sample")
+    index(repo, tag=["old"])  # ready, with facets, but no card row
+    client = _readme_client(monkeypatch, b"---\ntags: [fresh]\n---\n")
+
+    info = await discovery.info_card(repo)
+
+    assert info["card"] == {"tags": ["fresh"]} and client.get_object_prefix.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_an_unreadable_card_is_unknown_not_an_error(catalog, monkeypatch):
+    repo = repository(catalog, "sample")
+    client = _readme_client(monkeypatch, b"x")
+    client.get_branch.side_effect = TimeoutError()
+
+    assert await discovery.info_card(repo) is None
+
+
+@pytest.mark.asyncio
+async def test_a_repository_another_worker_is_indexing_is_unknown_for_now(catalog, monkeypatch):
+    repo = repository(catalog, "sample")
+    _readme_client(monkeypatch, b"---\nlicense: mit\n---\n")
+    assert discovery._claim(repo.id) is not None  # a lease held elsewhere
+
+    assert await discovery.info_card(repo) is None
+
+
+@pytest.mark.asyncio
+async def test_a_slow_storage_does_not_hold_the_info_back(catalog, monkeypatch):
+    repo = repository(catalog, "sample")
+    client = _readme_client(monkeypatch, b"x")
+
+    async def slow(*args, **kwargs):
+        await asyncio.sleep(1)
+
+    client.get_branch.side_effect = slow
+    monkeypatch.setattr(discovery, "INFO_INDEX_SECONDS", 0.05)
+
+    assert await discovery.info_card(repo) is None
+    assert RepositoryMetadata.get_by_id(repo.id).lease_token is None  # the lease was given back
+
+
+@pytest.mark.asyncio
+async def test_a_card_read_at_an_older_head_is_not_taken_for_the_current_one(catalog, monkeypatch):
+    repo = repository(catalog, "sample")
+    client = _readme_client(monkeypatch, b"---\nlicense: mit\n---\n", head="old-head")
+    await discovery.index_repository(repo.id)
+    RepositoryMetadata.update(main_sha="new-head").where(RepositoryMetadata.repository == repo.id).execute()  # published elsewhere
+    client.get_branch.return_value = {"commit_id": "new-head"}
+    client.get_object_prefix.return_value = b"---\nlicense: apache-2.0\n---\n"
+
+    info = await discovery.info_card(repo)
+
+    assert info["card"] == {"license": "apache-2.0"} and RepositoryCard.get_by_id(repo.id).main_sha == "new-head"
+
+
+def test_a_repository_removed_takes_its_card_with_it(catalog):
+    repo = repository(catalog, "sample")
+    RepositoryCard.create(repository=repo, main_sha="h", card="{}", derived="{}")
+
+    Repository.delete().where(Repository.id == repo.id).execute()
+
+    assert RepositoryCard.select().count() == 0

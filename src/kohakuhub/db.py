@@ -327,6 +327,22 @@ class RepositoryFacet(BaseModel):
         indexes = ((("repository", "key", "value"), True), (("key", "value", "repository"), False))
 
 
+class RepositoryCard(BaseModel):
+    """The README card of a repository's head commit and what it declares (#62).
+
+    A table of its own: migration 029 checks the columns of ``repository_metadata`` exactly.
+    ``main_sha`` is the head the card was read at; it is published with the index row of that head.
+    """
+
+    repository = ForeignKeyField(Repository, primary_key=True, on_delete="CASCADE")
+    main_sha = CharField(max_length=64, null=True)
+    card = TextField()  # the cleaned front matter as JSON; "{}" for a repository without a card
+    derived = TextField()  # tags, pipeline_tag, library_name, sdk as JSON, small enough for every row of a list
+
+    class Meta:
+        table_name = "repository_card"
+
+
 class File(BaseModel):
     id = AutoField()
     repository = ForeignKeyField(
@@ -936,6 +952,7 @@ def init_db():
             Repository,
             RepositoryMetadata,
             RepositoryFacet,
+            RepositoryCard,
             File,
             PathCommit,
             StagingUpload,

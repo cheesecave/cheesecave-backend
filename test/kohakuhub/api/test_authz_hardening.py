@@ -241,12 +241,12 @@ async def test_validate_yaml_is_bounded_but_stays_anonymous(app):
         multibyte = await anonymous.post(
             "/api/validate-yaml", json={"content": "é" * (YAML_LIMIT // 2 + 1)}
         )
-        ok = await anonymous.post("/api/validate-yaml", json={"content": "model:\n  name: demo\n"})
-        bad = await anonymous.post("/api/validate-yaml", json={"content": "model: [broken"})
+        ok = await anonymous.post("/api/validate-yaml", json={"content": "---\nmodel:\n  name: demo\n---\n"})
+        bad = await anonymous.post("/api/validate-yaml", json={"content": "---\nmodel: [broken\n---\n"})
 
     assert over.status_code == 413
     assert "too large" in over.json()["detail"]
     assert multibyte.status_code == 413  # the limit counts bytes, not characters
-    assert at_limit.status_code == 200 and at_limit.json() == {"valid": True}
-    assert ok.json() == {"valid": True}
-    assert bad.status_code == 200 and bad.json() == {"valid": False}
+    assert at_limit.status_code == 200 and at_limit.json()["valid"] is True  # no card: a warning, not an error
+    assert ok.json() == {"valid": True, "errors": [], "warnings": []}
+    assert bad.status_code == 400 and bad.json()["valid"] is False

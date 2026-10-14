@@ -81,6 +81,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The README card in the repository info** (#62). `cardData`, `tags`, `pipeline_tag`, `library_name`
+  (models), `sdk` (spaces) and `paperswithcode_id` (datasets) come from the README front matter of the head
+  commit, cleaned so that one odd README cannot break a client (`huggingface_hub` raised for non-string keys,
+  `ignore_metadata_errors` or non-list tags); list items carry them once indexed, `cardData=true` / `full=true`
+  add the card; `expand[]=` is read like `expand=`; `_id` is a string; datasets and spaces no longer carry
+  model-only keys. Migration 035 adds the table `repository_card` (nothing is backfilled: a repository without
+  a row is read the first time its info is asked for). `POST /api/validate-yaml` follows the Hub:
+  `{errors, warnings}`, `400` for metadata that cannot be read (`huggingface_hub` now refuses such a README
+  before uploading it; `valid` is still answered).
 - **Account routes in the Hub's shapes** (#60, #64, #65). `list_user_followers`, `list_user_following`
   and `list_organization_followers` read a bare array with `Link` paging (they raised `TypeError`
   before); `whoami-v2` carries `avatarUrl` and the Hub's organization fields; user and organization

@@ -400,7 +400,8 @@ def test_a_database_without_032_goes_through_032_then_033_in_one_run(pre_a, monk
     """The path of anyone who skipped the previous deploy: the runner applies 032, then 033."""
     runner = _load("run_migrations_order", ROOT / "scripts/run_migrations.py")
     names = [name for name, _path in runner.discover_migrations()]
-    assert names[-3:] == [
+    start = names.index("032_file_branch_expand")  # later migrations follow; the order of these is the point
+    assert names[start : start + 3] == [
         "032_file_branch_expand",
         "033_file_branch_drop_old_key",
         "034_branch_commit_lock",
