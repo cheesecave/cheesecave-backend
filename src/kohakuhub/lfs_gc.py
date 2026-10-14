@@ -119,9 +119,7 @@ def _unique_versions(repository_id: int, path: str) -> list[str]:
     return seen
 
 
-def retention_reason(
-    sha256: str, now: datetime | None = None, ignore_history_of: int | None = None
-) -> str | None:
+def retention_reason(sha256: str, now: datetime | None = None) -> str | None:
     """Why ``sha256`` must be kept, or ``None`` when nothing relies on it.
 
     - ``recent``: uploaded or claimed by a commit within ``RECENT_GRACE``;
@@ -130,10 +128,6 @@ def retention_reason(
     - ``history``: a history row references it. With ``lfs_auto_gc`` on,
       only while it is among the newest ``keep_versions`` unique versions
       of that repository path; with it off every version is kept.
-
-    ``ignore_history_of`` (a repository id) leaves that repository's own history out of the
-    decision: its owner asked for the object to go for good (#66). What every branch head, active
-    file, recent upload and other repository relies on still keeps it.
     """
     now = now or utcnow()
     if LfsRecentObject.get_or_none(
@@ -147,14 +141,9 @@ def retention_reason(
     if File.select().where((File.sha256 == sha256) & (File.is_deleted == False)).exists():
         return "file"
     H = LFSObjectHistory
-    references = [
-        (repository_id, path)
-        for repository_id, path in H.select(H.repository, H.path_in_repo)
-        .where(H.sha256 == sha256)
-        .distinct()
-        .tuples()
-        if repository_id != ignore_history_of
-    ]
+    references = list(
+        H.select(H.repository, H.path_in_repo).where(H.sha256 == sha256).distinct().tuples()
+    )
     if not references:
         return None
     if not cfg.app.lfs_auto_gc:
@@ -437,10 +426,8 @@ def collected_after_all(sha256: str) -> None:
             usage.object_gone(sha256)
 
 
-def begin_delete(sha256: str, ignore_history_of: int | None = None) -> bool:
+def begin_delete(sha256: str) -> bool:
     """Decide under the object's lock and tombstone it if it may go.
-
-    ``ignore_history_of``: see ``retention_reason``.
 
     Returns whether the caller should delete the object from storage. An
     object that is relied on again loses a leftover ``deleting`` tombstone,
@@ -448,7 +435,7 @@ def begin_delete(sha256: str, ignore_history_of: int | None = None) -> bool:
     """
     with _database().atomic():
         _lock(sha256)
-        if retention_reason(sha256, ignore_history_of=ignore_history_of) is not None:
+        if retention_reason(sha256) is not None:
             if LfsObjectTombstone.delete().where(
                 (LfsObjectTombstone.sha256 == sha256) & (LfsObjectTombstone.state == DELETING)
             ).execute():
@@ -464,17 +451,6 @@ def begin_delete(sha256: str, ignore_history_of: int | None = None) -> bool:
             update={LfsObjectTombstone.state: DELETING, LfsObjectTombstone.updated_at: now},
         ).execute()
         return True
-
-
-def abort_delete(shas: Iterable[str]) -> None:
-    """Undo ``begin_delete`` for objects whose bytes could not be deleted from storage."""
-    for sha256 in shas:
-        with _database().atomic():
-            _lock(sha256)
-            if LfsObjectTombstone.delete().where(
-                (LfsObjectTombstone.sha256 == sha256) & (LfsObjectTombstone.state == DELETING)
-            ).execute():
-                usage.object_back(sha256)
 
 
 def finish_delete(shas: Iterable[str]) -> None:

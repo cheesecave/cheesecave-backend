@@ -448,12 +448,10 @@ Files use LFS if they meet **either** condition:
 - Older versions auto-deleted on new uploads
 - Manual GC via admin API
 
-### List and Delete a Repository's LFS Files
+### List a Repository's LFS Files
 
-For storage clean-up by the repository owner: `HfApi.list_lfs_files` and `HfApi.permanently_delete_lfs_files`.
-
-**List:** `GET /api/{repo_type}s/{namespace}/{name}/lfs-files` (write access). A JSON array, newest first, one entry per
-object, paged with `Link: <url>; rel="next"` (`limit` up to 1000):
+`HfApi.list_lfs_files`: `GET /api/{repo_type}s/{namespace}/{name}/lfs-files` (write access). A JSON array, newest first,
+one entry per object, paged with `Link: <url>; rel="next"` (`limit` up to 1000):
 
 ```json
 [{"filename": "ckpt/model.bin", "oid": "<sha256>", "fileOid": "<sha256>", "pushedAt": "2026-10-14T09:00:00.000000Z",
@@ -461,29 +459,16 @@ object, paged with `Link: <url>; rel="next"` (`limit` up to 1000):
 ```
 
 `filename` and `size` are those of the object's latest version, `pushedAt` is when it was first pushed, `ref` the branch of
-that version (`null` when history does not say). An object garbage collection or a delete removed is not listed.
+that version (`null` when history does not say). An object garbage collection removed is not listed.
 
-**Delete:** `POST /api/{repo_type}s/{namespace}/{name}/lfs-files/batch` (delete permission: the owner or an organization
-admin), body `{"deletions": {"sha": ["<sha256>", ...], "rewriteHistory": false}}`, at most 1000 per request. All or none:
+### Permanently Deleting LFS Files Is Not Supported
 
-- `200` `{"deleted": [...], "alreadyDeleted": [...], "kept": {...}}`. The bytes are gone, the commits that linked them stay
-  and are reported as missing those files (as after garbage collection), and the repository's storage drops by their size.
-  An object can be re-uploaded.
-- `409` `{"inUse": {"<sha256>": "head" | "file" | "recent" | "history"}}`, nothing deleted: a branch head links it (any
-  repository's), an active file has it, it was uploaded or committed in the last 24 hours, or another repository's
-  history keeps it. The decision is the garbage collection's (`kohakuhub.lfs_gc`), with this repository's own history
-  left out of it.
-- `404` `{"unknown": [...]}`: not an LFS file of this repository.
-- `501` for `"rewriteHistory": true`: history cannot be rewritten. **`huggingface_hub` sends `true` unless told
-  otherwise: call `permanently_delete_lfs_files(repo_id, files, rewrite_history=False)`.**
+`HfApi.permanently_delete_lfs_files` posts to `POST /api/{repo_type}s/{namespace}/{name}/lfs-files/batch`, which answers
+`501` (`X-Error-Message: permanently_delete_lfs_files is not supported ...`) whatever the request says, and deletes nothing.
 
-```python
-from huggingface_hub import HfApi
-
-api = HfApi(endpoint=..., token=...)
-old = [f for f in api.list_lfs_files("me/model") if f.filename.startswith("ckpt/") and f.ref != "refs/heads/main"]
-api.permanently_delete_lfs_files("me/model", old, rewrite_history=False)
-```
+LFS objects are stored once for every repository (see above), so one repository cannot free one on its own. What frees
+storage today is garbage collection: set the repository's **LFS keep versions** (repository settings) and the older versions
+of a file beyond it are collected once nothing else relies on them.
 
 ---
 
