@@ -1,5 +1,7 @@
 [run]
 source = kohakuhub
+# Slices run on different runners and are added up in one job (backend-gate).
+relative_files = True
 omit =
     */test/*
     */tests/*

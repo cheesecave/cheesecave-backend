@@ -1047,3 +1047,35 @@ async def test_create_repo_row_failure_survives_lakefs_cleanup_errors(monkeypatc
     )
 
     assert response.status_code == 500
+
+
+async def test_orphan_cleanup_leaves_a_namespace_whose_lakefs_repository_exists(monkeypatch):
+    """A live repository is not an orphan: nothing may be listed or deleted."""
+
+    async def exists(name):
+        return True
+
+    async def never(*args, **kwargs):
+        raise AssertionError("the namespace of a live repository must not be touched")
+
+    monkeypatch.setattr(repo_crud, "_list_repo_namespace_keys", never)
+    monkeypatch.setattr(repo_crud, "delete_objects_with_prefix", never)
+
+    client = SimpleNamespace(repository_exists=exists)
+    assert await repo_crud._cleanup_orphan_namespace_if_safe(client, "m-owner-demo") is False
+
+
+async def test_orphan_cleanup_gives_up_when_it_cannot_tell_if_the_repository_exists(monkeypatch):
+    """If LakeFS cannot be asked, the namespace is not proven to be an orphan."""
+
+    async def broken(name):
+        raise RuntimeError("lakefs down")
+
+    async def never(*args, **kwargs):
+        raise AssertionError("an unverified namespace must not be touched")
+
+    monkeypatch.setattr(repo_crud, "_list_repo_namespace_keys", never)
+    monkeypatch.setattr(repo_crud, "delete_objects_with_prefix", never)
+
+    client = SimpleNamespace(repository_exists=broken)
+    assert await repo_crud._cleanup_orphan_namespace_if_safe(client, "m-owner-demo") is False
