@@ -198,6 +198,26 @@ async def test_whoami_v2_requires_auth_and_returns_orgs(app, owner_client):
     assert any(org["name"] == "acme-labs" for org in payload["orgs"])
 
 
+async def test_whoami_v2_carries_the_account_fields_hub_clients_read(owner_client):
+    payload = (await owner_client.get("/api/whoami-v2")).json()
+
+    assert "avatarUrl" in payload and payload["avatarUrl"] is None  # no avatar uploaded
+    org = next(org for org in payload["orgs"] if org["name"] == "acme-labs")
+    assert org["type"] == "org" and org["id"] and org["fullname"] == "acme-labs"
+    assert org["roleInOrg"] and org["avatarUrl"] is None and org["canPay"] is False and org["isEnterprise"] is False
+
+
+async def test_whoami_v2_links_an_uploaded_avatar_absolutely(owner_client):
+    import sys
+
+    db = sys.modules["kohakuhub.db"]
+    db.User.update(avatar=b"jpeg", avatar_updated_at=db.datetime.now()).where(db.User.username == "owner").execute()
+
+    payload = (await owner_client.get("/api/whoami-v2")).json()
+
+    assert payload["avatarUrl"].startswith("http") and "/api/users/owner/avatar" in payload["avatarUrl"]
+
+
 async def test_whoami_v2_bearer_and_cookie_agree(app, owner_client, hf_api_token):
     """A bearer-token caller and a cookie-session caller for the same user
     must receive identical ``/api/whoami-v2`` payloads (at minimum:

@@ -7,6 +7,7 @@ uses ``db_dual``, so every test runs on SQLite and on PostgreSQL.
 from datetime import datetime, timedelta, timezone
 from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
+from urllib.parse import parse_qs, urlsplit
 from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, Response
@@ -135,7 +136,19 @@ def test_concurrent_first_follow_writes_are_idempotent(catalog):
     assert UserFollow.select().count() == 1
 
 
-def test_lists_minimal_profiles_pagination_and_cursor_binding(catalog):
+def _follow_pages(session, path, limit):
+    """Every page of a follow list the way ``huggingface_hub`` reads it: a bare array and ``Link``."""
+    rows, url, params = [], path, {"limit": limit}
+    while url:
+        response = session.get(url, params=params)
+        assert response.status_code == 200 and isinstance(response.json(), list)
+        rows += response.json()
+        link = response.links.get("next")
+        url, params = (link["url"], None) if link else (None, None)
+    return rows
+
+
+def test_lists_hub_shaped_profiles_with_link_pagination_and_cursor_binding(catalog):
     for index in range(105):
         target = User.create(
             username=f"target{index}",
@@ -143,30 +156,47 @@ def test_lists_minimal_profiles_pagination_and_cursor_binding(catalog):
             email=f"private{index}@test.invalid",
         )
         UserFollow.create(follower=catalog.viewer, followed=target, created_at=STAMP)
-    seen = []
-    cursor = None
-    while True:
-        result = catalog.session.get(
-            "/api/users/viewer/following",
-            params={"limit": 17, **({"cursor": cursor} if cursor else {})},
-        ).json()
-        seen += result["items"]
-        if not result["has_more"]:
-            break
-        cursor = result["next_cursor"]
-    assert len(seen) == len({row["username"] for row in seen}) == 105
-    assert all(
-        set(row) == {"username", "full_name", "is_org", "avatar_url", "followed_at"}
-        and row["followed_at"].endswith("Z")
-        for row in seen
-    )
-    first = catalog.session.get("/api/users/viewer/following", params={"limit": 1}).json()
-    assert (
-        catalog.session.get(
-            "/api/users/viewer/followers", params={"cursor": first["next_cursor"]}
-        ).status_code
-        == 422
-    )
+
+    seen = _follow_pages(catalog.session, "/api/users/viewer/following", 17)
+
+    assert len(seen) == len({row["user"] for row in seen}) == 105
+    assert all(set(row) == {"avatarUrl", "fullname", "isPro", "type", "user"} for row in seen)
+    assert all(row["type"] == "user" and row["isPro"] is False for row in seen)
+    first = catalog.session.get("/api/users/viewer/following", params={"limit": 1})
+    cursor = parse_qs(urlsplit(first.links["next"]["url"]).query)["cursor"][0]
+    assert catalog.session.get("/api/users/viewer/followers", params={"cursor": cursor}).status_code == 422
+
+
+def test_the_last_page_of_a_follow_list_has_no_link_and_an_empty_list_is_an_empty_array(catalog):
+    UserFollow.create(follower=catalog.viewer, followed=catalog.author, created_at=STAMP)
+
+    last = catalog.session.get("/api/users/viewer/following", params={"limit": 1})
+    nobody = catalog.session.get("/api/users/outsider/followers")
+
+    assert [row["user"] for row in last.json()] == ["author"] and "next" not in last.links
+    assert nobody.status_code == 200 and nobody.json() == []
+
+
+def test_a_profile_is_named_by_full_name_or_username_and_flags_organizations(catalog):
+    UserFollow.create(follower=catalog.viewer, followed=catalog.author, created_at=STAMP)
+    UserFollow.create(follower=catalog.viewer, followed=catalog.org, created_at=STAMP + timedelta(seconds=1))
+    User.update(avatar=b"jpeg", avatar_updated_at=STAMP).where(User.id == catalog.author.id).execute()
+
+    rows = {row["user"]: row for row in catalog.session.get("/api/users/viewer/following").json()}
+
+    assert rows["author"]["fullname"] == "An author" and rows["author"]["type"] == "user"
+    assert rows["author"]["avatarUrl"].startswith("http") and "/api/users/author/avatar" in rows["author"]["avatarUrl"]
+    assert rows["org"]["fullname"] == "org" and rows["org"]["type"] == "org" and rows["org"]["avatarUrl"] is None
+
+
+def test_organization_followers_are_listed_under_the_hubs_path(catalog):
+    UserFollow.create(follower=catalog.viewer, followed=catalog.org, created_at=STAMP)
+
+    rows = catalog.session.get("/api/organizations/org/followers").json()
+
+    assert [row["user"] for row in rows] == ["viewer"]
+    assert catalog.session.get("/api/organizations/author/followers").status_code == 404  # a user, not an organization
+    assert catalog.session.get("/api/organizations/ghost/followers").status_code == 404
 
 
 def test_real_authors_creation_null_scopes_and_type(catalog):

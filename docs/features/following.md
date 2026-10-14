@@ -14,15 +14,26 @@ All routes below use the configured API prefix, normally `/api`, and return `Cac
 | `GET /users/{username}/follow` | Optional | Follow state and counts |
 | `PUT /users/{username}/follow` | Active individual | Idempotent follow |
 | `DELETE /users/{username}/follow` | Active individual | Idempotent unfollow |
-| `GET /users/{username}/followers` | Optional | Cursor-paginated followers |
-| `GET /users/{username}/following` | Optional | Cursor-paginated followed accounts |
+| `GET /users/{username}/followers` | Optional | Followers, in the Hub's shape (below) |
+| `GET /users/{username}/following` | Optional | Followed accounts, in the Hub's shape (below) |
+| `GET /organizations/{org}/followers` | Optional | Followers of an organization |
 | `GET /workspace/feed` | Active individual | Cursor-paginated activity |
 
 Follow state contains `username`, `is_org`, `following`, `can_follow`, `followers_count`, and
-`following_count`. Anonymous viewers receive `following: false` and `can_follow: false`. Follow lists
-contain `items`, `has_more`, and `next_cursor`. Each item contains `username`, `full_name`, `is_org`,
-`avatar_url` (nullable), and `followed_at`. Emails, membership lists, and avatar blobs are not exposed.
-Lists accept `limit` (default 20, range 1–100) and an opaque `cursor`.
+`following_count`. Anonymous viewers receive `following: false` and `can_follow: false`.
+
+Follow lists are the Hub's: a bare JSON array of `{avatarUrl, fullname, isPro, type, user}` (`type` is
+`user` or `org`; `avatarUrl` is absolute and nullable), which is what `huggingface_hub`'s
+`list_user_followers`, `list_user_following` and `list_organization_followers` read. When more follow, the
+response carries `Link: <url>; rel="next"` (RFC 8288) and no `Link` on the last page. Lists accept `limit`
+(default 100, range 1–100) and an opaque `cursor`, which is only ever taken from a `Link`. Emails,
+membership lists, and avatar blobs are not exposed. (Before this change the lists were
+`{items, has_more, next_cursor}` objects; the web client reads both shapes.)
+
+Also under the Hub's paths: `GET /users/{user}/overview`, `GET /organizations/{org}/overview` and
+`GET /organizations/{org}/members` (`get_user_overview`, `get_organization_overview`,
+`list_organization_members`). Repository counts in an overview are what the viewer may read, so a private
+repository is never counted for a stranger.
 
 The feed accepts `scope=all|self|organization|following|personal` (default `all`),
 `repo_type=all|model|dataset|space` (default `all`), `event_type=all|repository|like` (default `all`),

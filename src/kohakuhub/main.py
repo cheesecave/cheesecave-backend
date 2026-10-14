@@ -15,6 +15,7 @@ from kohakuhub.api import (
     likes,
     misc,
     settings,
+    hf_account,
     social,
     site_appearance,
     site_branding,
@@ -217,6 +218,7 @@ app.include_router(settings.router, prefix=cfg.app.api_base, tags=["settings"])
 app.include_router(avatar.router, prefix=cfg.app.api_base, tags=["avatars"])
 app.include_router(likes.router, prefix=cfg.app.api_base, tags=["likes"])
 app.include_router(social.router, prefix=cfg.app.api_base, tags=["social"])
+app.include_router(hf_account.router, prefix=cfg.app.api_base, tags=["hf-account"])
 app.include_router(stats.router, prefix=cfg.app.api_base, tags=["stats"])
 app.include_router(invitation, prefix=cfg.app.api_base, tags=["invitations"])
 app.include_router(quota, tags=["quota"])

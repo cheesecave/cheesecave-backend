@@ -26,15 +26,21 @@ Get authenticated user information in HuggingFace-compatible format.
   "id": "123",
   "name": "alice",
   "fullname": "alice",
+  "avatarUrl": null,
   "email": "alice@example.com",
   "emailVerified": true,
   "canPay": false,
   "isPro": false,
   "orgs": [
     {
+      "type": "org",
+      "id": "7",
       "name": "myorg",
       "fullname": "myorg",
-      "roleInOrg": "admin"
+      "avatarUrl": null,
+      "roleInOrg": "admin",
+      "canPay": false,
+      "isEnterprise": false
     }
   ],
   "auth": {

@@ -11,6 +11,40 @@ from kohakuhub import repository_discovery as discovery
 
 router = APIRouter()
 
+# The Hub's tag groups, filled from the facets this hub indexes: facet key -> group.
+MODEL_TAG_GROUPS = {"task": "pipeline_tag", "library": "library", "language": "language", "license": "license", "tag": "other"}
+DATASET_TAG_GROUPS = {
+    "task": "task_categories",
+    "size": "size_categories",
+    "language": "language",
+    "license": "license",
+}
+MODEL_TAG_TYPES = ("pipeline_tag", "library", "language", "license", "dataset", "region", "deploy", "other")
+DATASET_TAG_TYPES = ("benchmark", "language_creators", "language", "license", "multilinguality", "size_categories", "task_categories", "task_ids")
+
+
+def _tag_vocabulary(repo_type: str, groups: dict, types: tuple, user) -> dict:
+    """Tags in use on this hub among what ``user`` may read, grouped like the Hub's ``*-tags-by-type``."""
+    scope = filter_readable_repositories(Repository.select().where(Repository.repo_type == repo_type), user)
+    vocabulary = {group: [] for group in types}
+    for facet in discovery.facet_options(scope, {}):
+        group = groups.get(facet["key"])
+        if group:
+            vocabulary[group] = [
+                {"id": option["value"], "label": option["value"], "type": group} for option in facet["options"]
+            ]
+    return vocabulary
+
+
+@router.get("/models-tags-by-type")
+async def model_tags(user: User | None = Depends(get_optional_user)):
+    return _tag_vocabulary("model", MODEL_TAG_GROUPS, MODEL_TAG_TYPES, user)
+
+
+@router.get("/datasets-tags-by-type")
+async def dataset_tags(user: User | None = Depends(get_optional_user)):
+    return _tag_vocabulary("dataset", DATASET_TAG_GROUPS, DATASET_TAG_TYPES, user)
+
 
 @router.get("/{plural}/discover")
 async def discover_repositories(

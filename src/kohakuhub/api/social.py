@@ -6,10 +6,13 @@ from datetime import datetime, timezone
 import json
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from fastapi.responses import JSONResponse
 from peewee import SqliteDatabase, fn
 
 from kohakuhub.api.repo.routers.info import _latest_main_commits
+from kohakuhub.api.utils.accounts import absolute, avatar_path
+from kohakuhub.api.utils.paging import link_header
 from kohakuhub.auth.dependencies import get_current_user, get_optional_user
 from kohakuhub.auth.permissions import (
     compile_repository_predicate,
@@ -93,17 +96,11 @@ def _individual(user):
 
 
 def _profile(user):
-    avatar = None
-    if user.has_avatar:
-        prefix = "organizations" if user.is_org else "users"
-        avatar = f"/api/{prefix}/{user.username}/avatar?fallback=false"
-        if user.avatar_updated_at:
-            avatar += "&v=" + _utc(user.avatar_updated_at)
     return {
         "username": user.username,
         "full_name": user.full_name,
         "is_org": user.is_org,
-        "avatar_url": avatar,
+        "avatar_url": avatar_path(user.username, user.is_org, user.has_avatar, user.avatar_updated_at),
     }
 
 
@@ -227,28 +224,63 @@ def _list_follow(username, direction, limit, cursor, viewer):
         return {"items": items, "has_more": has_more, "next_cursor": next_cursor}
 
 
+def _hub_user(item):
+    """One follow-list entry in the Hub's shape (what ``huggingface_hub`` builds ``User`` from)."""
+    return {
+        "avatarUrl": absolute(item["avatar_url"]),
+        "fullname": item["full_name"] or item["username"],
+        "isPro": False,
+        "type": "org" if item["is_org"] else "user",
+        "user": item["username"],
+    }
+
+
+def _follow_response(request, username, direction, limit, cursor, viewer, response):
+    """A follow list as the Hub answers it: a bare array, the next page in ``Link``."""
+    _no_store(response)
+    page = _list_follow(username, direction, limit, cursor, viewer)
+    return JSONResponse(
+        [_hub_user(item) for item in page["items"]],
+        headers={**response.headers, **link_header(request, page["next_cursor"])},
+    )
+
+
 @router.get("/users/{username}/followers")
 def followers(
     username: str,
+    request: Request,
     response: Response,
-    limit: int = Query(20, ge=1, le=100),
+    limit: int = Query(100, ge=1, le=100),
     cursor: str | None = None,
     user: User | None = Depends(get_optional_user),
 ):
-    _no_store(response)
-    return _list_follow(username, "followers", limit, cursor, user)
+    return _follow_response(request, username, "followers", limit, cursor, user, response)
 
 
 @router.get("/users/{username}/following")
 def following(
     username: str,
+    request: Request,
     response: Response,
-    limit: int = Query(20, ge=1, le=100),
+    limit: int = Query(100, ge=1, le=100),
     cursor: str | None = None,
     user: User | None = Depends(get_optional_user),
 ):
-    _no_store(response)
-    return _list_follow(username, "following", limit, cursor, user)
+    return _follow_response(request, username, "following", limit, cursor, user, response)
+
+
+@router.get("/organizations/{org_name}/followers")
+def organization_followers(
+    org_name: str,
+    request: Request,
+    response: Response,
+    limit: int = Query(100, ge=1, le=100),
+    cursor: str | None = None,
+    user: User | None = Depends(get_optional_user),
+):
+    if not _target(org_name).is_org:
+        raise HTTPException(404, "Local organization not found")
+    return _follow_response(request, org_name, "followers", limit, cursor, user, response)
 
 
 def _feed(user, scope, repo_type, limit, cursor, organization=None, event_type="all"):

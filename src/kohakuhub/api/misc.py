@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 import yaml
 
+from kohakuhub.api.utils.accounts import avatar_url
 from kohakuhub.config import cfg, read_env
 from kohakuhub.db import User, UserOrganization
 from kohakuhub.logger import get_logger
@@ -143,11 +144,17 @@ def whoami_v2(user: User | None = Depends(get_optional_user)):
 
     orgs_list = []
     for uo in user_orgs:
+        org = uo.organization
         orgs_list.append(
             {
-                "name": uo.organization.username,
-                "fullname": uo.organization.username,
+                "type": "org",
+                "id": str(org.id),
+                "name": org.username,
+                "fullname": org.full_name or org.username,
+                "avatarUrl": avatar_url(org),
                 "roleInOrg": uo.role,
+                "canPay": False,
+                "isEnterprise": False,
             }
         )
 
@@ -155,7 +162,8 @@ def whoami_v2(user: User | None = Depends(get_optional_user)):
         "type": "user",
         "id": str(user.id),
         "name": user.username,
-        "fullname": user.username,
+        "fullname": user.full_name or user.username,
+        "avatarUrl": avatar_url(user),
         "email": user.email,
         "emailVerified": user.email_verified,
         "canPay": False,

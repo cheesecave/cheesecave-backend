@@ -1,7 +1,6 @@
 """Repository information and listing endpoints."""
 
 from datetime import datetime
-from urllib.parse import urlencode
 from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, Query, Request
@@ -29,6 +28,7 @@ from kohakuhub.api.fallback import with_repo_fallback, with_user_fallback
 from kohakuhub.api.fallback.config import get_enabled_sources
 from kohakuhub.api.fallback.operations import ExternalListError
 from kohakuhub.api.repo.utils import listing
+from kohakuhub.api.utils.paging import next_link
 from kohakuhub.utils.datetime_utils import safe_strftime
 from kohakuhub.api.repo.utils.hf import (
     HFErrorCode,
@@ -282,6 +282,31 @@ async def get_repo_info(
     return hf_repo_info_response(fields, expand, siblings)
 
 
+@router.get("/models/{namespace}/{repo_name}/auth-check")
+@router.get("/datasets/{namespace}/{repo_name}/auth-check")
+@router.get("/spaces/{namespace}/{repo_name}/auth-check")
+@with_repo_fallback("info")
+async def repo_auth_check(
+    namespace: str,
+    repo_name: str,
+    request: Request,
+    fallback: bool = True,
+    user: User | None = Depends(get_optional_user),
+):
+    """``HfApi.auth_check``: 200 when the caller can read the repository.
+
+    Anything else is the same 404 ``RepoNotFound`` the info route answers, so a private
+    repository is not told apart from a missing one (the client raises
+    ``RepositoryNotFoundError`` for both).
+    """
+    repo_type = request.url.path.split("/")[-4].removesuffix("s")
+    repo_row = get_repository(repo_type, namespace, repo_name)
+    if not repo_row:
+        return hf_repo_not_found(f"{namespace}/{repo_name}", repo_type)
+    check_repo_read_permission(repo_row, user)
+    return {}
+
+
 def _filter_repos_by_privacy(q, user: Optional[User], author: Optional[str] = None):
     """Compatibility wrapper for older internal callers; policy lives in auth."""
     return filter_readable_repositories(q, user, author)
@@ -328,13 +353,6 @@ async def _render_local(ids: list[int], tag_source: bool) -> list[dict]:
             item["_source_url"] = cfg.app.base_url
         result.append(item)
     return result
-
-
-def _next_link(request: Request, cursor: str) -> str:
-    """Absolute URL of the same request with ``cursor`` replaced (repeated params kept)."""
-    kept = [(n, v) for n, v in request.query_params.multi_items() if n != "cursor"]
-    kept.append(("cursor", cursor))
-    return f"{cfg.app.base_url.rstrip('/')}{request.url.path}?{urlencode(kept)}"
 
 
 @router.get("/models")
@@ -407,7 +425,7 @@ async def list_repos(
     headers = {}
     if page.next_state is not None:
         token = listing.encode_cursor(page.next_state, query.fingerprint())
-        headers["Link"] = f'<{_next_link(request, token)}>; rel="next"'
+        headers["Link"] = f'<{next_link(request, token)}>; rel="next"'
     if page.incomplete:
         headers["X-Cheesecave-Incomplete"] = ", ".join(page.incomplete)
     return JSONResponse(page.items, headers=headers)
