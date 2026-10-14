@@ -32,6 +32,7 @@ from kohakuhub.auth.permissions import (
     check_repo_write_permission,
 )
 from kohakuhub.utils.lakefs import (
+    resolve_revision_and_path,
     get_lakefs_client,
     resolve_lakefs_repo,
     resolve_revision,
@@ -202,7 +203,7 @@ async def process_preupload_file(
     }
 
 
-@router.post("/{repo_type}s/{namespace}/{name}/preupload/{revision}")
+@router.post("/{repo_type}s/{namespace}/{name}/preupload/{revision:path}")
 async def preupload(
     repo_type: RepoType,
     namespace: str,
@@ -313,7 +314,7 @@ async def preupload(
 # ========== Revision Info Endpoint ==========
 
 
-@router.get("/{repo_type}s/{namespace}/{name}/revision/{revision}")
+@router.get("/{repo_type}s/{namespace}/{name}/revision/{revision:path}")
 @with_repo_fallback("revision")
 async def get_revision(
     repo_type: RepoType,
@@ -456,8 +457,13 @@ async def _get_file_metadata(
     revision: str,
     path: str,
     user: User | None,
+    served: dict | None = None,
 ):
-    """Shared logic to get file metadata for HEAD/GET requests."""
+    """Shared logic to get file metadata for HEAD/GET requests.
+
+    ``served``, when given, receives the ``revision`` and ``path`` as they were understood: a branch named
+    ``feature/x`` reaches this as revision ``feature`` and path ``x/a.txt`` (#67).
+    """
     repo_id = f"{namespace}/{name}"
 
     # Check repository exists and read permission
@@ -483,7 +489,10 @@ async def _get_file_metadata(
     # A revision LakeFS does not know is not a missing file (#58), and neither
     # is a LakeFS failure (#10): the Hub tells the three apart, and so do clients.
     try:
-        commit_hash, _ = await resolve_revision(client, lakefs_repo, revision, repo_row)
+        # A branch or tag with a slash may start the path (#67)
+        commit_hash, _, revision, path = await resolve_revision_and_path(
+            resolve_revision, client, lakefs_repo, repo_row, revision, path
+        )
     except ValueError as e:
         raise _resolve_error(
             404,
@@ -494,6 +503,8 @@ async def _get_file_metadata(
         raise _resolve_error(
             500, HFErrorCode.SERVER_ERROR, f"Failed to resolve revision: {e}"
         ) from e
+    if served is not None:
+        served.update(revision=revision, path=path)
 
     try:
         # Get object metadata from LakeFS
@@ -636,9 +647,11 @@ async def resolve_file_get(
     Returns 302 redirect to presigned S3 URL for actual download.
     Also tracks download in background for statistics.
     """
+    served: dict = {}
     presigned_url, file_headers = await _get_file_metadata(
-        repo_type, namespace, name, revision, path, user
+        repo_type, namespace, name, revision, path, user, served
     )
+    path = served.get("path", path)
     if (not_modified := _not_modified(request, file_headers)) is not None:
         return not_modified
 
