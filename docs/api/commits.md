@@ -8,6 +8,19 @@ icon: i-carbon-commit
 
 View commit history, commit details, and file-level diffs.
 
+## Commit ids
+
+LakeFS names a commit by 64 hex characters; the Hugging Face Hub, and so `huggingface_hub`, names it by 40 (a git
+commit id) and takes any prefix of 5 to 40 as a revision or a `parent_commit`. Every route that takes a commit id
+takes **all of those forms**: the full 64, the Hub's 40, or an abbreviation (`commit/{id}`, `commit/{id}/diff`,
+`commit/{id}/operations`, `commit/{id}/unavailable-files`, `commits/{branch}`, `revision/{id}`, `tree/{id}`,
+`paths-info/{id}`, `resolve/{id}/...`, a revision of `branch` or `tag`, a `parentCommit`, the `ref` of a revert or
+reset, the source of a merge). A page or a script that holds 64 hex keeps working, and so does one that holds 40.
+
+The two list routes below answer **under the id as it was asked**: ask for `c1[:40]` and the answer is keyed
+`c1[:40]`, ask for the full id and it is keyed by the full id. A name that is no commit id (a branch name) is answered
+under the commit's full id, as it always was. What is no commit id, or names no commit, is left out.
+
 ---
 
 ## List Commits
@@ -223,8 +236,8 @@ verdicts carry `requires_force` (the reset endpoint requires `force` for
 
 **Pattern:** `POST /api/{repo_type}s/{namespace}/{name}/commits/{branch}/operations`
 
-Body: `{"commit_ids": [...]}`, at most 100. Returns
-`{"branch", "head", "can_write", "operations", "commits": {id: {"revert", "reset"}}}`.
+Body: `{"commit_ids": [...]}`, at most 100, in any of the forms above. Returns
+`{"branch", "head", "can_write", "operations", "commits": {id: {"revert", "reset"}}}`, `id` as asked.
 Only what is proven unavailable at bounded cost is reported; everything else
 is `{"available": null}` (unknown, never "available"): the initial commit
 cannot be reverted, the head needs no reset, and LFS objects are only looked
@@ -263,8 +276,8 @@ number of objects, or the bucket could not be reached).
 
 **Pattern:** `POST /api/{repo_type}s/{namespace}/{name}/commits/unavailable-files`
 
-Body: `{"commit_ids": [...]}`, at most 100. Returns
-`{"commits": {id: [paths]}}`: the LFS files each commit committed (added,
+Body: `{"commit_ids": [...]}`, at most 100, in any of the forms above. Returns
+`{"commits": {id: [paths]}}` (`id` as asked): the LFS files each commit committed (added,
 changed, restored, or re-committed unchanged) whose object garbage
 collection removed. One database query, whatever the history's
 length; files a commit only inherited are listed on its commit page.

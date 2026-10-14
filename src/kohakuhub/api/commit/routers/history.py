@@ -5,6 +5,7 @@ import difflib
 from datetime import datetime, timezone
 from typing import Optional
 
+import httpx
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import JSONResponse
 
@@ -21,11 +22,17 @@ from kohakuhub.api.repo.utils.hf import (
     ensure_revision_in_history,
     format_hf_datetime,
     hf_repo_not_found,
+    hf_revision_not_found,
     hf_server_error,
 )
 
 logger = get_logger("COMMITS")
 router = APIRouter()
+
+
+def _no_such_commit(error: Exception) -> bool:
+    """LakeFS knows no such commit (404), or the id is no commit id at all (400): not a failure of the server."""
+    return isinstance(error, httpx.HTTPStatusError) and error.response.status_code in (400, 404)
 
 
 def _to_hf_commit_response(commit: dict, include_formatted: bool) -> dict:
@@ -225,8 +232,9 @@ async def get_commit_detail(
             repository=lakefs_repo, commit_id=commit_id
         )
 
-        # Get our commit record (with actual user info) using repository FK
-        our_commit = get_commit(commit_id, repo_row)
+        # Get our commit record (with actual user info) using repository FK. The database
+        # knows a commit by its full id, whatever form (40 hex, an abbreviation) the request gave
+        our_commit = get_commit(lakefs_commit["id"], repo_row)
 
         # Build response
         response = {
@@ -252,6 +260,8 @@ async def get_commit_detail(
         return response
 
     except Exception as e:
+        if _no_such_commit(e):
+            return hf_revision_not_found(repo_id, commit_id)
         logger.exception(f"Failed to get commit {commit_id} for {repo_id}", e)
         return hf_server_error(f"Failed to get commit: {str(e)}")
 
@@ -494,10 +504,10 @@ async def get_commit_diff(
         await mark_lfs_statuses(files)
 
         # Get our commit record for user info using repository FK
-        our_commit = get_commit(commit_id, repo_row)
+        our_commit = get_commit(lakefs_commit["id"], repo_row)
 
         response = {
-            "commit_id": commit_id,
+            "commit_id": lakefs_commit["id"],
             "parent_commit": parent_id,
             "message": lakefs_commit.get("message", ""),
             "author": (
@@ -513,5 +523,7 @@ async def get_commit_diff(
         return response
 
     except Exception as e:
+        if _no_such_commit(e):
+            return hf_revision_not_found(repo_id, commit_id)
         logger.exception(f"Failed to get commit diff for {repo_id}/{commit_id}", e)
         return hf_server_error(f"Failed to get commit diff: {str(e)}")
