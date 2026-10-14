@@ -19,6 +19,8 @@ REVISION = b"/api/models/o/m/revision/"
         (b"/api/datasets/o/d/tree/refs%2Fheads%2Fdev/sub%20dir", b"/api/datasets/o/d/tree/dev/sub%20dir"),
         (b"/api/spaces/o/s/tree/refs%2Fheads%2Fd%20ev", b"/api/spaces/o/s/tree/d%20ev"),
         (b"/o/m/resolve/refs%2Fheads%2Fdev/x", b"/o/m/resolve/dev/x"),  # the Hub's short form
+        (RESOLVE + b"refs%2Fheads%2Ffeature%2Fx/a.txt", RESOLVE + b"feature%2Fx/a.txt"),  # a branch with a slash (#67)
+        (REVISION + b"refs%2fheads%2ffeature%2fx%2fy", REVISION + b"feature%2fx%2fy"),
     ],
 )
 def test_a_full_ref_is_cut_to_the_branch(raw, short):
@@ -30,7 +32,6 @@ def test_a_full_ref_is_cut_to_the_branch(raw, short):
     [
         RESOLVE + b"dev/a.txt",  # nothing to do
         RESOLVE + b"refs/heads/dev/a.txt",  # literal slashes: split like the Hub does
-        RESOLVE + b"refs%2Fheads%2Ffeature%2Fx/a.txt",  # a branch with a slash is #67
         RESOLVE + b"refs%2Ftags%2Fv1/a.txt",
         RESOLVE + b"main/refs%2Fheads%2Fdev",  # a file path is not a revision
         b"/api/models/o/m/commits/refs%2Fheads%2Fdev",  # not a route the Hub reads this way

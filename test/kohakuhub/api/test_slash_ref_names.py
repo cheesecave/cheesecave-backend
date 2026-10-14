@@ -111,6 +111,20 @@ async def test_every_read_and_write_of_a_slash_branch(owner_client, form, path):
     assert (await c.delete(f"{B}/branch/{path}")).status_code == 200
 
 
+async def test_the_full_ref_of_a_slash_branch_names_the_branch(owner_client):
+    """`refs/heads/feature/x`, percent-encoded as `huggingface_hub` quotes a revision, is the branch `feature/x`."""
+    c = owner_client
+    assert (await c.post(f"{B}/branch/feature%2Fx", json={})).status_code == 200
+    sha = (await _commit(c, "feature%2Fx", "dir/a.txt", "hello")).json()["commitOid"]
+    full = "refs%2Fheads%2Ffeature%2Fx"
+    assert (await c.get(f"{B}/revision/{full}")).json()["sha"] == sha
+    assert "dir/a.txt" in [i["path"] for i in (await c.get(f"{B}/tree/{full}?recursive=true")).json()]
+    head = await c.head(f"/models/owner/demo-model/resolve/{full}/dir/a.txt")
+    assert head.status_code == 200 and head.headers["x-repo-commit"] == sha
+    miss = await c.get(f"{B}/revision/refs%2Fheads%2Ffeature%2Fnope")
+    assert miss.status_code == 404 and miss.headers["x-error-code"] == "RevisionNotFound"
+
+
 async def test_a_file_in_main_is_not_taken_for_a_branch(owner_client):
     """`main/dir/a.txt` stays the file `dir/a.txt` of main when no branch `main/dir` exists."""
     c = owner_client

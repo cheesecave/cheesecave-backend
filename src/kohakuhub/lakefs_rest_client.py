@@ -443,7 +443,7 @@ class LakeFSRestClient:
         Returns:
             Commit dict
         """
-        url = f"{self.base_url}/repositories/{repository}/commits/{to_lakefs_revision(commit_id)}"
+        url = f"{self.base_url}/repositories/{repository}/commits/{to_lakefs_ref(commit_id)}"
 
         client = self._httpx()
         response = await client.get(url, auth=self.auth, timeout=None)

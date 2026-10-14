@@ -89,6 +89,13 @@ async def test_a_team_workflow_on_a_feature_branch(api, live_server_url, hf_api_
     infos = await _run(api.get_paths_info, REPO, ["dir/a.txt"], revision="feature/x")
     assert [i.path for i in infos] == ["dir/a.txt"]
 
+    # the full ref name the client quotes as refs%2Fheads%2Ffeature%2Fx
+    assert (await _run(api.model_info, REPO, revision="refs/heads/feature/x")).sha == sha
+    full = await _run(
+        hf_hub_download, REPO, "dir/a.txt", revision="refs/heads/feature/x", endpoint=live_server_url, token=hf_api_token, cache_dir=tmp_path / "full"
+    )
+    assert open(full, "rb").read() == b"hello from a branch with a slash"
+
     commits = await _run(api.list_repo_commits, REPO, revision="feature/x")
     assert commits[0].commit_id == sha and len(commits[0].commit_id) == 40
 
