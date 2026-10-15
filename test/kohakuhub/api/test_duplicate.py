@@ -521,4 +521,5 @@ async def test_hf_api_duplicates_a_space_with_its_commit_ids(live_server_url, hf
         return ids("owner/hf-dup-space"), ids("owner/hf-dup-space-copy")
 
     source, copy = await asyncio.to_thread(run)
-    assert copy == source and len(source) == 3
+    # the empty first commit, the card a Space is created with (#95), and the two uploads
+    assert copy == source and len(source) == 4
