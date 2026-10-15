@@ -2,6 +2,7 @@
 
 from typing import Any, Optional
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -36,6 +37,7 @@ from kohakuhub.api.repo.utils.hf import (
     ensure_revision_in_history,
     hf_error_response,
     hf_repo_not_found,
+    hf_revision_not_found,
     hf_server_error,
 )
 from kohakuhub.api.operation_capabilities import (
@@ -208,6 +210,11 @@ async def create_branch_compat(
     )
 
 
+def _lakefs_has_no(error: Exception) -> bool:
+    """Whether LakeFS answered 404 (read from the answer, not from the words of the message)."""
+    return isinstance(error, httpx.HTTPStatusError) and error.response.status_code == 404
+
+
 @router.delete("/{repo_type}s/{namespace}/{name}/branch/{branch:path}")
 async def delete_branch(
     repo_type: str,
@@ -257,6 +264,8 @@ async def delete_branch(
     except HTTPException:
         raise  # refused while an operation holds the repository
     except Exception as e:
+        if _lakefs_has_no(e):  # never there, or a concurrent delete got it first: the Hub's 404
+            return hf_revision_not_found(repo_id, branch)
         return hf_server_error(f"Failed to delete branch: {str(e)}")
 
     forget_branch(repo_row, branch)
@@ -444,6 +453,8 @@ async def delete_tag(
     except HTTPException:
         raise  # refused while an operation holds the repository
     except Exception as e:
+        if _lakefs_has_no(e):
+            return hf_revision_not_found(repo_id, tag)
         return hf_server_error(f"Failed to delete tag: {str(e)}")
 
     return {"success": True, "message": f"Tag '{tag}' deleted"}
