@@ -1038,7 +1038,7 @@ async def commit(
             status_code=501,
             detail={
                 "error": (
-                    "create_commit(create_pr=True) is not supported by KohakuHub. "
+                    "create_commit(create_pr=True) is not supported by CheeseCave. "
                     "Commit to a branch directly instead; the discussions / "
                     "pull-request workflow is not implemented."
                 )
@@ -1046,7 +1046,7 @@ async def commit(
             headers={
                 "X-Error-Code": HFErrorCode.NOT_IMPLEMENTED,
                 "X-Error-Message": (
-                    "create_commit(create_pr=True) is not supported by KohakuHub. "
+                    "create_commit(create_pr=True) is not supported by CheeseCave. "
                     "Commit to a branch directly instead; the discussions / "
                     "pull-request workflow is not implemented."
                 ),

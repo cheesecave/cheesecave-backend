@@ -61,7 +61,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `gated=False` and `gated=True` were refused with `422` (the field was a string only), and `"auto"` / `"manual"`
   answered `200` while the repository stayed public, so a request for a gate looked like it had worked. Gated
   repositories are not supported, so: `False` (or no `gated`) is accepted and changes nothing, `True`, `"auto"` and
-  `"manual"` answer `501` (`X-Error-Message: gated access is not supported by KohakuHub. ...`, which the client shows its user) before anything is written
+  `"manual"` answer `501` (`X-Error-Message: gated access is not supported by CheeseCave. ...`, which the client shows its user) before anything is written
   (the other fields of the same request are not applied either), any other string is `400`.
 - **Branch and tag names with a `/` work** ([#67](https://github.com/cheesecave/cheesecave-backend/issues/67)).
   `create_branch(branch="feature/x")`, `create_tag(tag="release/v1.0")` and every route that takes a branch, tag or

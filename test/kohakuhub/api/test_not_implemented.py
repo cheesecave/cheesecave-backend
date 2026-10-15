@@ -273,8 +273,8 @@ def _assert_server_message_mentions(
         f"server_message or traceback text; got server_message="
         f"{exc.server_message!r}, str={str(exc)[:300]!r}"
     )
-    assert "kohakuhub" in server_msg or "kohakuhub" in traceback_msg, (
-        "The user-visible error must identify KohakuHub as the reason for "
+    assert "cheesecave" in server_msg or "cheesecave" in traceback_msg, (
+        "The user-visible error must identify CheeseCave as the reason for "
         "the 'not implemented' — otherwise users cannot tell whether this "
         "is a hub-side refusal or a library bug. Got: "
         f"server_message={exc.server_message!r}"
@@ -369,7 +369,7 @@ async def test_direct_webhooks_http_surface_returns_not_implemented(
     assert response.headers.get("x-error-code") == "NotImplemented"
     message = response.headers.get("x-error-message", "")
     assert "webhook" in message.lower()
-    assert "kohakuhub" in message.lower()
+    assert "cheesecave" in message.lower()
 
 
 async def test_direct_discussions_http_surface_surfaces_x_error_fields(
@@ -390,7 +390,7 @@ async def test_direct_discussions_http_surface_surfaces_x_error_fields(
     assert response.headers.get("x-error-code") == "NotImplemented"
     message = response.headers.get("x-error-message", "")
     assert "discussion" in message.lower()
-    assert "kohakuhub" in message.lower()
+    assert "cheesecave" in message.lower()
     # Middleware applies to live_server_url responses too.
     assert response.headers.get("x-request-id"), (
         "Live-server responses must also carry X-Request-Id"

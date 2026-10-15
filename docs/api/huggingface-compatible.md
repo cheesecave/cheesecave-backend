@@ -447,7 +447,7 @@ In a container or a CI job, pass it in the environment (`docker run -e HF_HUB_DI
 - Model cards parsing (use README.md YAML frontmatter)
 - Discussions/Community features
 
-**Refused with a `501` that says why:** a feature KohakuHub does not provide answers `501 Not Implemented` with
+**Refused with a `501` that says why:** a feature CheeseCave does not provide answers `501 Not Implemented` with
 `X-Error-Code: NotImplemented` and an `X-Error-Message` that says what to do instead, so `huggingface_hub` raises an error
 you can read (a `404` would look like a bug). The surfaces:
 
@@ -459,7 +459,7 @@ you can read (a `404` would look like a bug). The surfaces:
 | Space runtime, secrets, variables, hardware, pause, restart | `/api/spaces/{repo}/runtime`, `.../secrets`, ... | configure your deployment directly |
 | Space logs, Space templates, the hardware list | `/api/spaces/{repo}/logs/{run\|build}`, `/api/spaces/templates`, `/api/spaces/hardware` | same |
 | Papers | `/api/papers/...`, `/api/daily_papers` | there is no paper catalogue |
-| Jobs | `/api/jobs/...` | KohakuHub does not run compute |
+| Jobs | `/api/jobs/...` | CheeseCave does not run compute |
 | Storage buckets, kernels | `/api/buckets/...`, `/api/kernels/...` | keep the files in a repository |
 | Gated-access requests | `/api/{type}s/{repo}/user-access-request/...` | a repository is public or private here |
 

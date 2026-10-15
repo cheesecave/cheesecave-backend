@@ -1,4 +1,4 @@
-"""Explicit 501 Not Implemented responses for features KohakuHub does not support.
+"""Explicit 501 Not Implemented responses for features CheeseCave does not support.
 
 Why this module exists
 ----------------------
@@ -8,8 +8,8 @@ Why this module exists
 exist, FastAPI's default 404 body is generic and the request winds up in
 `HfHubHTTPError` without any hint of *why* it failed. That produces confusing
 tracebacks and, worse, hides the fact that we intentionally do not support
-the feature — a user reading the trace cannot distinguish "KohakuHub bug"
-from "KohakuHub scope decision".
+the feature — a user reading the trace cannot distinguish "CheeseCave bug"
+from "CheeseCave scope decision".
 
 This router registers explicit catch-alls for the HuggingFace Hub surfaces
 that live in the PR #18 matrix as "Not Supported / Not Claimed":
@@ -47,23 +47,23 @@ early_router = APIRouter()
 
 
 _DISCUSSION_REASON = (
-    "KohakuHub intentionally does not implement the discussions / pull-request "
+    "CheeseCave intentionally does not implement the discussions / pull-request "
     "workflow. Use your repo's external issue tracker or contact the maintainer "
     "instead."
 )
 
 _SPACE_RUNTIME_REASON = (
-    "KohakuHub does not manage Space runtimes, hardware, secrets, or variables "
+    "CheeseCave does not manage Space runtimes, hardware, secrets, or variables "
     "through the hub API. Configure your deployment environment directly."
 )
 
-_COLLECTIONS_REASON = "Collections are not implemented by KohakuHub."
+_COLLECTIONS_REASON = "Collections are not implemented by CheeseCave."
 
-_WEBHOOKS_REASON = "Webhooks are not implemented by KohakuHub."
+_WEBHOOKS_REASON = "Webhooks are not implemented by CheeseCave."
 
-_PAPERS_REASON = "KohakuHub has no paper catalogue."
+_PAPERS_REASON = "CheeseCave has no paper catalogue."
 
-_JOBS_REASON = "KohakuHub does not run compute for you; run the workload yourself."
+_JOBS_REASON = "CheeseCave does not run compute for you; run the workload yourself."
 
 _ACCESS_REQUEST_REASON = (
     "A repository here is public or private: there is no gate and no list of "
