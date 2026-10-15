@@ -22,6 +22,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   deletes nothing: LFS objects are stored once for every repository, so one repository cannot free one on its own.
   Garbage collection by the repository's LFS keep versions is what frees storage. See `docs/api/git-lfs.md`.
 
+### Changed
+
+- **Unsupported Hub surfaces answer `501` with the reason, not a bare `404`**. `huggingface_hub` calls for papers, jobs,
+  Space logs, Space templates and the hardware list, storage buckets, kernels and the gated-access requests used to get
+  `{"detail":"Not Found"}`, which reads like a bug. They now answer `501 Not Implemented` with
+  `X-Error-Code: NotImplemented` and a message that says what to do instead, as discussions, collections, webhooks and the
+  Space runtime already did. Buckets and kernels needed a second router in front of the repository routes: the generic
+  `/{repo_type}s/...` routes took their sub-paths first and answered `422` (not a repository type), `405` or an empty `404`.
+  The gated-access routes are the ones real gating (#61) will take over. Listed in `docs/api/huggingface-compatible.md`.
+
 ### Documentation
 
 - **`huggingface_hub` 2.0 and later: how to upload to KohakuHub** ([#52](https://github.com/cheesecave/cheesecave-backend/issues/52),
@@ -51,7 +61,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `gated=False` and `gated=True` were refused with `422` (the field was a string only), and `"auto"` / `"manual"`
   answered `200` while the repository stayed public, so a request for a gate looked like it had worked. Gated
   repositories are not supported, so: `False` (or no `gated`) is accepted and changes nothing, `True`, `"auto"` and
-  `"manual"` answer `501` (`X-Error-Message: gated access is not supported by KohakuHub. ...`, which the client shows its user) before anything is written
+  `"manual"` answer `501` (`X-Error-Message: gated access is not supported by CheeseCave. ...`, which the client shows its user) before anything is written
   (the other fields of the same request are not applied either), any other string is `400`.
 - **Branch and tag names with a `/` work** ([#67](https://github.com/cheesecave/cheesecave-backend/issues/67)).
   `create_branch(branch="feature/x")`, `create_tag(tag="release/v1.0")` and every route that takes a branch, tag or

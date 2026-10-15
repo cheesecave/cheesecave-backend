@@ -206,6 +206,13 @@ app.add_middleware(
 
 app.include_router(auth_router, prefix=cfg.app.api_base)
 app.include_router(external_tokens.router, prefix=cfg.app.api_base, tags=["auth"])
+# Static prefixes that are not repository types (buckets, kernels) are refused before
+# the repository routers, which would otherwise take their sub-paths and answer 422.
+app.include_router(
+    not_implemented_router.early_router,
+    prefix=cfg.app.api_base,
+    tags=["not-implemented"],
+)
 app.include_router(repo_crud.router, prefix=cfg.app.api_base, tags=["repositories"])
 app.include_router(repo_duplicate.router, prefix=cfg.app.api_base, tags=["repositories"])
 app.include_router(repo_info.router, prefix=cfg.app.api_base, tags=["repositories"])

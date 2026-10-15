@@ -338,7 +338,7 @@ def hf_not_implemented(
     Returns:
         501 response with ``X-Error-Code: NotImplemented``.
     """
-    message = f"{feature} is not supported by KohakuHub"
+    message = f"{feature} is not supported by CheeseCave"
     if reason:
         message = f"{message}. {reason}"
 

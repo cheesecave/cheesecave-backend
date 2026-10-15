@@ -31,6 +31,7 @@ from __future__ import annotations
 import asyncio
 
 import httpx
+import huggingface_hub
 import pytest
 from huggingface_hub import HfApi
 from huggingface_hub.utils import HfHubHTTPError
@@ -69,6 +70,57 @@ from huggingface_hub.utils import HfHubHTTPError
         ("GET", "/api/settings/webhooks", "webhooks"),
         ("POST", "/api/settings/webhooks", "webhooks"),
         ("DELETE", "/api/settings/webhooks/abc", "webhooks"),
+        # Papers
+        ("GET", "/api/papers/search?q=attention", "papers"),
+        ("GET", "/api/papers/1706.03762", "papers"),
+        ("GET", "/api/daily_papers", "papers"),
+        ("GET", "/api/papers", "papers"),
+        # Jobs (the client sends every verb, and the hardware list has no namespace)
+        ("GET", "/api/jobs", "jobs"),
+        ("GET", "/api/jobs/owner", "jobs"),
+        ("POST", "/api/jobs/owner", "jobs"),
+        ("GET", "/api/jobs/hardware", "jobs"),
+        ("GET", "/api/jobs/owner/abc123", "jobs"),
+        ("POST", "/api/jobs/owner/abc123/cancel", "jobs"),
+        ("GET", "/api/jobs/owner/abc123/logs", "jobs"),
+        # Space logs, templates and the hardware list
+        ("GET", "/api/spaces/owner/demo-space/logs/run", "space logs"),
+        ("GET", "/api/spaces/owner/demo-space/logs/build", "space logs"),
+        ("GET", "/api/spaces/templates", "space templates"),
+        ("GET", "/api/spaces/hardware", "space hardware"),
+        # A Space sub-resource nobody lists is refused too, and the message names the path
+        ("GET", "/api/spaces/owner/demo-space/anything-else", "anything-else"),
+        # Gated-access requests (the routes #61 will implement; until then an honest refusal)
+        ("GET", "/api/models/owner/demo-model/user-access-request/pending", "access requests"),
+        ("GET", "/api/datasets/owner/demo-dataset/user-access-request/accepted", "access requests"),
+        ("GET", "/api/spaces/owner/demo-space/user-access-request/rejected", "access requests"),
+        ("POST", "/api/models/owner/demo-model/user-access-request/handle", "access requests"),
+        ("POST", "/api/models/owner/demo-model/user-access-request/grant", "access requests"),
+        # Buckets: sub-paths that the generic /{repo_type}s/... routes used to answer 422 or 405
+        ("GET", "/api/buckets", "buckets"),
+        ("GET", "/api/buckets/owner", "buckets"),
+        ("GET", "/api/buckets/owner/b", "buckets"),
+        ("POST", "/api/buckets/owner/b", "buckets"),
+        ("DELETE", "/api/buckets/owner/b", "buckets"),
+        ("HEAD", "/api/buckets/owner/b", "buckets"),
+        ("POST", "/api/buckets/owner/b/batch", "buckets"),
+        ("POST", "/api/buckets/owner/b/paths-info", "buckets"),
+        ("GET", "/api/buckets/owner/b/settings", "buckets"),
+        ("PUT", "/api/buckets/owner/b/settings", "buckets"),
+        ("PATCH", "/api/buckets/owner/b/settings", "buckets"),
+        ("GET", "/api/buckets/owner/b/tree", "buckets"),
+        ("GET", "/api/buckets/owner/b/tree/main/a/b", "buckets"),
+        ("GET", "/api/buckets/owner/b/revision/main", "buckets"),
+        ("POST", "/api/buckets/owner/b/commit/main", "buckets"),
+        ("POST", "/api/buckets/owner/b/preupload/main", "buckets"),
+        ("POST", "/api/buckets/owner/b/branch", "buckets"),
+        ("POST", "/api/buckets/owner/b/tag", "buckets"),
+        # Kernels
+        ("GET", "/api/kernels", "kernels"),
+        ("GET", "/api/kernels/owner/k", "kernels"),
+        ("GET", "/api/kernels/owner/k/revision/main", "kernels"),
+        ("GET", "/api/kernels/owner/k/tree/main", "kernels"),
+        ("POST", "/api/kernels/owner/k/commit/main", "kernels"),
     ],
 )
 async def test_unsupported_feature_returns_501_with_hf_headers(
@@ -119,6 +171,77 @@ async def test_unsupported_feature_error_has_json_safe_header_message(
     assert message, "X-Error-Message must not be empty on a 501"
 
 
+@pytest.mark.parametrize(
+    "path, way_out",
+    [
+        ("/api/papers/1706.03762", "paper catalogue"),
+        ("/api/jobs/owner", "compute"),
+        ("/api/spaces/owner/demo-space/logs/run", "Space runtimes"),
+        ("/api/spaces/templates", "Space runtimes"),
+        ("/api/spaces/hardware", "Space runtimes"),
+        ("/api/models/owner/demo-model/user-access-request/pending", "public or private"),
+        ("/api/buckets/owner/b", "repository"),
+        ("/api/kernels/owner/k", "repository"),
+    ],
+)
+async def test_the_refusal_says_what_to_do_instead(owner_client, path, way_out):
+    """Not only "no": the message the user reads names the way out."""
+    response = await owner_client.get(path)
+    assert response.status_code == 501
+    message = response.headers.get("x-error-message", "")
+    assert way_out.lower() in message.lower(), message
+    assert "\n" not in message and "\t" not in message
+
+
+@pytest.mark.parametrize("kind", ["buckets", "kernels"])
+@pytest.mark.parametrize(
+    "method, sub",
+    [
+        ("GET", "/tree/main"),
+        ("GET", "/revision/main"),
+        ("POST", "/commit/main"),
+        ("POST", "/preupload/main"),
+        ("POST", "/branch"),
+        ("POST", "/tag"),
+        ("POST", "/paths-info/main"),
+        ("GET", "/settings"),
+    ],
+)
+async def test_buckets_and_kernels_are_refused_before_the_repository_routes(
+    owner_client, kind, method, sub
+):
+    """These prefixes are not repository types, but the generic ``/{repo_type}s/...``
+    routes used to take their sub-paths and answer 422 (a type that is not
+    model, dataset or space) or 405, which reads like a bug of ours. The refusal
+    must come first, so these are 501 and never 422 or 405."""
+    response = await owner_client.request(method, f"/api/{kind}/owner/x{sub}")
+    assert response.status_code == 501, (response.status_code, response.text[:160])
+    assert response.headers.get("x-error-code") == "NotImplemented"
+
+
+async def test_the_new_refusals_do_not_shadow_real_repository_routes(owner_client):
+    """The static prefixes (``/api/buckets``, ``/api/kernels``, ``/api/papers``,
+    ``/api/jobs``, ``/api/spaces/templates``, ``/api/spaces/hardware``) must not
+    reach into the real endpoints that look alike."""
+    for repo_type, name in (("model", "buckets"), ("dataset", "kernels"), ("space", "papers")):
+        created = await owner_client.post(
+            "/api/repos/create", json={"type": repo_type, "name": name}
+        )
+        assert created.status_code == 200, created.text
+        for route in ("", "/tree/main", "/revision/main", "/commits/main"):
+            response = await owner_client.get(f"/api/{repo_type}s/owner/{name}{route}")
+            assert response.status_code == 200, (repo_type, name, route, response.status_code)
+            assert response.headers.get("x-error-code") != "NotImplemented"
+    # A namespace called like a prefix is a namespace: a missing repository, not a refusal.
+    for namespace in ("buckets", "kernels", "jobs", "papers"):
+        response = await owner_client.get(f"/api/models/{namespace}/nothing-here")
+        assert response.status_code == 404, (namespace, response.status_code)
+        assert response.headers.get("x-error-code") != "NotImplemented"
+    # The real Space runtime routes still answer as before.
+    response = await owner_client.get("/api/spaces/owner/papers/runtime")
+    assert response.status_code == 501 and "runtime" in response.headers["x-error-message"].lower()
+
+
 # ---------------------------------------------------------------------------
 # Real huggingface_hub-driven checks
 # ---------------------------------------------------------------------------
@@ -150,8 +273,8 @@ def _assert_server_message_mentions(
         f"server_message or traceback text; got server_message="
         f"{exc.server_message!r}, str={str(exc)[:300]!r}"
     )
-    assert "kohakuhub" in server_msg or "kohakuhub" in traceback_msg, (
-        "The user-visible error must identify KohakuHub as the reason for "
+    assert "cheesecave" in server_msg or "cheesecave" in traceback_msg, (
+        "The user-visible error must identify CheeseCave as the reason for "
         "the 'not implemented' — otherwise users cannot tell whether this "
         "is a hub-side refusal or a library bug. Got: "
         f"server_message={exc.server_message!r}"
@@ -246,7 +369,7 @@ async def test_direct_webhooks_http_surface_returns_not_implemented(
     assert response.headers.get("x-error-code") == "NotImplemented"
     message = response.headers.get("x-error-message", "")
     assert "webhook" in message.lower()
-    assert "kohakuhub" in message.lower()
+    assert "cheesecave" in message.lower()
 
 
 async def test_direct_discussions_http_surface_surfaces_x_error_fields(
@@ -267,8 +390,89 @@ async def test_direct_discussions_http_surface_surfaces_x_error_fields(
     assert response.headers.get("x-error-code") == "NotImplemented"
     message = response.headers.get("x-error-message", "")
     assert "discussion" in message.lower()
-    assert "kohakuhub" in message.lower()
+    assert "cheesecave" in message.lower()
     # Middleware applies to live_server_url responses too.
     assert response.headers.get("x-request-id"), (
         "Live-server responses must also carry X-Request-Id"
     )
+
+
+
+# ---------------------------------------------------------------------------
+# The refused features through the real client
+# ---------------------------------------------------------------------------
+#
+# One real ``HfApi`` call per refused surface, for whichever huggingface_hub is
+# installed (the CI matrix runs 0.20.3 to the newest): a method the version does
+# not have is skipped. 2.x raises ``HfHubHTTPError`` whose text carries our message.
+# Three older releases build ``list_jobs`` on a bare ``raise_for_status``: there the
+# status is all the user gets, so the test pins the 501 and not the text.
+
+
+def _refused(api, name, call):
+    if not hasattr(api, name):
+        pytest.skip(f"this huggingface_hub has no HfApi.{name}")
+    try:
+        call()
+    except Exception as exc:  # noqa: BLE001 - the type differs by client version
+        return exc
+    raise AssertionError(f"HfApi.{name} did not raise: the server refused it with 501")
+
+
+@pytest.mark.hf_client
+@pytest.mark.parametrize(
+    "name, hint, call",
+    [
+        ("paper_info", "papers", lambda a: a.paper_info("1706.03762")),
+        ("list_papers", "papers", lambda a: list(a.list_papers(query="attention"))),
+        ("list_daily_papers", "papers", lambda a: list(a.list_daily_papers())),
+        ("list_jobs", "jobs", lambda a: list(a.list_jobs(namespace="owner"))),
+        ("list_jobs_hardware", "jobs", lambda a: a.list_jobs_hardware()),
+        ("create_bucket", "buckets", lambda a: a.create_bucket("owner/some-bucket")),
+        ("list_buckets", "buckets", lambda a: list(a.list_buckets(namespace="owner"))),
+        ("kernel_info", "kernels", lambda a: a.kernel_info("owner/some-kernel")),
+        ("list_space_templates", "space templates", lambda a: a.list_space_templates()),
+        ("list_spaces_hardware", "space hardware", lambda a: a.list_spaces_hardware()),
+        ("fetch_space_logs", "space logs", lambda a: list(a.fetch_space_logs("owner/demo-space", follow=False))),
+    ],
+)
+async def test_hf_api_refused_surfaces_raise_a_readable_501(live_server_url, hf_api_token, name, hint, call):
+    api = HfApi(endpoint=live_server_url, token=hf_api_token)
+    exc = await asyncio.to_thread(_refused, api, name, lambda: call(api))
+    assert str(exc.response.url).startswith(live_server_url), (
+        f"the request must reach the test server, not the public Hub: {exc.response.url}"
+    )
+    assert exc.response.status_code == 501, repr(exc)
+    if isinstance(exc, HfHubHTTPError):
+        _assert_server_message_mentions(exc, hint)
+    else:
+        assert name == "list_jobs", f"{name} raised {type(exc).__name__} without our message: {exc}"
+
+
+@pytest.mark.hf_client
+@pytest.mark.parametrize(
+    "name, call",
+    [
+        ("list_pending_access_requests", lambda a: list(a.list_pending_access_requests("owner/demo-model"))),
+        ("list_accepted_access_requests", lambda a: list(a.list_accepted_access_requests("owner/demo-model"))),
+        ("list_rejected_access_requests", lambda a: list(a.list_rejected_access_requests("owner/demo-model"))),
+        ("grant_access", lambda a: a.grant_access("owner/demo-model", "bob")),
+        ("accept_access_request", lambda a: a.accept_access_request("owner/demo-model", "bob")),
+    ],
+)
+async def test_hf_api_access_requests_raise_a_readable_501(
+    live_server_url, hf_api_token, monkeypatch, name, call
+):
+    """These methods write ``constants.ENDPOINT`` into the URL (they ignore the
+    endpoint the ``HfApi`` was given), so the test points the constant at the server."""
+    monkeypatch.setattr(huggingface_hub.constants, "ENDPOINT", live_server_url)
+    # Older releases (0.20) import ENDPOINT into hf_api by name: patch that copy too, or the
+    # request would go to huggingface.co.
+    monkeypatch.setattr(huggingface_hub.hf_api, "ENDPOINT", live_server_url, raising=False)
+    api = HfApi(endpoint=live_server_url, token=hf_api_token)
+    exc = await asyncio.to_thread(_refused, api, name, lambda: call(api))
+    assert str(exc.response.url).startswith(live_server_url), (
+        f"the request must reach the test server, not the public Hub: {exc.response.url}"
+    )
+    assert isinstance(exc, HfHubHTTPError) and exc.response.status_code == 501, repr(exc)
+    _assert_server_message_mentions(exc, "access requests")
