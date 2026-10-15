@@ -24,6 +24,7 @@ from kohakuhub.logger import get_logger
 from kohakuhub.utils.commit_id import hub_oid
 from kohakuhub.utils.lakefs import (
     get_lakefs_client,
+    is_lakefs_not_found_error,
     resolve_revision_and_path,
     resolve_lakefs_repo,
     resolve_revision,
@@ -36,8 +37,6 @@ from kohakuhub.api.repo.utils.hf import (
     hf_repo_not_found,
     hf_revision_not_found,
     hf_server_error,
-    is_lakefs_not_found_error,
-    is_lakefs_revision_error,
     lfs_pointer,
 )
 
@@ -533,9 +532,9 @@ async def list_repo_tree(
         )
     except Exception as error:
         if is_lakefs_not_found_error(error):
-            if is_lakefs_revision_error(error):
-                return hf_revision_not_found(repo_id, revision)
-            return hf_entry_not_found(repo_id, clean_path or "/", revision)
+            # The revision resolved a moment ago: listing a ref that is there never answers 404 (a prefix
+            # nothing has is an empty 200), so the ref went since (deleted meanwhile).
+            return hf_revision_not_found(repo_id, revision)
 
         logger.exception(f"Failed to list objects for {repo_id}", error)
         return hf_server_error(f"Failed to list objects: {str(error)}")
@@ -583,7 +582,7 @@ async def list_repo_tree(
                 repo_row, lakefs_repo, revision, resolved_revision, targets
             )
         except Exception as error:
-            if is_lakefs_not_found_error(error) and is_lakefs_revision_error(error):
+            if is_lakefs_not_found_error(error):
                 return hf_revision_not_found(repo_id, revision)
             logger.warning(
                 f"Failed to expand last commit data for {repo_id}/{revision}: {error}"
@@ -674,9 +673,7 @@ async def get_paths_info(
         )
     except Exception as error:
         if is_lakefs_not_found_error(error):
-            if is_lakefs_revision_error(error):
-                return hf_revision_not_found(repo_id, revision)
-            return []
+            return hf_revision_not_found(repo_id, revision)
         logger.exception(f"Failed to fetch paths info for {repo_id}", error)
         return hf_server_error(f"Failed to fetch paths info: {str(error)}")
 
@@ -691,7 +688,7 @@ async def get_paths_info(
                 repo_row, lakefs_repo, revision, resolved_revision, targets
             )
         except Exception as error:
-            if is_lakefs_not_found_error(error) and is_lakefs_revision_error(error):
+            if is_lakefs_not_found_error(error):
                 return hf_revision_not_found(repo_id, revision)
             logger.warning(
                 f"Failed to expand paths-info commit data for {repo_id}/{revision}: {error}"

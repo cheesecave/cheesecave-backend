@@ -597,8 +597,8 @@ async def probe_redis(
     finally:
         try:
             await client.aclose()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Failed to close the health probe client: {e}")
 
 
 PROBES = (

@@ -13,6 +13,7 @@ from fastapi.responses import JSONResponse
 
 import kohakuhub.api.repo.routers.tree as tree_api
 from kohakuhub.db import User
+from test.kohakuhub.support.fakes import lakefs_error
 from test.kohakuhub.support.factories import make_file, make_repo, make_user
 
 pytestmark = pytest.mark.usefixtures("db_scope")
@@ -883,32 +884,18 @@ async def test_list_repo_tree_covers_success_pagination_and_error_paths(monkeypa
         )
     ) == {"revision": "bad-rev", "repo": "owner/demo"}
 
-    error = RuntimeError("missing path")
+    error = lakefs_error(404, "not found", path="/repositories/lake/refs/main/objects/ls")
 
     async def _raise_missing(**kwargs):
         raise error
 
     monkeypatch.setattr(tree_api, "resolve_revision", _resolve_revision)
     monkeypatch.setattr(tree_api, "fetch_lakefs_objects_page", _raise_missing)
-    monkeypatch.setattr(tree_api, "is_lakefs_not_found_error", lambda exc: exc is error)
-    monkeypatch.setattr(tree_api, "is_lakefs_revision_error", lambda exc: False)
     monkeypatch.setattr(
         tree_api,
         "hf_entry_not_found",
         lambda repo_id, path, revision: {"entry": path, "repo": repo_id, "revision": revision},
     )
-    assert (
-        await tree_api.list_repo_tree.__wrapped__(
-            "model",
-            "owner",
-            "demo",
-            request,
-            path="/docs",
-            limit=None,
-        )
-    ) == {"entry": "docs", "repo": "owner/demo", "revision": "main"}
-
-    monkeypatch.setattr(tree_api, "is_lakefs_revision_error", lambda exc: True)
     assert (
         await tree_api.list_repo_tree.__wrapped__(
             "model",
@@ -941,7 +928,6 @@ async def test_list_repo_tree_covers_success_pagination_and_error_paths(monkeypa
         raise generic_error
 
     monkeypatch.setattr(tree_api, "fetch_lakefs_objects_page", _raise_generic)
-    monkeypatch.setattr(tree_api, "is_lakefs_not_found_error", lambda exc: False)
     monkeypatch.setattr(tree_api, "hf_server_error", lambda message: {"error": message})
     assert "Failed to list objects" in (
         await tree_api.list_repo_tree.__wrapped__(
@@ -980,13 +966,11 @@ async def test_list_repo_tree_handles_last_commit_lookup_failures(monkeypatch):
     monkeypatch.setattr(tree_api, "fetch_lakefs_objects_page", _fetch_single_page)
     monkeypatch.setattr(tree_api, "should_use_lfs", lambda repository, path, size: False)
 
-    revision_error = RuntimeError("bad commit history")
+    revision_error = lakefs_error(404, "not found", path="/repositories/lake/refs/main/commits")
     async def _raise_revision_error(lakefs_repo, revision, targets):
         raise revision_error
 
     monkeypatch.setattr(tree_api, "resolve_last_commits_for_paths", _raise_revision_error)
-    monkeypatch.setattr(tree_api, "is_lakefs_not_found_error", lambda exc: exc is revision_error)
-    monkeypatch.setattr(tree_api, "is_lakefs_revision_error", lambda exc: True)
     monkeypatch.setattr(
         tree_api,
         "hf_revision_not_found",
@@ -1012,7 +996,6 @@ async def test_list_repo_tree_handles_last_commit_lookup_failures(monkeypatch):
         "resolve_last_commits_for_paths",
         _raise_generic_commit_error,
     )
-    monkeypatch.setattr(tree_api, "is_lakefs_not_found_error", lambda exc: False)
 
     response = await tree_api.list_repo_tree.__wrapped__(
         "model",
@@ -1155,15 +1138,13 @@ async def test_get_paths_info_covers_limits_success_and_error_paths(monkeypatch)
         )
     ) == {"revision": "bad-rev", "repo": "owner/demo"}
 
-    error = RuntimeError("missing revision")
+    error = lakefs_error(404, "not found", path="/repositories/lake/refs/main/objects/stat")
     monkeypatch.setattr(tree_api, "resolve_revision", _resolve_revision)
 
     async def _raise_process_revision_error(**kwargs):
         raise error
 
     monkeypatch.setattr(tree_api, "_process_single_path", _raise_process_revision_error)
-    monkeypatch.setattr(tree_api, "is_lakefs_not_found_error", lambda exc: exc is error)
-    monkeypatch.setattr(tree_api, "is_lakefs_revision_error", lambda exc: True)
     assert (
         await tree_api.get_paths_info.__wrapped__(
             "model",
@@ -1175,25 +1156,11 @@ async def test_get_paths_info_covers_limits_success_and_error_paths(monkeypatch)
         )
     ) == {"revision": "main", "repo": "owner/demo"}
 
-    monkeypatch.setattr(tree_api, "is_lakefs_revision_error", lambda exc: False)
-    assert (
-        await tree_api.get_paths_info.__wrapped__(
-            "model",
-            "owner",
-            "demo",
-            "main",
-            request,
-            paths=["README.md"],
-        )
-        == []
-    )
-
     generic_error = RuntimeError("server error")
     async def _raise_process_generic_error(**kwargs):
         raise generic_error
 
     monkeypatch.setattr(tree_api, "_process_single_path", _raise_process_generic_error)
-    monkeypatch.setattr(tree_api, "is_lakefs_not_found_error", lambda exc: False)
     monkeypatch.setattr(tree_api, "hf_server_error", lambda message: {"error": message})
     assert "Failed to fetch paths info" in (
         await tree_api.get_paths_info.__wrapped__(
@@ -1226,13 +1193,11 @@ async def test_get_paths_info_handles_last_commit_lookup_failures(monkeypatch):
 
     monkeypatch.setattr(tree_api, "_process_single_path", _process_path)
 
-    revision_error = RuntimeError("bad commit history")
+    revision_error = lakefs_error(404, "not found", path="/repositories/lake/refs/main/commits")
     async def _raise_revision_error(lakefs_repo, revision, targets):
         raise revision_error
 
     monkeypatch.setattr(tree_api, "resolve_last_commits_for_paths", _raise_revision_error)
-    monkeypatch.setattr(tree_api, "is_lakefs_not_found_error", lambda exc: exc is revision_error)
-    monkeypatch.setattr(tree_api, "is_lakefs_revision_error", lambda exc: True)
     monkeypatch.setattr(
         tree_api,
         "hf_revision_not_found",
@@ -1259,7 +1224,6 @@ async def test_get_paths_info_handles_last_commit_lookup_failures(monkeypatch):
         "resolve_last_commits_for_paths",
         _raise_generic_commit_error,
     )
-    monkeypatch.setattr(tree_api, "is_lakefs_not_found_error", lambda exc: False)
 
     results = await tree_api.get_paths_info.__wrapped__(
         "model",

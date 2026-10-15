@@ -23,7 +23,7 @@ from kohakuhub.lakefs_rest_client import get_lakefs_rest_client
 from kohakuhub.logger import get_logger
 from kohakuhub.utils.lakefs import resolve_lakefs_repo
 from kohakuhub.utils.repo_paths import too_long
-from kohakuhub.api.repo.utils.hf import is_lakefs_not_found_error
+from kohakuhub.utils.lakefs import is_lakefs_not_found_error
 
 logger = get_logger("PATH_COMMITS")
 

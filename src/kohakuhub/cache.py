@@ -217,14 +217,14 @@ async def close_cache() -> None:
     if _client is not None:
         try:
             await _client.aclose()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Failed to close the cache client: {e}")
         _client = None
     if _pool is not None:
         try:
             await _pool.aclose()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Failed to close the cache connection pool: {e}")
         _pool = None
 
 
@@ -322,8 +322,8 @@ async def _bootstrap_flush() -> None:
     finally:
         try:
             await client.delete(lock_key)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Failed to release the bootstrap lock {lock_key} (it expires by itself): {e}")
 
 
 def _short(s: str | None) -> str:
@@ -566,8 +566,8 @@ async def cache_get_or_fetch(
             if got_cross_lock and client is not None:
                 try:
                     await client.delete(cross_lock_key)
-                except Exception:
-                    pass
+                except Exception as release_error:
+                    logger.warning(f"Failed to release the cross lock {cross_lock_key} (it expires by itself): {release_error}")
             raise
 
         if result is None and treat_none_as_negative:
@@ -578,8 +578,8 @@ async def cache_get_or_fetch(
         if got_cross_lock and client is not None:
             try:
                 await client.delete(cross_lock_key)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"Failed to release the cross lock {cross_lock_key} (it expires by itself): {e}")
 
         return result
 

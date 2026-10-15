@@ -775,6 +775,34 @@ async def test_redis_probe_reports_down_on_ping_timeout(app, monkeypatch):
     assert "timeout" in result["detail"].lower()
 
 
+async def test_redis_probe_is_still_ok_when_closing_its_client_fails(app, monkeypatch):
+    """Closing the probe's client is clean-up: a failure of it must not change the answer, and is logged (#10).
+
+    Targeted mock: a client that answers and then cannot be closed cannot be produced against the real service.
+    """
+    import redis.asyncio as aioredis
+
+    health_mod = _live_health_module()
+    logged = []
+
+    class _Client:
+        async def ping(self):
+            return True
+
+        async def info(self, _section):
+            return {"redis_version": "7.2.0", "server_name": "valkey"}
+
+        async def aclose(self):
+            raise RuntimeError("socket already gone")
+
+    monkeypatch.setattr(aioredis, "from_url", lambda *_a, **_k: _Client(), raising=True)
+    monkeypatch.setattr(health_mod.cfg.cache, "enabled", True, raising=True)
+    monkeypatch.setattr(health_mod.logger, "warning", logged.append)
+    result = await health_mod.probe_redis(timeout=1.0)
+    assert result["status"] == "ok" and result["version"] == "Valkey 7.2.0"
+    assert logged == ["Failed to close the health probe client: socket already gone"]
+
+
 # ---------------------------------------------------------------------------
 # MinIO admin lookup — defensive branches not exercised by the
 # happy-path / 403-fallback tests above.

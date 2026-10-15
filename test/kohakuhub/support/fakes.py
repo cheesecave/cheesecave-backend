@@ -10,8 +10,45 @@ import time
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from typing import Any
+
+from botocore.exceptions import ClientError
 from urllib.parse import quote
+
+
+def lakefs_error(status: int, message: str = "", method: str = "GET", path: str = "/repositories/r/branches/b"):
+    """The error ``LakeFSRestClient`` raises for a LakeFS answer of ``status``: an ``httpx.HTTPStatusError`` holding the response.
+
+    Code under test reads the status of it (#10), as it does against LakeFS; a bare ``RuntimeError`` with the same words
+    in its message is not what the client raises.
+    """
+    import httpx
+
+    request = httpx.Request(method, f"http://lakefs:28000/api/v1{path}")
+    response = httpx.Response(status, json={"message": message} if message else None, request=request)
+    return httpx.HTTPStatusError(
+        f"LakeFS API error {status} {response.reason_phrase} for {method} {request.url}: {response.text}",
+        request=request,
+        response=response,
+    )
+
+
+class FakeLakeFSNotFound(FileNotFoundError):
+    """A LakeFS 404 of the fake client: what the real client raises holds the response, so code under test reads its
+    status (#10); the type stays what the tests of the fake expect."""
+
+    def __init__(self, message: str):
+        super().__init__(message)
+        self.response = SimpleNamespace(status_code=404)
+
+
+class FakeLakeFSConflict(ValueError):
+    """A LakeFS 409 of the fake client (see ``FakeLakeFSNotFound``)."""
+
+    def __init__(self, message: str):
+        super().__init__(message)
+        self.response = SimpleNamespace(status_code=409)
 
 
 def _utc_now() -> datetime:
@@ -109,7 +146,8 @@ class FakeS3Client:
     def head_object(self, Bucket: str, Key: str) -> dict[str, Any]:
         obj = self.service.objects.get((Bucket, Key))
         if obj is None:
-            raise FileNotFoundError(f"S3 object not found: {Bucket}/{Key}")
+            # what a real store answers to a HEAD of a missing key
+            raise ClientError({"Error": {"Code": "404", "Message": "Not Found"}}, "HeadObject")
         return {
             "ContentLength": len(obj.body),
             "ETag": f'"{obj.etag}"',
@@ -344,17 +382,17 @@ class FakeLakeFSClient:
             return self._copy_snapshot(repo["commits"][commit_id]["snapshot"])
         if ref in repo["commits"]:
             return self._copy_snapshot(repo["commits"][ref]["snapshot"])
-        raise FileNotFoundError(f"404 ref not found: {repo_name}@{ref}")
+        raise FakeLakeFSNotFound(f"404 ref not found: {repo_name}@{ref}")
 
     def _get_repo(self, repository: str) -> dict[str, Any]:
         if repository not in self.repositories:
-            raise FileNotFoundError(f"404 repository not found: {repository}")
+            raise FakeLakeFSNotFound(f"404 repository not found: {repository}")
         return self.repositories[repository]
 
     def _branch(self, repository: str, branch: str) -> dict[str, Any]:
         repo = self._get_repo(repository)
         if branch not in repo["branches"]:
-            raise FileNotFoundError(f"404 branch not found: {repository}/{branch}")
+            raise FakeLakeFSNotFound(f"404 branch not found: {repository}/{branch}")
         return repo["branches"][branch]
 
     async def create_repository(
@@ -364,7 +402,7 @@ class FakeLakeFSClient:
         default_branch: str = "main",
     ) -> dict[str, Any]:
         if name in self.repositories:
-            raise ValueError(f"409 repository already exists: {name}")
+            raise FakeLakeFSConflict(f"409 repository already exists: {name}")
         self.repositories[name] = {
             "storage_namespace": storage_namespace,
             "branches": {},
@@ -401,7 +439,7 @@ class FakeLakeFSClient:
         if not branch_name:
             raise ValueError("Missing branch name")
         if branch_name in repo["branches"]:
-            raise ValueError(f"409 branch already exists: {branch_name}")
+            raise FakeLakeFSConflict(f"409 branch already exists: {branch_name}")
         snapshot = self._get_ref_snapshot(repository, source)
         commit_id = repo["branches"][source]["commit_id"] if source in repo["branches"] else source
         repo["branches"][branch_name] = {"commit_id": commit_id, "staging": snapshot}
@@ -425,12 +463,12 @@ class FakeLakeFSClient:
         if not tag_name:
             raise ValueError("Missing tag name")
         if tag_name in repo["tags"]:
-            raise ValueError(f"409 tag already exists: {tag_name}")
+            raise FakeLakeFSConflict(f"409 tag already exists: {tag_name}")
         commit_id = ref
         if ref in repo["branches"]:
             commit_id = repo["branches"][ref]["commit_id"]
         elif ref not in repo["commits"]:
-            raise FileNotFoundError(f"404 commit not found: {ref}")
+            raise FakeLakeFSNotFound(f"404 commit not found: {ref}")
         repo["tags"][tag_name] = commit_id
         return {"id": tag_name, "commit_id": commit_id}
 
@@ -441,7 +479,7 @@ class FakeLakeFSClient:
     async def get_commit(self, repository: str, commit_id: str) -> dict[str, Any]:
         repo = self._get_repo(repository)
         if commit_id not in repo["commits"]:
-            raise FileNotFoundError(f"404 commit not found: {commit_id}")
+            raise FakeLakeFSNotFound(f"404 commit not found: {commit_id}")
         commit = repo["commits"][commit_id]
         return {
             "id": commit["id"],
@@ -590,7 +628,7 @@ class FakeLakeFSClient:
     ) -> dict[str, Any]:
         snapshot = self._get_ref_snapshot(repository, ref)
         if path not in snapshot:
-            raise FileNotFoundError(f"404 object not found: {path}")
+            raise FakeLakeFSNotFound(f"404 object not found: {path}")
         return snapshot[path].to_stat()
 
     async def get_object(
@@ -598,7 +636,7 @@ class FakeLakeFSClient:
     ) -> bytes:
         snapshot = self._get_ref_snapshot(repository, ref)
         if path not in snapshot:
-            raise FileNotFoundError(f"404 object not found: {path}")
+            raise FakeLakeFSNotFound(f"404 object not found: {path}")
         content = snapshot[path].content
         if content is None:
             raise FileNotFoundError(f"Object content unavailable for path: {path}")
@@ -620,7 +658,7 @@ class FakeLakeFSClient:
         elif ref in repo["commits"]:
             current = ref
         else:
-            raise FileNotFoundError(f"404 ref not found: {ref}")
+            raise FakeLakeFSNotFound(f"404 ref not found: {ref}")
 
         commit_chain = []
         skip = bool(after)

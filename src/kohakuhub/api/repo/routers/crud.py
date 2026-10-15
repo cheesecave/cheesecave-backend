@@ -4,6 +4,7 @@ import asyncio
 import json
 from typing import Literal, Optional
 
+from botocore.exceptions import BotoCoreError, ClientError
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
 from peewee import IntegrityError
@@ -34,9 +35,10 @@ from kohakuhub.auth.permissions import (
 from kohakuhub.utils.lakefs import (
     allocate_lakefs_repo_name,
     get_lakefs_client,
+    is_lakefs_conflict_error,
     resolve_lakefs_repo,
 )
-from kohakuhub.utils.s3 import copy_s3_folder, delete_objects_with_prefix, get_s3_client
+from kohakuhub.utils.s3 import S3DeleteFailed, delete_objects_with_prefix, get_s3_client
 from kohakuhub.api.repo.utils.hf import (
     HFErrorCode,
     hf_error_response,
@@ -186,13 +188,9 @@ def _is_lakefs_repo_id_taken_error(error: Exception) -> bool:
         return False
 
     # `LakeFSRestClient._check_response` raises `httpx.HTTPStatusError`, so the
-    # status is available structurally; prefer it over matching "409" in the
-    # message, which could also appear inside a repository name or URL.
-    status_code = getattr(getattr(error, "response", None), "status_code", None)
-    if status_code is not None:
-        return status_code == 409
-
-    return "409" in lowered
+    # The status is read, not matched as "409" in the message, which could also
+    # appear inside a repository name or URL (#10).
+    return is_lakefs_conflict_error(error)
 
 
 def _repo_recycling_response(repo_type: str, full_id: str) -> Response:
@@ -388,7 +386,11 @@ async def _cleanup_orphan_namespace_if_safe(
         )
         return await _delete_exact_repo_dummy_marker(repo_prefix)
 
-    deleted_count = await delete_objects_with_prefix(cfg.s3.bucket, repo_prefix)
+    try:
+        deleted_count = await delete_objects_with_prefix(cfg.s3.bucket, repo_prefix)
+    except (ClientError, BotoCoreError, S3DeleteFailed) as e:
+        logger.warning(f"Orphan cleanup of {lakefs_repo} failed under {repo_prefix}: {e}")
+        return False
     logger.warning(
         f"Auto-cleaned orphan namespace for {lakefs_repo}: deleted {deleted_count} object(s) under {repo_prefix}"
     )

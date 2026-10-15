@@ -13,6 +13,7 @@ import re
 import time
 from datetime import datetime, timedelta, timezone
 
+from botocore.exceptions import BotoCoreError, ClientError
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -916,13 +917,19 @@ async def lfs_verify(
 
     # An object the repository may not reference is answered like a missing
     # one; a claim is proven here, by hashing what the repository uploaded.
-    if not await _may_reference(namespace, name, user, oid):
-        raise HTTPException(404, detail={"error": "Object not found in storage"})
+    # A store that cannot answer is a server error, which the client retries:
+    # it is not a missing object (#10).
     lfs_key = get_lfs_key(oid)
+    try:
+        if not await _may_reference(namespace, name, user, oid):
+            raise HTTPException(404, detail={"error": "Object not found in storage"})
 
-    # Verify object exists in S3
-    if not await object_exists(cfg.s3.bucket, lfs_key):
-        raise HTTPException(404, detail={"error": "Object not found in storage"})
+        # Verify object exists in S3
+        if not await object_exists(cfg.s3.bucket, lfs_key):
+            raise HTTPException(404, detail={"error": "Object not found in storage"})
+    except (ClientError, BotoCoreError) as e:
+        logger.exception(f"Failed to check the object {oid[:8]} in storage", e)
+        raise HTTPException(500, detail={"error": f"Failed to check the object in storage: {e}"})
 
     # Optionally verify size
     if size:

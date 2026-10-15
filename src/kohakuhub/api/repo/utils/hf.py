@@ -684,29 +684,3 @@ def format_hf_datetime(dt) -> Optional[str]:
 
     # HuggingFace format: "2025-01-15T10:30:45.123456Z"
     return safe_strftime(dt, "%Y-%m-%dT%H:%M:%S.%fZ")
-
-
-def is_lakefs_not_found_error(error: Exception) -> bool:
-    """Check if an exception is a LakeFS not found error.
-
-    Args:
-        error: Exception to check
-
-    Returns:
-        True if the error indicates a 404/not found condition
-    """
-    error_str = str(error).lower()
-    return "404" in error_str or "not found" in error_str
-
-
-def is_lakefs_revision_error(error: Exception) -> bool:
-    """Check if an exception is a LakeFS revision/branch error.
-
-    Args:
-        error: Exception to check
-
-    Returns:
-        True if the error is related to revision/branch
-    """
-    error_str = str(error).lower()
-    return "revision" in error_str or "branch" in error_str or "ref" in error_str

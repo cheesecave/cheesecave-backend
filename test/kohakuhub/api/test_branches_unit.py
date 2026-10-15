@@ -12,6 +12,7 @@ from fastapi import HTTPException
 import kohakuhub.api.branches as branches_api
 import kohakuhub.api.operation_capabilities as operation_capabilities
 from test.kohakuhub.support.factories import make_repo, make_user
+from test.kohakuhub.support.fakes import lakefs_error
 
 
 @asynccontextmanager
@@ -200,7 +201,7 @@ async def test_create_branch_and_tag_routes_cover_success_and_error_paths(monkey
     assert not_found_response.status_code == 404
 
     monkeypatch.setattr(branches_api, "get_repository", lambda *_args: repo)
-    client.raise_on["create_branch"] = RuntimeError("409 conflict")
+    client.raise_on["create_branch"] = lakefs_error(409, "branch already exists: not unique", "POST", "/repositories/r/branches")
     conflict_response = await branches_api.create_branch(
         "model",
         "owner",
@@ -210,6 +211,16 @@ async def test_create_branch_and_tag_routes_cover_success_and_error_paths(monkey
     )
     assert conflict_response.status_code == 409
     assert "already exists" in _response_error_message(conflict_response)
+
+    client.raise_on["create_branch"] = RuntimeError("409 conflict")  # the words alone are not a status
+    words_only = await branches_api.create_branch(
+        "model",
+        "owner",
+        "repo",
+        branches_api.CreateBranchPayload(branch="feature"),
+        user=user,
+    )
+    assert words_only.status_code == 500
 
     client.raise_on["create_branch"] = RuntimeError("boom")
     generic_branch_error = await branches_api.create_branch(
@@ -385,7 +396,7 @@ async def test_merge_branches_covers_not_found_conflict_success_and_tracking_pat
     assert not_found.status_code == 404
 
     monkeypatch.setattr(branches_api, "get_repository", lambda *_args: repo)
-    client.raise_on["merge_into_branch"] = RuntimeError("merge conflict happened")
+    client.raise_on["merge_into_branch"] = lakefs_error(409, "conflict", "POST", "/repositories/r/refs/a/merge/b")
     with pytest.raises(HTTPException) as conflict_error:
         await branches_api.merge_branches(
             "model", "owner", "repo", "feature", "main", branches_api.MergePayload(), user=user
