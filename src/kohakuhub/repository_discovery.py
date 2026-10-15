@@ -24,6 +24,10 @@ README_TIMEOUT_SECONDS = 3
 FILES_TIMEOUT_SECONDS = 5  # the listing, then the few small JSON files the rules read
 MAX_LISTED_OBJECTS = 3000  # a bigger repository is indexed by its card alone: the rules need the whole list
 MAX_JSON_BYTES = 1048576  # a JSON file that is cut off here is not read (whisper's tokenizer_config.json is 800 KB)
+MAX_SAFETENSORS_FILES = 300  # more weight files than this: not summed (each costs a request)
+SAFETENSORS_TIMEOUT_SECONDS = 120  # one repository's headers, read at most HEADER_READERS at a time
+HEADER_PROBE_BYTES = 65536  # most headers fit in the first read; a longer one costs a second
+HEADER_READERS = 8
 JSON_FILES = ("config.json", "model_index.json", "adapter_config.json", "tokenizer_config.json")
 REFRESH_AFTER = timedelta(minutes=5)
 RETRY_AFTER = timedelta(seconds=30)
@@ -54,6 +58,8 @@ _batches: set[asyncio.Task] = set()
 _running: dict[int, asyncio.Task] = {}  # repositories being indexed in the background by this process
 _again: set[int] = set()  # asked to be indexed again while a run was under way
 _slots: dict = {}  # per event loop: at most four background runs at a time
+_st_running: dict[int, asyncio.Task] = {}  # repositories whose weights are being summed by this process
+_st_wanted: dict[int, tuple] = {}  # the newest request (head, names, config) made while a run was under way
 
 
 CardLoader = repo_card.CardLoader
@@ -266,6 +272,100 @@ async def read_repo_files(client, source: str, head: str) -> tuple[list[str] | N
     return await asyncio.wait_for(read(), FILES_TIMEOUT_SECONDS)
 
 
+async def _read_header(client, source: str, head: str, path: str) -> dict | None:
+    prefix = await client.get_object_prefix(source, head, path, HEADER_PROBE_BYTES)
+    size = repo_derive.safetensors_header_size(prefix)
+    if size is not None and 8 + size > len(prefix):
+        prefix = await client.get_object_prefix(source, head, path, 8 + size)
+    return repo_derive.parse_safetensors_header(prefix)
+
+
+async def _summarize_weights(client, source: str, head: str, names: list[str], config: bytes | None) -> dict | None:
+    """The safetensors summary of the weights at ``head`` (see ``repo_derive``), or ``None`` when
+    there is none to give. ``names`` and the bytes of ``config.json`` are what the index read (``None``
+    for a config cut off at ``MAX_JSON_BYTES``). A read that fails raises: nothing is then recorded
+    and the next index tries again.
+
+    ponytail: every index of a new head reads every header again. Production has 74 weight files in all
+    (at most 15 in a repository); add a cache keyed by (path, sha256) in ``info`` when repositories of
+    hundreds of shards are common."""
+    files = repo_derive.weight_files(names)
+    if not files or len(files) > MAX_SAFETENSORS_FILES:
+        return None
+    if "config.json" in names:
+        parsed = _json(config)
+        if not isinstance(parsed, dict) or repo_derive.is_quantized(parsed):
+            return None  # quantized, or whether it is is not known: the Hub counts what is unpacked
+    gate = asyncio.Semaphore(HEADER_READERS)
+
+    async def one(path):
+        async with gate:
+            return await _read_header(client, source, head, path)
+
+    headers = dict(zip(files, await asyncio.gather(*(one(path) for path in files))))
+    return repo_derive.safetensors_summary(files, headers, quantized=False)
+
+
+async def _store_safetensors(repo_id: int, head: str, summary: dict | None) -> bool:
+    """Put the summary into the card row's ``info``, if the row is still the one of ``head``. The
+    index writes the same column, so the write names the text it read and is made again on top of a
+    newer one (three times at most)."""
+    for _ in range(3):
+        row = RepositoryCard.get_or_none(RepositoryCard.repository == repo_id)
+        if row is None or row.main_sha != head:
+            return False
+        info = json.dumps({**json.loads(row.info), "safetensors": summary})
+        written = (
+            RepositoryCard.update(info=info)
+            .where(
+                (RepositoryCard.repository == repo_id)
+                & (RepositoryCard.main_sha == head)
+                & (RepositoryCard.info == row.info)
+            )
+            .execute()
+        )
+        if written:
+            return True
+    return False
+
+
+async def index_safetensors(repo_id: int, head: str, names: list[str], config: bytes | None) -> None:
+    repo = Repository.get_or_none(Repository.id == repo_id)
+    if repo is None:
+        return
+    summary = await _summarize_weights(get_lakefs_client(), resolve_lakefs_repo(repo), head, names, config)
+    await _store_safetensors(repo_id, head, summary)
+
+
+async def _run_safetensors(repo_id: int) -> None:
+    slots = _slots.setdefault(asyncio.get_running_loop(), asyncio.Semaphore(4))
+    try:
+        async with slots:
+            while (request := _st_wanted.pop(repo_id, None)) is not None:
+                try:
+                    await asyncio.wait_for(index_safetensors(repo_id, *request), SAFETENSORS_TIMEOUT_SECONDS)
+                except Exception as exc:  # nothing recorded: the next index of this head asks again
+                    logger.debug(f"Weights summary failed for repository {repo_id}: {type(exc).__name__}")
+    finally:
+        _st_running.pop(repo_id, None)
+        _st_wanted.pop(repo_id, None)
+
+
+def schedule_safetensors(repo_id: int, head: str, names: list[str], config: bytes | None) -> None:
+    """Sum the weights of ``repo_id`` at ``head`` in the background: reading their headers is no
+    business of the index (or of an info request waiting for it). One run per repository in this
+    process; a request during a run makes it go once more for the newest head. ``names`` and ``config``
+    (the bytes of config.json) are what the index read at ``head``. Without a running event loop this
+    does nothing."""
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    _st_wanted[repo_id] = (head, names, config)
+    if repo_id not in _st_running:
+        _st_running[repo_id] = loop.create_task(_run_safetensors(repo_id))
+
+
 async def index_repository(repo_id: int) -> None:
     repo = Repository.get_or_none(Repository.id == repo_id)
     if repo is None:
@@ -322,6 +422,11 @@ async def index_repository(repo_id: int) -> None:
             if not published:
                 return
             version = repo_derive.VERSION
+            earlier = RepositoryCard.get_or_none(RepositoryCard.repository == repo_id)
+            if earlier is not None and earlier.main_sha == head and earlier.version == version:
+                kept = json.loads(earlier.info)
+                if "safetensors" in kept:  # the same head, the same rules: not a moment without it
+                    info = json.dumps({**json.loads(info), "safetensors": kept["safetensors"]})
             RepositoryCard.insert(
                 repository=repo_id, main_sha=head, card=card, derived=derived, info=info, version=version
             ).on_conflict(
@@ -343,6 +448,8 @@ async def index_repository(repo_id: int) -> None:
             # Keep below SQLite's historic 999-bind parameter limit as well.
             for start in range(0, len(rows), 250):
                 F.insert_many(rows[start : start + 250]).execute()
+        if names is not None and repo_derive.weight_files(names) and "safetensors" not in json.loads(info):
+            schedule_safetensors(repo_id, head, names, raw_files.get("config.json"))
     except asyncio.CancelledError:
         M.update(lease_token=None, lease_until=None).where(fence).execute()
         raise
@@ -461,13 +568,15 @@ def schedule_indexing(scope) -> None:
 
 
 async def close_indexing() -> None:
-    jobs = list(_batches) + list(_running.values())
+    jobs = list(_batches) + list(_running.values()) + list(_st_running.values())
     for job in jobs:
         job.cancel()
     await asyncio.gather(*jobs, return_exceptions=True)
     _batches.clear()
     _running.clear()  # a task cancelled before its first step never reaches its own cleanup
     _again.clear()
+    _st_running.clear()
+    _st_wanted.clear()
 
 
 def apply_filters(scope, filters: dict, skip: str | None = None):

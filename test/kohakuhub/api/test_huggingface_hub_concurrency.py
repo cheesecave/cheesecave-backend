@@ -28,9 +28,11 @@ the operation *actually* conflicted and should not be retried blindly.
 from __future__ import annotations
 
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 
 import httpx
 import pytest
+from huggingface_hub import HfApi
 
 from test.kohakuhub.support.bootstrap import DEFAULT_PASSWORD
 
@@ -59,16 +61,18 @@ async def _owner_session(app) -> httpx.AsyncClient:
 async def test_concurrent_create_repo_eventually_yields_single_repo(
     app, owner_client
 ):
-    """Two parallel ``create_repo`` calls with the same name — the invariant
-    is that *at least one succeeds* and the system ends in a consistent
-    state with exactly one repo on record. The losing participant is
-    allowed to surface a raw error (4xx or 5xx) so a future debugger can
-    see the actual upstream failure rather than a masked-over 409.
+    """Two parallel ``create_repo`` calls with the same name: one succeeds, the other
+    answers the Hub's 409, and the system ends in a consistent state with exactly one
+    repo on record.
 
-    Critical: we do not force-translate LakeFS-side 409 into our own
-    ``RepoExists`` here, because a race that landed on LakeFS after the
-    DB uniqueness check passed is a genuine system-data-inconsistency
-    signal — masking it would make the underlying bug silent.
+    The loser used to be allowed a raw 5xx here. It is not (#87): the Hub serializes
+    creation, so a concurrent create of one name is only ever a 409, and
+    ``huggingface_hub``'s ``create_repo(exist_ok=True)`` takes nothing else as "it
+    exists". The LakeFS errors a rival's create and cleanup cause (410 repository in
+    deletion, a storage namespace being emptied) are that conflict, not a fault of ours.
+
+    Only a server of its own threads shows the race: ``asyncio.gather`` over the ASGI app
+    interleaves too little. Before the fix a round in about four had a 500.
     """
     client_a = await _owner_session(app)
     client_b = await _owner_session(app)
@@ -84,6 +88,7 @@ async def test_concurrent_create_repo_eventually_yields_single_repo(
         await client_b.aclose()
 
     statuses = [resp_a.status_code, resp_b.status_code]
+    assert sorted(statuses) == [200, 409], (statuses, resp_a.text[:200], resp_b.text[:200])  # #87
     success_count = sum(1 for s in statuses if 200 <= s < 300)
     assert success_count >= 1, (
         f"Expected at least one concurrent create_repo to succeed; got "
@@ -268,3 +273,24 @@ async def test_concurrent_commits_to_same_branch_preserve_at_least_one_write(
     assert paths & {"alpha.txt", "beta.txt"}, (
         f"Concurrent commits did not land any file in the tree: {paths}"
     )
+
+
+@pytest.mark.hf_client
+async def test_hf_api_create_repo_exist_ok_survives_concurrent_callers(live_server_url, hf_api_token):
+    """Several processes calling ``create_repo(exist_ok=True)`` for one name together (a
+    multi-worker upload, ``push_to_hub`` from every rank) must all return: a 500 made the
+    losers raise."""
+    api = HfApi(endpoint=live_server_url, token=hf_api_token)
+
+    def create(name):
+        return str(api.create_repo(f"owner/{name}", exist_ok=True))
+
+    def rounds():
+        for round_ in range(12):
+            name = f"hf-race-{round_}"
+            with ThreadPoolExecutor(6) as pool:
+                urls = list(pool.map(create, [name] * 6))
+            assert {u.rsplit("/", 1)[-1] for u in urls} == {name}
+            assert api.repo_info(f"owner/{name}").id == f"owner/{name}"
+
+    await asyncio.to_thread(rounds)

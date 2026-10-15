@@ -154,6 +154,22 @@ LAKEFS_CONFLICT_RETRY_MESSAGE = (
 LAKEFS_RECYCLING_HOLD_SECONDS = 2.0
 
 
+# A create that fails on LakeFS while a rival creates the same name is the rival's doing: its
+# repository, and the cleanup of the ones it lost with (#87). The rival's row lands within
+# moments, so a failure is held this long (RIVAL_POLLS x RIVAL_POLL_SECONDS) before it is believed.
+RIVAL_POLLS = 25
+RIVAL_POLL_SECONDS = 0.2
+
+
+async def _rival_created(repo_type: str, namespace: str, name: str) -> bool:
+    """Whether a row for the name appears while we wait for a rival's."""
+    for _ in range(RIVAL_POLLS):
+        if get_repository(repo_type, namespace, name):
+            return True
+        await asyncio.sleep(RIVAL_POLL_SECONDS)
+    return False
+
+
 def _is_lakefs_repo_id_taken_error(error: Exception) -> bool:
     """Return True for the LakeFS 409 raised while an id is still held.
 
@@ -478,6 +494,15 @@ async def create_repo(
         )
         return _repo_exists_response(payload.type, full_id)
     except Exception as e:
+        # The Hub serializes creation: a concurrent create of one name is a 409, never a 5xx
+        # (a client's exist_ok takes nothing else as "it exists"). LakeFS answers a loser in
+        # ways that are not 409 (410 repository in deletion, a namespace being emptied).
+        if await _rival_created(payload.type, namespace, payload.name):
+            logger.info(
+                f"Concurrent create won the race for {full_id} (LakeFS said {e}); "
+                f"reporting it as an existing repository"
+            )
+            return _repo_exists_response(payload.type, full_id)
         logger.exception(f"LakeFS repository creation failed for {full_id}", e)
         return hf_server_error(f"LakeFS repository creation failed: {str(e)}")
 
