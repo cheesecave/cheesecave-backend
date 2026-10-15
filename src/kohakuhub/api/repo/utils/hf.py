@@ -421,7 +421,7 @@ EXPAND_PROPERTIES = {
 }
 
 # The properties that come from the README card: reading one means reading the card
-CARD_PROPERTIES = frozenset({"cardData", "tags", "pipeline_tag", "library_name", "model-index", "sdk", "paperswithcode_id"})
+CARD_PROPERTIES = frozenset({"cardData", "tags", "pipeline_tag", "library_name", "model-index", "sdk", "paperswithcode_id", "config"})
 
 # Properties the Hub returns only when expanded, from another field
 _EXPAND_ONLY = {"downloadsAllTime": "downloads"}
@@ -445,7 +445,7 @@ def repo_info_fields(
     """The repository info fields KohakuHub has values for (``siblings`` aside), per type.
 
     ``card`` is ``{"card": cleaned README front matter or None, "derived": tags, pipeline_tag,
-    library_name, sdk}`` (see ``repository_discovery.info_card``), ``None`` when it cannot be
+    library_name, sdk, "info": what the files add: config}`` (see ``repository_discovery.info_card``), ``None`` when it cannot be
     known now. ``sha`` is answered as given. ``storage`` (KohakuHub's quota usage) is computed
     only when asked: it reads the namespace's quota.
     """
@@ -473,6 +473,8 @@ def repo_info_fields(
         fields["pipeline_tag"] = declared.get("pipeline_tag")
         fields["library_name"] = declared.get("library_name")
         fields["spaces"] = []
+        if config := ((card or {}).get("info") or {}).get("config"):
+            fields["config"] = config
     elif repo_type == "space":
         fields["sdk"] = declared.get("sdk")
     if card_data:

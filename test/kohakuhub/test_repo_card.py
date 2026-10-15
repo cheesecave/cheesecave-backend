@@ -159,6 +159,17 @@ def test_declared_pipeline_library_and_sdk_must_be_strings():
     assert repo_card.declared(None) == {"pipeline_tag": None, "library_name": None, "sdk": None}
 
 
+@pytest.mark.parametrize("old", ["text2text-generation", "conversational"])
+def test_the_hub_answers_text_generation_for_the_tasks_it_merged_into_it(old):
+    """The Hub folded these two into text-generation: 6 of 229 real cards that declare a task
+    (``text2text-generation`` five times, ``conversational`` once) are answered that way. The
+    card itself, and so its tags, keep the words the author wrote."""
+    card = {"pipeline_tag": old, "tags": [old]}
+
+    assert repo_card.declared(card)["pipeline_tag"] == "text-generation"
+    assert old in repo_card.compose_tags(card, "model")
+
+
 def test_model_tags_follow_the_hubs_order():
     c = {
         "library_name": "transformers",

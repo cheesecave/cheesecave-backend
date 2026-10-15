@@ -350,3 +350,16 @@ Rollback facts and the command are in
   prefix read with a 4 s budget) and by the next scheduled index, like any snapshot that is due. Until then the info answers
   `tags: []` and no `cardData`, as before the migration.
 - `CREATE TABLE IF NOT EXISTS` on an empty table; two containers starting together take turns on an advisory lock.
+
+## Repository derived info (#63): 036
+
+- **036** (`036_repository_derived_info.py`) adds two columns to `repository_card` (the table of 035, never
+  `repository_metadata`): `info` (what the files add and only the repository's own info shows: `config`, JSON,
+  `"{}"` by default) and `version` (the version of the rules that derived the row, `0` by default).
+- Nothing is backfilled. Every row of 035 has version `0`, which the code reads as "derived without the files":
+  the next info request of that repository derives it again, and the scheduled refresh counts it as due, so a
+  deploy re-derives the catalog a page of forty at a time. A change of the rules bumps `repo_derive.VERSION`, not a
+  migration.
+- Older code does not know the columns and ignores them: rolling back is leaving them. Each column is added only
+  when it is missing, so a run that stopped between the two finishes; two containers starting together take turns
+  on an advisory lock.

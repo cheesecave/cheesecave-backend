@@ -298,3 +298,90 @@ async def test_metadata_update_through_the_client_changes_the_card_and_the_info(
     info = await _run(api.model_info, rid)
 
     assert info.pipeline_tag == "text-classification" and "license:mit" in info.tags
+
+
+# --- what the files say, read by the client (#63) -------------------------------------
+
+BERT_CONFIG = {"model_type": "bert", "architectures": ["BertForMaskedLM"], "hidden_size": 8}
+
+
+async def _model_with_files(api, name, files: dict[str, bytes], readme=None):
+    rid = await _repo(api, "model", name, readme)
+    for path, content in files.items():
+        await _run(api.upload_file, path_or_fileobj=content, path_in_repo=path, repo_id=rid)
+    return rid
+
+
+async def test_the_client_reads_the_library_task_tags_and_config_the_files_give(api):
+    rid = await _model_with_files(api, "fromfiles", {"config.json": json.dumps(BERT_CONFIG).encode(), "model.safetensors": b"weights"})
+
+    info = await _run(api.model_info, rid)
+
+    assert info.library_name == "transformers" and info.pipeline_tag == "fill-mask"
+    assert info.tags[:4] == ["transformers", "safetensors", "bert", "fill-mask"]
+    if hasattr(info, "config"):
+        assert info.config == {"model_type": "bert", "architectures": ["BertForMaskedLM"]}
+    assert getattr(info, "transformers_info", None) is None  # not claimed: it is only right 9 times in 10
+
+
+async def test_what_the_card_says_beats_the_files_for_the_client_too(api):
+    rid = await _model_with_files(
+        api, "cardwins", {"config.json": json.dumps(BERT_CONFIG).encode(), "model.safetensors": b"w"}, "---\nlibrary_name: timm\npipeline_tag: image-classification\n---\n"
+    )
+
+    info = await _run(api.model_info, rid)
+
+    assert (info.library_name, info.pipeline_tag) == ("timm", "image-classification")
+
+
+async def test_the_client_reads_no_library_where_the_files_do_not_settle_it(api):
+    rid = await _model_with_files(api, "unsettled", {"config.json": json.dumps({"model_type": "llama", "architectures": ["LlamaForCausalLM"]}).encode()})
+
+    info = await _run(api.model_info, rid)
+
+    assert info.library_name is None and info.pipeline_tag is None  # config.json alone: no weights, not recognisably transformers
+
+
+async def test_the_client_reads_text_generation_for_a_language_model_which_transformers_needs(api):
+    """``transformers.pipeline(model=id)`` asks the task of the repository: without it the call raises."""
+    rid = await _model_with_files(api, "llm", {"config.json": json.dumps({"model_type": "llama", "architectures": ["LlamaForCausalLM"]}).encode(), "model.safetensors": b"w"})
+
+    info = await _run(api.model_info, rid)
+
+    assert info.library_name == "transformers" and info.pipeline_tag == "text-generation"
+
+
+async def test_expand_config_by_the_client(api):
+    if "expand" not in __import__("inspect").signature(api.model_info).parameters:
+        pytest.skip("this huggingface_hub cannot expand model info")
+    rid = await _model_with_files(api, "expandcfg", {"config.json": json.dumps(BERT_CONFIG).encode(), "model.safetensors": b"w"})
+
+    info = await _run(api.model_info, rid, expand=["config", "library_name"])
+
+    assert info.library_name == "transformers"
+    if hasattr(info, "config"):
+        assert info.config["model_type"] == "bert"
+
+
+async def test_a_list_shows_the_derived_fields_after_a_commit_without_any_info_call(api):
+    rid = await _model_with_files(api, "listed-files", {"config.json": json.dumps(BERT_CONFIG).encode(), "model.safetensors": b"w"})
+
+    item = None
+    for _ in range(40):  # the commit scheduled the index in the background
+        models = await _run(lambda: list(api.list_models(author="owner")))
+        item = next(m for m in models if m.id == rid)
+        if item.library_name:
+            break
+        await asyncio.sleep(0.25)
+
+    assert item.library_name == "transformers" and item.pipeline_tag == "fill-mask" and "bert" in item.tags
+
+
+async def test_the_client_sees_the_files_change_with_the_next_commit(api):
+    rid = await _model_with_files(api, "changing", {"config.json": json.dumps(BERT_CONFIG).encode()})
+    first = await _run(api.model_info, rid)
+
+    await _run(api.upload_file, path_or_fileobj=b"w", path_in_repo="model.safetensors", repo_id=rid)
+    second = await _run(api.model_info, rid)
+
+    assert first.library_name is None and second.library_name == "transformers"

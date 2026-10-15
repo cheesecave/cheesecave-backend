@@ -621,9 +621,10 @@ def create_commit(
         description=description,
     )
     if branch == "main":
-        from kohakuhub.repository_discovery import mark_dirty
+        from kohakuhub.repository_discovery import mark_dirty, schedule_repository
 
         mark_dirty(repository.id)
+        schedule_repository(repository.id)  # so the next list and info find it indexed
     return record
 
 
