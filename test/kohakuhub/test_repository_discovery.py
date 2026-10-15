@@ -1058,3 +1058,390 @@ async def test_a_read_that_waited_for_a_failing_run_is_unknown_not_an_error(cata
     discovery.schedule_repository(repo.id)
 
     assert await discovery.info_card(repo) is None
+
+
+# --- the safetensors summary, computed in the background (#63, part 3) -----------
+
+
+def st_bytes(tensors: dict, pad: int = 0) -> bytes:
+    """A safetensors file's start: the length, the JSON header, then ``pad`` bytes of data."""
+    import struct
+
+    body = json.dumps({n: {"dtype": d, "shape": s, "data_offsets": [0, 0]} for n, (d, s) in tensors.items()}).encode()
+    return struct.pack("<Q", len(body)) + body + b"\0" * pad
+
+
+CONFIG_ONLY = {"config.json": BERT_FILES["config.json"]}  # BERT_FILES has a model.safetensors of its own
+ST_ONE = st_bytes({"a": ("BF16", [4, 5]), "b": ("F32", [3]), "s": ("F32", [])})
+ST_SUMMARY = {"parameters": {"BF16": 20, "F32": 3}, "total": 23}
+
+
+async def _settled_st():
+    while tasks := list(discovery._st_running.values()):
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+
+def _info(repo):
+    return json.loads(RepositoryCard.get_by_id(repo.id).info)
+
+
+@pytest.mark.asyncio
+async def test_the_summary_of_the_weights_is_computed_after_the_index_and_kept_with_it(catalog, monkeypatch):
+    repo = repository(catalog, "sample")
+    _files_client(monkeypatch, {**CONFIG_ONLY, "model.safetensors": ST_ONE})
+
+    await discovery.index_repository(repo.id)
+    assert "safetensors" not in _info(repo)  # the index itself does not wait for it
+    await _settled_st()
+
+    assert _info(repo)["safetensors"] == ST_SUMMARY
+    assert _info(repo)["config"]["model_type"] == "bert"  # what the index kept is still there
+    assert RepositoryCard.get_by_id(repo.id).version == repo_derive.VERSION
+
+
+@pytest.mark.asyncio
+async def test_a_real_safetensors_file_is_read_by_the_same_rules(catalog, monkeypatch):
+    np = pytest.importorskip("numpy")
+    from safetensors.numpy import save
+
+    repo = repository(catalog, "sample")
+    weights = save({"w": np.zeros((2, 3), dtype=np.float32), "h": np.zeros((4,), dtype=np.float16)})
+    _files_client(monkeypatch, {**CONFIG_ONLY, "model.safetensors": weights})
+
+    await discovery.index_repository(repo.id)
+    await _settled_st()
+
+    assert _info(repo)["safetensors"] == {"parameters": {"F32": 6, "F16": 4}, "total": 10}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("repo_type, files", [("dataset", {"model.safetensors": ST_ONE}), ("model", CONFIG_ONLY), ("model", {"unet/model.safetensors": ST_ONE})])
+async def test_only_a_model_with_weights_in_its_root_is_summed(catalog, monkeypatch, repo_type, files):
+    repo = repository(catalog, "sample", repo_type=repo_type)
+    client = _files_client(monkeypatch, files)
+
+    await discovery.index_repository(repo.id)
+    await _settled_st()
+
+    assert "safetensors" not in _info(repo)
+    assert [c.args[2] for c in client.get_object_prefix.await_args_list if c.args[2].endswith(".safetensors")] == []
+
+
+@pytest.mark.asyncio
+async def test_a_sharded_model_is_summed_over_all_its_shards(catalog, monkeypatch):
+    repo = repository(catalog, "sample")
+    names = [f"model-0000{i}-of-00003.safetensors" for i in (1, 2, 3)]
+    _files_client(monkeypatch, {**CONFIG_ONLY, **{n: st_bytes({f"w{i}": ("F32", [10 * (i + 1)])}) for i, n in enumerate(names)}})
+
+    await discovery.index_repository(repo.id)
+    await _settled_st()
+
+    assert _info(repo)["safetensors"] == {"parameters": {"F32": 60}, "total": 60}
+
+
+@pytest.mark.asyncio
+async def test_the_summary_follows_the_same_head_across_indexes_without_being_computed_again(catalog, monkeypatch):
+    repo = repository(catalog, "sample")
+    client = _files_client(monkeypatch, {**CONFIG_ONLY, "model.safetensors": ST_ONE})
+    await discovery.index_repository(repo.id)
+    await _settled_st()
+    reads = len([c for c in client.get_object_prefix.await_args_list if c.args[2] == "model.safetensors"])
+    discovery.mark_dirty(repo.id)
+
+    await discovery.index_repository(repo.id)  # e.g. the scheduled refresh: same head
+    assert _info(repo)["safetensors"] == ST_SUMMARY  # not even a moment without it
+    await _settled_st()
+
+    assert len([c for c in client.get_object_prefix.await_args_list if c.args[2] == "model.safetensors"]) == reads
+
+
+@pytest.mark.asyncio
+async def test_a_new_head_drops_the_old_summary_and_computes_the_new_one(catalog, monkeypatch):
+    repo = repository(catalog, "sample")
+    client = _files_client(monkeypatch, {**CONFIG_ONLY, "model.safetensors": ST_ONE}, head="one")
+    await discovery.index_repository(repo.id)
+    await _settled_st()
+    discovery.mark_dirty(repo.id)
+    client.get_branch.return_value = {"commit_id": "two"}
+    client.get_object_prefix.side_effect = None
+    bigger = st_bytes({"a": ("BF16", [100])})
+    real_prefix = {"model.safetensors": bigger}
+    BERT_CONFIG = CONFIG_ONLY
+
+    async def prefix(source, ref, path, limit):
+        return real_prefix[path][:limit] if path in real_prefix else (b"" if path == "README.md" else CONFIG_ONLY[path][:limit])
+
+    client.get_object_prefix.side_effect = prefix
+
+    await discovery.index_repository(repo.id)
+    assert "safetensors" not in _info(repo)  # a summary of another commit is not this one's
+    await _settled_st()
+
+    assert _info(repo)["safetensors"] == {"parameters": {"BF16": 100}, "total": 100}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("weights", [b"not a safetensors file", st_bytes({"a": ("U32", [8])}), st_bytes({"a": ("F32", [])})])
+async def test_weights_that_cannot_be_summed_are_recorded_as_such_and_not_read_again(catalog, monkeypatch, weights):
+    repo = repository(catalog, "sample")
+    client = _files_client(monkeypatch, {**CONFIG_ONLY, "model.safetensors": weights})
+    await discovery.index_repository(repo.id)
+    await _settled_st()
+    weights = lambda: [c for c in client.get_object_prefix.await_args_list if c.args[2] == "model.safetensors"]
+    reads = len(weights())
+
+    assert "safetensors" in _info(repo) and _info(repo)["safetensors"] is None  # answered: nothing
+    discovery.mark_dirty(repo.id)
+    await discovery.index_repository(repo.id)
+    await _settled_st()
+
+    assert len(weights()) == reads
+
+
+@pytest.mark.asyncio
+async def test_a_quantized_model_is_not_summed_and_its_weights_are_not_read(catalog, monkeypatch):
+    repo = repository(catalog, "sample")
+    config = b'{"model_type": "llama", "architectures": ["LlamaForCausalLM"], "quantization": {"bits": 4}}'
+    client = _files_client(monkeypatch, {"config.json": config, "model.safetensors": ST_ONE})
+
+    await discovery.index_repository(repo.id)
+    await _settled_st()
+
+    assert _info(repo)["safetensors"] is None
+    assert "model.safetensors" not in [c.args[2] for c in client.get_object_prefix.await_args_list]
+
+
+@pytest.mark.asyncio
+async def test_a_failing_read_leaves_no_answer_so_the_next_index_tries_again(catalog, monkeypatch):
+    repo = repository(catalog, "sample")
+    client = _files_client(monkeypatch, {**CONFIG_ONLY, "model.safetensors": ST_ONE})
+    real = client.get_object_prefix.side_effect
+
+    async def broken(source, ref, path, limit):
+        if path == "model.safetensors":
+            raise TimeoutError()
+        return await real(source, ref, path, limit)
+
+    client.get_object_prefix.side_effect = broken
+    await discovery.index_repository(repo.id)
+    await _settled_st()
+    assert "safetensors" not in _info(repo)
+    assert RepositoryMetadata.get_by_id(repo.id).state == "ready"  # the card is unharmed
+
+    client.get_object_prefix.side_effect = real
+    discovery.mark_dirty(repo.id)
+    await discovery.index_repository(repo.id)
+    await _settled_st()
+
+    assert _info(repo)["safetensors"] == ST_SUMMARY
+
+
+@pytest.mark.asyncio
+async def test_a_long_header_is_read_in_a_second_request_of_the_size_it_needs(catalog, monkeypatch):
+    repo = repository(catalog, "sample")
+    many = st_bytes({f"layer.{i}.weight": ("F32", [2, 2]) for i in range(3000)}, pad=10)
+    assert len(many) > discovery.HEADER_PROBE_BYTES
+    client = _files_client(monkeypatch, {**CONFIG_ONLY, "model.safetensors": many})
+
+    await discovery.index_repository(repo.id)
+    await _settled_st()
+
+    reads = [c.args[3] for c in client.get_object_prefix.await_args_list if c.args[2] == "model.safetensors"]
+    assert reads == [discovery.HEADER_PROBE_BYTES, len(many) - 10]
+    assert _info(repo)["safetensors"]["total"] == 3000 * 4
+
+
+@pytest.mark.asyncio
+async def test_a_header_too_big_to_read_is_not_read(catalog, monkeypatch):
+    repo = repository(catalog, "sample")
+    import struct
+
+    huge = struct.pack("<Q", repo_derive.MAX_SAFETENSORS_HEADER + 1) + b"{" * 100
+    client = _files_client(monkeypatch, {**CONFIG_ONLY, "model.safetensors": huge})
+
+    await discovery.index_repository(repo.id)
+    await _settled_st()
+
+    assert _info(repo)["safetensors"] is None
+    assert len([c for c in client.get_object_prefix.await_args_list if c.args[2] == "model.safetensors"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_repository_with_too_many_weight_files_is_not_summed(catalog, monkeypatch):
+    repo = repository(catalog, "sample")
+    names = [f"model-{i:05}-of-{4:05}.safetensors" for i in range(1, 5)]
+    client = _files_client(monkeypatch, {**CONFIG_ONLY, **{n: ST_ONE for n in names}})
+    monkeypatch.setattr(discovery, "MAX_SAFETENSORS_FILES", 3)
+
+    await discovery.index_repository(repo.id)
+    await _settled_st()
+
+    assert _info(repo)["safetensors"] is None
+    assert not [c for c in client.get_object_prefix.await_args_list if c.args[2].endswith(".safetensors")]
+
+
+@pytest.mark.asyncio
+async def test_no_more_than_eight_headers_are_read_at_a_time(catalog, monkeypatch):
+    repo = repository(catalog, "sample")
+    names = [f"model-{i:05}-of-{20:05}.safetensors" for i in range(1, 21)]
+    client = _files_client(monkeypatch, {**CONFIG_ONLY, **{n: ST_ONE for n in names}})
+    real, active, peak = client.get_object_prefix.side_effect, [0], [0]
+
+    async def slow(source, ref, path, limit):
+        if path.endswith(".safetensors"):
+            active[0] += 1
+            peak[0] = max(peak[0], active[0])
+            await asyncio.sleep(0.01)
+            active[0] -= 1
+        return await real(source, ref, path, limit)
+
+    client.get_object_prefix.side_effect = slow
+
+    await discovery.index_repository(repo.id)
+    await _settled_st()
+
+    assert peak[0] == 8 and _info(repo)["safetensors"]["total"] == 20 * 23
+
+
+@pytest.mark.asyncio
+async def test_a_summary_of_a_head_that_is_no_longer_the_indexed_one_is_not_written(catalog, monkeypatch):
+    repo = repository(catalog, "sample")
+    _files_client(monkeypatch, {**CONFIG_ONLY, "model.safetensors": ST_ONE}, head="old")
+    await discovery.index_repository(repo.id)
+    RepositoryCard.update(main_sha="new").execute()  # the index moved on while the headers were read
+
+    assert await discovery._store_safetensors(repo.id, "old", ST_SUMMARY) is False
+    await _settled_st()
+
+    assert "safetensors" not in _info(repo)
+
+
+@pytest.mark.asyncio
+async def test_a_summary_for_a_repository_without_a_card_row_is_not_written(catalog):
+    repo = repository(catalog, "sample")
+
+    assert await discovery._store_safetensors(repo.id, "head", ST_SUMMARY) is False
+
+
+@pytest.mark.asyncio
+async def test_a_write_that_meets_another_write_is_made_again_on_top_of_it(catalog, monkeypatch):
+    repo = repository(catalog, "sample")
+    RepositoryCard.create(repository=repo, main_sha="h", card="{}", derived="{}", info='{"config": {"a": 1}}', version=repo_derive.VERSION)
+    real, turns = RepositoryCard.get_or_none, [0]
+
+    def meddled(*args, **kwargs):
+        row = real(*args, **kwargs)
+        if turns[0] == 0:  # an index publishes its info between the read and the write
+            RepositoryCard.update(info='{"config": {"a": 2}}').execute()
+        turns[0] += 1
+        return row
+
+    monkeypatch.setattr(RepositoryCard, "get_or_none", meddled)
+
+    assert await discovery._store_safetensors(repo.id, "h", ST_SUMMARY) is True
+
+    assert _info(repo) == {"config": {"a": 2}, "safetensors": ST_SUMMARY}
+
+
+@pytest.mark.asyncio
+async def test_a_write_that_never_gets_through_gives_up(catalog, monkeypatch):
+    repo = repository(catalog, "sample")
+    RepositoryCard.create(repository=repo, main_sha="h", card="{}", derived="{}", info="{}", version=repo_derive.VERSION)
+    real, count = RepositoryCard.get_or_none, [0]
+
+    def always(*args, **kwargs):
+        row = real(*args, **kwargs)
+        count[0] += 1
+        RepositoryCard.update(info=json.dumps({"n": count[0]})).execute()
+        return row
+
+    monkeypatch.setattr(RepositoryCard, "get_or_none", always)
+
+    assert await discovery._store_safetensors(repo.id, "h", ST_SUMMARY) is False
+    assert count[0] == 3
+
+
+@pytest.mark.asyncio
+async def test_asking_again_while_one_runs_makes_it_go_once_more_for_the_newest_head(catalog, monkeypatch):
+    repo = repository(catalog, "sample")
+    heads, gate = [], asyncio.Event()
+
+    async def slow(repo_id, head, names, config):
+        heads.append(head)
+        await gate.wait()
+
+    monkeypatch.setattr(discovery, "index_safetensors", slow)
+    discovery.schedule_safetensors(repo.id, "a", [], None)
+    await asyncio.sleep(0)
+    for head in "bcd":
+        discovery.schedule_safetensors(repo.id, head, [], None)
+    gate.set()
+    await discovery._st_running[repo.id]
+
+    assert heads == ["a", "d"] and discovery._st_running == {}
+
+
+def test_without_an_event_loop_no_summary_is_scheduled(catalog):
+    discovery.schedule_safetensors(1, "head", [], None)
+
+    assert discovery._st_running == {}
+
+
+@pytest.mark.asyncio
+async def test_a_run_that_fails_leaves_nothing_behind(catalog, monkeypatch):
+    async def broken(repo_id, head, names, config):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(discovery, "index_safetensors", broken)
+    discovery.schedule_safetensors(1, "head", [], None)
+    await asyncio.gather(*discovery._st_running.values(), return_exceptions=True)
+
+    assert discovery._st_running == {} and discovery._st_wanted == {}
+
+
+@pytest.mark.asyncio
+async def test_shutdown_cancels_the_summaries_in_the_background(catalog, monkeypatch):
+    async def never(repo_id, head, names, config):
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(discovery, "index_safetensors", never)
+    discovery.schedule_safetensors(1, "head", [], None)
+    task = discovery._st_running[1]
+
+    await discovery.close_indexing()
+
+    assert task.cancelled() and discovery._st_running == {} and discovery._st_wanted == {}
+
+
+@pytest.mark.asyncio
+async def test_a_repository_removed_meanwhile_is_not_summed(catalog, monkeypatch):
+    client = _files_client(monkeypatch, {**CONFIG_ONLY, "model.safetensors": ST_ONE})
+
+    await discovery.index_safetensors(9999, "head", ["model.safetensors"], None)
+
+    assert not [c for c in client.get_object_prefix.await_args_list if c.args[2] == "model.safetensors"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("config", [None, b"{not json", b"[1]"])
+async def test_a_config_that_is_not_known_makes_the_weights_unsummable(catalog, monkeypatch, config):
+    """Whether the model is quantized is in its config: with that unknown, no summary."""
+    repo = repository(catalog, "sample")
+    RepositoryCard.create(repository=repo, main_sha="head", card="{}", derived="{}", info="{}", version=repo_derive.VERSION)
+    client = _files_client(monkeypatch, {"model.safetensors": ST_ONE})
+
+    await discovery.index_safetensors(repo.id, "head", ["config.json", "model.safetensors"], config)
+
+    assert _info(repo) == {"safetensors": None}
+    assert not [c for c in client.get_object_prefix.await_args_list if c.args[2] == "model.safetensors"]
+
+
+@pytest.mark.asyncio
+async def test_weights_in_a_repository_without_a_config_are_summed(catalog, monkeypatch):
+    repo = repository(catalog, "sample")
+    RepositoryCard.create(repository=repo, main_sha="head", card="{}", derived="{}", info="{}", version=repo_derive.VERSION)
+    _files_client(monkeypatch, {"model.safetensors": ST_ONE})
+
+    await discovery.index_safetensors(repo.id, "head", ["model.safetensors"], None)
+
+    assert _info(repo) == {"safetensors": ST_SUMMARY}

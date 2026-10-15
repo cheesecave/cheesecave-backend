@@ -363,3 +363,7 @@ Rollback facts and the command are in
 - Older code does not know the columns and ignores them: rolling back is leaving them. Each column is added only
   when it is missing, so a run that stopped between the two finishes; two containers starting together take turns
   on an advisory lock.
+- **No migration for the weights summary (#63, part 3).** It lives in `repository_card.info` (`"safetensors"`), the column 036
+  made. The release that adds it raises `repo_derive.VERSION`, so the rows of 036 are derived again on the next read or refresh
+  (forty repositories a page, as for 036 itself) and each model with weights then reads their headers once, in the background.
+  Rolling back is leaving the key: older code ignores `info`.

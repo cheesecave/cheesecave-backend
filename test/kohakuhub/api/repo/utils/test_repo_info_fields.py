@@ -119,6 +119,42 @@ def test_config_is_a_property_that_needs_the_card():
     assert "config" in hf.CARD_PROPERTIES
 
 
+SUMMARY = {"parameters": {"BF16": 20, "F32": 3}, "total": 23}
+
+
+def test_a_model_answers_the_summary_of_its_weights():
+    assert fields("model", {**CARD, "info": {"safetensors": SUMMARY}})["safetensors"] == SUMMARY
+
+
+@pytest.mark.parametrize("info", [None, {}, {"safetensors": None}, {"config": CONFIG}])
+def test_a_model_without_a_summary_has_no_safetensors_key(info):
+    """Not yet computed, or not one to give: the Hub's ``None`` is the missing key (``expand`` says null)."""
+    assert "safetensors" not in fields("model", {**CARD, "info": info})
+
+
+@pytest.mark.parametrize("repo_type", ["dataset", "space"])
+def test_only_models_have_a_safetensors_summary(repo_type):
+    assert "safetensors" not in fields(repo_type, {**CARD, "info": {"safetensors": SUMMARY}})
+
+
+def test_the_config_and_the_summary_come_together():
+    out = fields("model", {**CARD, "info": {"config": CONFIG, "safetensors": SUMMARY}})
+
+    assert out["config"] == CONFIG and out["safetensors"] == SUMMARY
+
+
+def test_expand_safetensors_is_answered_or_null():
+    asked = hf.hf_repo_info_response(fields("model", {**CARD, "info": {"safetensors": SUMMARY}}), ["safetensors"], siblings=None)
+    unknown = hf.hf_repo_info_response(fields("model", CARD), ["safetensors"], siblings=None)
+
+    assert json.loads(asked.body)["safetensors"] == SUMMARY
+    assert json.loads(unknown.body)["safetensors"] is None
+
+
+def test_safetensors_is_a_property_that_needs_the_card():
+    assert "safetensors" in hf.CARD_PROPERTIES
+
+
 @pytest.mark.parametrize("name", ["cardData", "model-index", "pipeline_tag", "library_name"])
 def test_the_card_properties_are_valid_expand_values_for_models(name):
     assert hf.expand_error("model", [name]) is None

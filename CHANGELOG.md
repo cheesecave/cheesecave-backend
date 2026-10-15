@@ -130,6 +130,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a row is read the first time its info is asked for). `POST /api/validate-yaml` follows the Hub:
   `{errors, warnings}`, `400` for metadata that cannot be read (`huggingface_hub` now refuses such a README
   before uploading it; `valid` is still answered).
+- **The parameter count of the weights: `safetensors` in model info** (#63). `{"parameters": {dtype: count}, "total": n}`
+  from the headers of the root `model*.safetensors`, computed in the background after the index of a commit (an info
+  request never waits for it; 200 shards took 0.4 s on a real stack) and kept while the head does not move. Only what the
+  Hub answers too is given (every one of 172 real repositories equal): `null` for quantized models, two sets of weights,
+  incomplete or unreadable sets, diffusers pipelines. `expand=safetensors` is answered. No migration; the rules version
+  rises, so every repository is derived again once after the deploy.
 - **What the files of a model say about it** (#62, #63). `library_name`, `pipeline_tag`, the framework tags
   (`pytorch`, `safetensors`, ...), the model type, `diffusers:<Class>` and `config` are derived from the files
   of the head commit when the card does not say, in repository info (`expand=config` too), the lists and the
