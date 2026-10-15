@@ -4,7 +4,7 @@ A sweep of bad requests (a missing branch, revision, file, repository; an invali
 body that is not what it says) found a number of 500s where the Hub answers 404 or 400. Each
 request below states the status the Hub answers. The ones the server still gets wrong are marked
 ``xfail`` with what is wrong: when one is fixed it starts to pass (the report says XPASS) and its mark
-goes (the commit operations of #96 did that for three). The rest hold the line, so a fix does not regress and a new route does not
+goes (the commit operations of #96 did that for three, #99 for the last four: none is marked now). The rest hold the line, so a fix does not regress and a new route does not
 start answering 500 to a client's mistake.
 
 Everything runs against the real database, LakeFS and bucket.
@@ -47,9 +47,9 @@ PROBES = [
     ("commit deleting a missing file", "POST", f"/api/models/{REPO}/commit/main", _commit({"key": "deletedFile", "value": {"path": "nope.txt"}}), 200, None),
     ("commit deleting a missing folder", "POST", f"/api/models/{REPO}/commit/main", _commit({"key": "deletedFolder", "value": {"path": "nope/"}}), 200, None),
     ("commit copying a missing file", "POST", f"/api/models/{REPO}/commit/main", _commit({"key": "copyFile", "value": {"path": "c.txt", "srcPath": "nope.txt", "srcRevision": "main"}}), 404, None),
-    ("commit with a body that is not base64", "POST", f"/api/models/{REPO}/commit/main", _commit(_file("d.txt", "!!!", valid=False)), 400, "the body is not checked: an empty file is stored"),
+    ("commit with a body that is not base64", "POST", f"/api/models/{REPO}/commit/main", _commit(_file("d.txt", "!!!", valid=False)), 400, None),
     ("commit with an LFS file that was never uploaded", "POST", f"/api/models/{REPO}/commit/main", _commit({"key": "lfsFile", "value": {"path": "e.bin", "oid": "0" * 64, "size": 10, "algo": "sha256"}}), 400, None),
-    ("commit with the path ..", "POST", f"/api/models/{REPO}/commit/main", _commit(_file("../escape.txt")), 400, "the path is not checked: a tree entry named .. is made"),
+    ("commit with the path ..", "POST", f"/api/models/{REPO}/commit/main", _commit(_file("../escape.txt")), 400, None),
     ("commit with an empty path", "POST", f"/api/models/{REPO}/commit/main", _commit(_file("")), 400, None),
     ("commit with no operation", "POST", f"/api/models/{REPO}/commit/main", _commit(), 200, None),
     ("commit on a parent that moved", "POST", f"/api/models/{REPO}/commit/main", _commit(_file("p.txt"), parent="deadbeef"), 412, None),
@@ -58,7 +58,7 @@ PROBES = [
     ("paths-info of a missing path", "POST", f"/api/models/{REPO}/paths-info/main", {"data": {"paths": ["nope.txt"]}}, 200, None),
     ("resolve a missing file", "GET", f"/{REPO}/resolve/main/nope.txt", {}, 404, None),
     ("resolve a missing revision", "GET", f"/{REPO}/resolve/nope/a.txt", {}, 404, None),
-    ("list the commits of a missing revision", "GET", f"/api/models/{REPO}/commits/nope", {}, 404, "a LakeFS 404 is a 500 (commit history)"),
+    ("list the commits of a missing revision", "GET", f"/api/models/{REPO}/commits/nope", {}, 404, None),
     ("info of a missing revision", "GET", f"/api/models/{REPO}/revision/nope", {}, 404, None),
     ("info of a repository whose name is not Latin-1", "GET", "/api/models/owner/模型", {}, 404, None),
     ("refs of a missing repository", "GET", f"/api/models/{NOTHING}/refs", {}, 404, None),
@@ -74,7 +74,7 @@ PROBES = [
     ("duplicate to a name the Hub refuses", "POST", f"/api/models/{REPO}/duplicate", {"json": {"repository": "owner/a--b"}}, 400, None),
     ("like a missing repository", "POST", f"/api/models/{NOTHING}/like", {}, 404, None),
     ("unlike what was not liked", "DELETE", f"/api/models/{REPO}/like", {}, 400, None),
-    ("merge a missing branch", "POST", f"/api/models/{REPO}/merge/nope/into/main", {"json": {}}, 404, "a LakeFS 404 is a 500 (branches)"),
+    ("merge a missing branch", "POST", f"/api/models/{REPO}/merge/nope/into/main", {"json": {}}, 404, None),
     ("preupload with a body that is not JSON", "POST", f"/api/models/{REPO}/preupload/main", {"content": b"not json"}, 400, None),
     ("overview of a missing user", "GET", "/api/users/no-such-user-zz/overview", {}, 404, None),
     ("overview of a missing organization", "GET", "/api/organizations/no-such-org-zz/overview", {}, 404, None),

@@ -148,18 +148,12 @@ async def test_process_regular_file_covers_validation_skip_restore_and_success(m
         await commit_ops.process_regular_file("README.md", "aGVsbG8=", "utf8", repo, "lakefs", "main")
     assert invalid_encoding.value.status_code == 400
 
-    monkeypatch.setattr(
-        commit_ops.base64,
-        "b64decode",
-        lambda value: (_ for _ in ()).throw(ValueError("bad base64")),
-    )
-    with pytest.raises(HTTPException) as bad_base64:
-        await commit_ops.process_regular_file("README.md", "!!", "base64", repo, "lakefs", "main")
-    assert bad_base64.value.status_code == 400
-    monkeypatch.undo()
-    monkeypatch.setattr(commit_ops, "get_lakefs_client", lambda: client)
-    monkeypatch.setattr(commit_ops, "get_effective_lfs_threshold", lambda repo_arg: 10)
-    monkeypatch.setattr(commit_ops, "should_use_lfs", lambda repo_arg, path, size: size >= 10)
+    # Real input, not a stub of b64decode: "!!!" decodes to b"" unless it is validated (#99)
+    for not_base64 in ("!!", "!!!", "aGV$sbG8="):
+        with pytest.raises(HTTPException) as bad_base64:
+            await commit_ops.process_regular_file("README.md", not_base64, "base64", repo, "lakefs", "main")
+        assert bad_base64.value.status_code == 400
+        assert "base64" in bad_base64.value.detail["error"]
 
     large_content = base64.b64encode(b"0123456789").decode("ascii")
     with pytest.raises(HTTPException) as lfs_required:

@@ -7,3 +7,8 @@ MAX_PATH_BYTES = 1024
 
 def too_long(path: str) -> bool:
     return len(path.encode("utf-8")) > MAX_PATH_BYTES
+
+
+def has_parent_segment(path: str) -> bool:
+    """A ``..`` segment: the Hub refuses it, and a clone or a download writes such a name outside its directory."""
+    return ".." in path.split("/")

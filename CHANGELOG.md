@@ -43,6 +43,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A commit refuses what cannot be what it says, and a revision that is not there is a 404** ([#99](https://github.com/cheesecave/cheesecave-backend/issues/99)).
+  A `file` operation whose content is not valid base64 was stored as an empty file (`b64decode` drops what is outside the
+  alphabet, so `"!!!"` decoded to nothing) and answered 200; it is a 400 now, and nothing of the commit is stored (line breaks
+  and spaces some clients wrap base64 with are still accepted). A path with a `..` segment made a tree entry of that name
+  (a clone or a download writes it outside its directory); a `file`, `lfsFile` or `copyFile` to such a path is a 400 before
+  anything is staged (a delete is not refused, so what an earlier commit stored can still be cleared; names that only contain
+  dots, such as `a..b`, are kept). `GET .../commits/{revision}` and `POST .../merge/{source}/into/{destination}` on a branch
+  LakeFS does not have answered 500; they are `404 RevisionNotFound` now (`RevisionNotFoundError` in `huggingface_hub`).
+  The last four `xfail`s of `test_bad_input_contract.py` are hard assertions.
+
 - **A repository name the Hub refuses is a 400, and a name in an error message is no longer a 500.**
   The server accepted any name: an empty one made a repository called `owner/`, `a/b` one no route can reach, `a--b` or
   `x.git` names the Hub refuses (`huggingface_hub` stops them before sending, a raw request or another client did not),
