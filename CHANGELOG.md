@@ -43,6 +43,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A commit refuses what cannot be what it says, a path has rules, and a revision that is not there is a 404** ([#99](https://github.com/cheesecave/cheesecave-backend/issues/99)).
+  A `file` operation whose content is not valid base64 was stored as an empty file (`b64decode` drops what is outside the
+  alphabet, so `"!!!"` decoded to nothing) and answered 200; it is a 400 now, and nothing of the commit is stored (line breaks
+  and spaces some clients wrap base64 with are still accepted). Paths follow the rules `huggingface_hub` applies before it
+  sends one (`kohakuhub.utils.repo_paths.path_problem`): a control character (NUL made the database raise, an unhandled 500)
+  is a 400 in every path of every operation, and in `preupload` and `paths-info`; a path that is `.`, has a `..` segment (a
+  clone or a download writes it outside its directory) or a `.git` segment in any case (git refuses to check it out) is a 400
+  for what a commit puts somewhere (`file`, `lfsFile`, `copyFile` target), before anything is staged. A delete is not refused,
+  so what an earlier commit stored can still be cleared, and what the client sends is kept: `a//b`, `a/./b`, a leading or
+  trailing `/`, a backslash, `.gitignore`, `.gitattributes`, `.github/...`, the client's own `.cache` folder, dots inside a
+  name. A path or an operation that is not the type it must be (a number, a list) is a 400, not a 500.
+  `GET .../commits/{revision}` and `POST .../merge/{source}/into/{destination}` on a branch LakeFS does not have answered
+  500; they are `404 RevisionNotFound` now (`RevisionNotFoundError` in `huggingface_hub`). The last four `xfail`s of
+  `test_bad_input_contract.py` are hard assertions.
+
 - **A repository name the Hub refuses is a 400, and a name in an error message is no longer a 500.**
   The server accepted any name: an empty one made a repository called `owner/`, `a/b` one no route can reach, `a--b` or
   `x.git` names the Hub refuses (`huggingface_hub` stops them before sending, a raw request or another client did not),

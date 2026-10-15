@@ -25,6 +25,7 @@ from kohakuhub.api.repo.utils.hf import (
     hf_repo_not_found,
     hf_revision_not_found,
     hf_server_error,
+    lakefs_error_to_http,
 )
 
 logger = get_logger("COMMITS")
@@ -187,7 +188,10 @@ async def list_commits(
             headers=headers,
         )
 
-    except Exception as e:
+    except httpx.HTTPError as e:
+        # A revision LakeFS does not have is a 404 RevisionNotFound, not a 500 (#99)
+        raise lakefs_error_to_http(e, "Failed to list commits", repo_id=repo_id, revision=branch) from e
+    except Exception as e:  # noqa: BLE001 - whatever the answer of LakeFS held that we could not read
         logger.exception(f"Failed to list commits for {repo_id}/{branch}", e)
         return hf_server_error(f"Failed to list commits: {str(e)}")
 

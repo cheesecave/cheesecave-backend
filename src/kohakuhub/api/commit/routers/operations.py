@@ -29,7 +29,7 @@ from kohakuhub.auth.dependencies import get_current_user
 from kohakuhub.auth.permissions import check_repo_write_permission
 from kohakuhub.utils.lakefs import get_lakefs_client, resolve_lakefs_repo
 from kohakuhub.utils.commit_id import hub_oid
-from kohakuhub.utils.repo_paths import MAX_PATH_BYTES, too_long
+from kohakuhub.utils.repo_paths import MAX_PATH_BYTES, path_problem, too_long
 from kohakuhub.lfs_scope import may_reference
 from kohakuhub.utils.s3 import get_object_metadata, object_exists
 from kohakuhub.api.repo.utils import branch_lock, operation_lock
@@ -111,9 +111,10 @@ async def process_regular_file(
     if not encoding.startswith("base64"):
         raise HTTPException(400, detail={"error": f"Invalid file operation for {path}"})
 
-    # Decode content
+    # Decode content. Not valid base64 is refused: the lenient default drops what is outside the alphabet, so "!!!" was
+    # stored as an empty file (#99); line breaks and spaces some clients wrap it with are not a fault.
     try:
-        data = base64.b64decode(content_b64)
+        data = base64.b64decode("".join(content_b64.split()), validate=True)
     except ValueError as e:  # binascii.Error is one
         raise HTTPException(400, detail={"error": f"Failed to decode base64: {e}"})
 
@@ -804,12 +805,32 @@ CREATING = ("file", "lfsFile", "copyFile")
 
 def _path_too_long(path: str) -> HTTPException:
     message = f"A path is longer than {MAX_PATH_BYTES} bytes (UTF-8), the limit for a repository path"
+    return _bad_path(message, path)
+
+
+def _bad_path(message: str, path: str) -> HTTPException:
     return HTTPException(
         400,
         detail={"error": f"{message}: {path[:100]}..."},
         # A header holds Latin-1 only: the path stays in the body
         headers={"X-Error-Code": HFErrorCode.BAD_REQUEST, "X-Error-Message": message},
     )
+
+
+def _check_paths(op: dict) -> None:
+    """Refuse a path an operation cannot carry (``path_problem``); a delete may still clear what is stored (#99)."""
+    creating = op["key"] in CREATING
+    if not isinstance(op["value"], dict):
+        raise _bad_path("The value of an operation must be an object", repr(op["value"]))
+    for field in ("path", "srcPath"):
+        path = op["value"].get(field) or ""
+        if not isinstance(path, str):
+            raise _bad_path("A path must be a string", repr(path))
+        if field == "path" and creating and too_long(path):
+            raise _path_too_long(path)
+        problem = path_problem(path, creating=creating and field == "path")
+        if problem:
+            raise _bad_path(problem, path)
 
 
 def _touched(operations: list[dict]) -> tuple[list[str], list[str]]:
@@ -1119,8 +1140,7 @@ async def commit(
 
     # Refused before anything is staged: nothing is left behind
     for op in operations:
-        if op["key"] in CREATING and too_long(op["value"].get("path") or ""):
-            raise _path_too_long(op["value"]["path"])
+        _check_paths(op)
 
     if len(revision) > BRANCH_NAME_MAX:  # no branch has such a name: refuse before keeping it anywhere
         raise _revision_not_found(repo_id, revision)

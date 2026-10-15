@@ -39,6 +39,7 @@ from kohakuhub.utils.lakefs import (
 )
 from kohakuhub.utils.s3 import generate_download_presigned_url, parse_s3_uri
 from kohakuhub.utils.commit_id import hub_oid
+from kohakuhub.utils.repo_paths import path_problem
 from kohakuhub.api.fallback import with_repo_fallback
 from kohakuhub.api.xet import XET_ENABLE
 from kohakuhub.api.quota.util import check_quota
@@ -49,6 +50,7 @@ from kohakuhub.api.utils.downloads import (
 from kohakuhub.api.repo.utils.hf import (
     HFErrorCode,
     expand_error,
+    hf_bad_request,
     hf_repo_info_response,
     hf_repo_not_found,
     hf_siblings_json,
@@ -253,6 +255,13 @@ async def preupload(
     files = body.get("files")
     if not isinstance(files, list):
         raise HTTPException(400, detail={"error": "Missing or invalid 'files' array"})
+
+    # A path a commit would refuse is refused here, before anything is looked up (NUL made the database raise: #99)
+    for file_info in files:
+        path = file_info.get("path") or file_info.get("path_in_repo")
+        problem = path_problem(path, creating=True) if isinstance(path, str) else None
+        if problem:
+            return hf_bad_request(problem)
 
     # Calculate total upload size
     total_upload_bytes = sum(int(f.get("size", 0)) for f in files)

@@ -40,6 +40,7 @@ from kohakuhub.api.repo.utils.hf import (
     hf_repo_not_found,
     hf_revision_not_found,
     hf_server_error,
+    lakefs_error_to_http,
 )
 from kohakuhub.api.operation_capabilities import (
     ensure_repository_operation_enabled,
@@ -718,6 +719,8 @@ async def merge_branches(
     client = get_lakefs_client()
 
     await ensure_revision_in_history(client, repo_row, lakefs_repo, source_ref)
+    # The branch a 404 of LakeFS is about (#99): the destination is read first, then the source is merged
+    missing = destination_branch
     # Perform the merge
     try:
         async with operation_lock.writing(repo_row):
@@ -727,6 +730,7 @@ async def merge_branches(
             base = (await client.get_branch(repository=lakefs_repo, branch=destination_branch))[
                 "commit_id"
             ]
+            missing = source_ref
             merge_result = await client.merge_into_branch(
                 repository=lakefs_repo,
                 source_ref=source_ref,
@@ -767,6 +771,9 @@ async def merge_branches(
                     f"Use strategy='source-wins' or 'dest-wins' to resolve automatically.",
                 },
             )
+
+        if is_lakefs_not_found_error(e):
+            raise lakefs_error_to_http(e, "Merge failed", repo_id=repo_id, revision=missing) from e
 
         raise HTTPException(
             status_code=500,

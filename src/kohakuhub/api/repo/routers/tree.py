@@ -22,6 +22,7 @@ from kohakuhub.db_operations import get_repository, should_use_lfs
 from kohakuhub.lakefs_rest_client import get_lakefs_rest_client
 from kohakuhub.logger import get_logger
 from kohakuhub.utils.commit_id import hub_oid
+from kohakuhub.utils.repo_paths import path_problem
 from kohakuhub.utils.lakefs import (
     get_lakefs_client,
     is_lakefs_not_found_error,
@@ -633,6 +634,11 @@ async def get_paths_info(
         return hf_repo_not_found(repo_id, repo_type)
 
     check_repo_read_permission(repo_row, user)
+
+    # A path with a control character is nothing to look up (NUL made the database raise: #99)
+    for path in paths:
+        if path and (problem := path_problem(path, creating=False)):
+            return hf_bad_request(problem)
 
     normalized_paths = [_normalize_repo_path(path) for path in paths if path]
     if len(normalized_paths) > PATHS_INFO_MAX_PATHS:
