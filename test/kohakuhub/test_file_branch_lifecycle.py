@@ -13,6 +13,7 @@ from kohakuhub.db_operations import delete_repository, repository_lfs_totals
 from kohakuhub.lfs_gc import reconcile_references, retention_reason
 from kohakuhub.storage_cleanup import drop_branch_rows, forget_branch
 from test.kohakuhub.support.factories import make_file, make_repo, make_user
+from test.kohakuhub.support.fakes import lakefs_error
 
 SHA_A = "a" * 64
 SHA_B = "b" * 64
@@ -204,7 +205,7 @@ class _Lake:
         if isinstance(self.branches.get(branch), Exception):
             raise self.branches[branch]
         if branch not in self.branches:
-            raise RuntimeError("404 not found: branch")
+            raise lakefs_error(404, "branch not found")
         return {"commit_id": self.branches[branch]}
 
     async def list_objects(self, **kwargs):
