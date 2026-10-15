@@ -446,6 +446,25 @@ In a container or a CI job, pass it in the environment (`docker run -e HF_HUB_DI
 - Model cards parsing (use README.md YAML frontmatter)
 - Discussions/Community features
 
+**Refused with a `501` that says why:** a feature KohakuHub does not provide answers `501 Not Implemented` with
+`X-Error-Code: NotImplemented` and an `X-Error-Message` that says what to do instead, so `huggingface_hub` raises an error
+you can read (a `404` would look like a bug). The surfaces:
+
+| Feature | Routes | What the message says |
+| --- | --- | --- |
+| Discussions and pull requests, `create_pr` | `/api/{type}s/{repo}/discussions...` | use an external issue tracker |
+| Collections | `/api/collections...` | not implemented |
+| Webhooks | `/api/settings/webhooks...` | not implemented |
+| Space runtime, secrets, variables, hardware, pause, restart | `/api/spaces/{repo}/runtime`, `.../secrets`, ... | configure your deployment directly |
+| Space logs, Space templates, the hardware list | `/api/spaces/{repo}/logs/{run\|build}`, `/api/spaces/templates`, `/api/spaces/hardware` | same |
+| Papers | `/api/papers/...`, `/api/daily_papers` | there is no paper catalogue |
+| Jobs | `/api/jobs/...` | KohakuHub does not run compute |
+| Storage buckets, kernels | `/api/buckets/...`, `/api/kernels/...` | keep the files in a repository |
+| Gated-access requests | `/api/{type}s/{repo}/user-access-request/...` | a repository is public or private here |
+
+`huggingface_hub` 2.0 and later show the message in the exception. Three older releases (0.36, 1.0 and 1.6) build `list_jobs`
+on a bare `raise_for_status`, so there the error carries the `501` status and the URL but not the sentence.
+
 **Extensions:**
 - Storage quota information (KohakuHub-specific)
 - Organization support with roles
