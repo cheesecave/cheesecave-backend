@@ -1133,6 +1133,33 @@ async def commit(
         )
 
 
+async def commit_files(
+    repo_row: Repository, user: User, files: dict[str, bytes], summary: str, revision: str = "main"
+) -> dict:
+    """Commit regular files to ``revision`` for ``user`` the way the commit route does, without a
+    request: the branch lease, the staging and its undo, the usage, the commit and file rows, the last
+    commit of each path and the index of the new head are all the route's own."""
+    operations = [
+        {
+            "key": "file",
+            "value": {"path": path, "content": base64.b64encode(content).decode(), "encoding": "base64"},
+        }
+        for path, content in files.items()
+    ]
+    async with branch_lock.holding(repo_row, revision) as lease:
+        return await _commit_on_leased_branch(
+            lease,
+            {"summary": summary},
+            operations,
+            RepoType(repo_row.repo_type),
+            repo_row,
+            resolve_lakefs_repo(repo_row),
+            revision,
+            user,
+            get_lakefs_client(),
+        )
+
+
 BRANCH_NAME_MAX = 255  # the width of the column the lease and the File rows keep it in
 
 

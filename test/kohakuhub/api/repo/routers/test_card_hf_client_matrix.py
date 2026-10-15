@@ -137,7 +137,14 @@ async def test_space_info_reads_the_sdk_and_tags(api):
 
 @pytest.mark.parametrize("repo_type,reader", [("model", "model_info"), ("dataset", "dataset_info"), ("space", "space_info")])
 async def test_a_repository_without_a_card_reads_cleanly(api, repo_type, reader):
-    rid = await _repo(api, repo_type, "bare")
+    if repo_type == "space":
+        # the client always sends an sdk, which now gives the Space its card (#95): a Space without one
+        # comes from a create call that has none
+        response = httpx.post(f"{api.endpoint}/api/repos/create", json={"type": "space", "name": "bare", "private": False}, headers={"authorization": f"Bearer {api.token}"})
+        response.raise_for_status()
+        rid = "owner/bare"
+    else:
+        rid = await _repo(api, repo_type, "bare")
 
     info = await _run(getattr(api, reader), rid)
 
@@ -469,3 +476,49 @@ async def test_a_model_the_rules_do_not_sum_has_no_summary_and_the_client_copes(
     info = await _run(api.model_info, rid)
 
     assert info.safetensors is None and info.library_name == "transformers"
+
+
+# --- a Space created through the client has its card (#95, A) ---------------------------------
+
+
+@pytest.mark.parametrize("sdk", ["gradio", "streamlit", "docker", "static"])
+async def test_a_space_created_with_space_sdk_reads_back_with_its_sdk(api, sdk):
+    """``create_repo(repo_type="space", space_sdk=...)``, then what ``space_info`` reads."""
+    await _run(api.create_repo, f"owner/sp-{sdk}", repo_type="space", space_sdk=sdk)
+
+    info = await _run(api.space_info, f"owner/sp-{sdk}")
+
+    assert info.sdk == sdk and info.tags[0] == sdk
+    assert info.card_data is not None and info.card_data.to_dict()["title"] == f"sp-{sdk}"
+
+
+async def test_the_card_of_a_new_space_is_a_file_the_client_lists_and_reads(api):
+    await _run(api.create_repo, "owner/sp-files", repo_type="space", space_sdk="gradio")
+
+    files = await _run(api.list_repo_files, "owner/sp-files", repo_type="space")
+    path = await _run(api.hf_hub_download, "owner/sp-files", "README.md", repo_type="space")
+
+    assert files == ["README.md"] and "sdk: gradio" in open(path).read()
+
+
+async def test_a_space_in_the_list_has_its_sdk_without_anyone_asking_for_its_info(api):
+    await _run(api.create_repo, "owner/sp-listed", repo_type="space", space_sdk="streamlit")
+
+    item = None
+    for _ in range(40):  # the commit scheduled the index in the background
+        spaces = await _run(lambda: list(api.list_spaces(author="owner")))
+        item = next(s for s in spaces if s.id == "owner/sp-listed")
+        if item.sdk:
+            break
+        await asyncio.sleep(0.25)
+
+    assert item.sdk == "streamlit"
+
+
+async def test_a_card_pushed_to_a_new_space_replaces_the_default_one(api):
+    await _run(api.create_repo, "owner/sp-replaced", repo_type="space", space_sdk="static")
+    await _run(api.upload_file, path_or_fileobj=b"---\nsdk: gradio\ntitle: Mine\n---\n", path_in_repo="README.md", repo_id="owner/sp-replaced", repo_type="space")
+
+    info = await _run(api.space_info, "owner/sp-replaced")
+
+    assert info.sdk == "gradio" and info.card_data.to_dict()["title"] == "Mine"

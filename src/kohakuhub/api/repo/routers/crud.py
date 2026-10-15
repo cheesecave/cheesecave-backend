@@ -46,6 +46,8 @@ from kohakuhub.api.repo.utils.hf import (
     hf_server_error,
 )
 from kohakuhub import usage
+from kohakuhub.api.commit.routers.operations import commit_files
+from kohakuhub.space_card import space_card
 from kohakuhub.api.commit import squash
 from kohakuhub.api.commit.records import OperationRefused
 from kohakuhub.api.repo.utils import operation_lock
@@ -570,6 +572,15 @@ async def create_repo(
     # any fallback probe currently in flight has its ``safe_set``
     # rejected.
     get_fallback_cache().invalidate_repo(payload.type, namespace, payload.name)
+
+    # A Space created with an sdk starts with the card the Hub writes: ``space_info().sdk``, the lists and
+    # the facets read it from there. The Space exists whether or not the card could be written.
+    card = space_card(payload.name, payload.sdk) if payload.type == "space" else None
+    if card is not None:
+        try:
+            await commit_files(_row, user, {"README.md": card}, "initial commit")
+        except Exception as e:
+            logger.warning(f"Could not write the card of {full_id}: {e}")
 
     return {
         "url": f"{cfg.app.base_url}/{payload.type}s/{full_id}",

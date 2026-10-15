@@ -170,6 +170,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a row is read the first time its info is asked for). `POST /api/validate-yaml` follows the Hub:
   `{errors, warnings}`, `400` for metadata that cannot be read (`huggingface_hub` now refuses such a README
   before uploading it; `valid` is still answered).
+- **A Space is created with its card, and list items have the Hub's ids** (#62, #95). `create_repo(repo_type="space",
+  space_sdk=...)` writes the `README.md` the Hub writes (`title`, `emoji`, `colorFrom`, `colorTo`, `sdk`, `pinned`) as
+  the first commit, so `space_info().sdk`, the lists and the `sdk` facet are set from the start (a Space with no or an
+  unknown `sdk` has no card, as before; a failing card write does not fail the create). List items of every type have `_id`
+  (a string) and `trendingScore`, models `modelId`, datasets `disabled`; the scores are computed once per page, for that
+  page's rows only. No migration.
 - **The parameter count of the weights: `safetensors` in model info** (#63). `{"parameters": {dtype: count}, "total": n}`
   from the headers of the root `model*.safetensors`, computed in the background after the index of a commit (an info
   request never waits for it; 200 shards took 0.4 s on a real stack) and kept while the head does not move. Only what the

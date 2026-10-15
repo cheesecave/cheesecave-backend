@@ -9,7 +9,7 @@ from kohakuhub.logger import get_logger
 logger = get_logger("TRENDING")
 
 
-def calculate_trending_scores(repo_type: str, days: int = 7) -> dict[int, float]:
+def calculate_trending_scores(repo_type: str, days: int = 7, ids=None) -> dict[int, float]:
     """Calculate trending scores for all repositories of a type.
 
     Trending algorithm:
@@ -21,6 +21,7 @@ def calculate_trending_scores(repo_type: str, days: int = 7) -> dict[int, float]
     Args:
         repo_type: Repository type to calculate for
         days: Number of days to consider (default: 7)
+        ids: Only these repositories (a list page asks for its own rows); ``None`` for all
 
     Returns:
         Dict mapping repository_id -> trending_score
@@ -33,6 +34,13 @@ def calculate_trending_scores(repo_type: str, days: int = 7) -> dict[int, float]
 
     # Query all daily stats for the period
     # Need to join with Repository to filter by repo_type
+    wanted = (
+        (DailyRepoStats.date >= start_date)
+        & (DailyRepoStats.date <= today)
+        & (Repository.repo_type == repo_type)
+    )
+    if ids is not None:
+        wanted &= DailyRepoStats.repository.in_(ids)
     stats = list(
         DailyRepoStats.select(
             DailyRepoStats.repository,
@@ -40,11 +48,7 @@ def calculate_trending_scores(repo_type: str, days: int = 7) -> dict[int, float]
             DailyRepoStats.download_sessions,
         )
         .join(Repository)
-        .where(
-            (DailyRepoStats.date >= start_date)
-            & (DailyRepoStats.date <= today)
-            & (Repository.repo_type == repo_type)
-        )
+        .where(wanted)
     )
 
     # Calculate trending scores

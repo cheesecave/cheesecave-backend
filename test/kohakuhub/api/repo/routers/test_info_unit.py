@@ -7,6 +7,7 @@ sorting, privacy filtering, storage quota and trending are real SQL.
 from __future__ import annotations
 
 import json
+import math
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
@@ -296,3 +297,95 @@ async def test_a_repository_deleted_after_the_order_was_read_is_left_out(lakefs)
 
     assert [item["id"] for item in items] == ["alice/kept"]
     assert await repo_info._render_local([], tag_source=False) == []
+
+
+# --- the fields the Hub puts in every list item (#95, B) ---------------------------------
+
+
+@pytest.mark.asyncio
+async def test_list_items_carry_the_ids_the_hub_gives(lakefs):
+    owner = make_user("alice")
+    model = make_repo(owner, "m")
+    dataset = make_repo(owner, "d", repo_type="dataset")
+    space = make_repo(owner, "s", repo_type="space")
+
+    by_type = {r.repo_type: (await repo_info._render_local([r.id], tag_source=False))[0] for r in (model, dataset, space)}
+
+    assert by_type["model"]["_id"] == str(model.id) and by_type["model"]["modelId"] == "alice/m"
+    assert by_type["dataset"]["_id"] == str(dataset.id) and "modelId" not in by_type["dataset"]
+    assert by_type["space"]["_id"] == str(space.id) and "modelId" not in by_type["space"]
+
+
+@pytest.mark.asyncio
+async def test_only_a_dataset_item_says_whether_it_is_disabled(lakefs):
+    owner = make_user("alice")
+    items = {
+        r.repo_type: (await repo_info._render_local([r.id], tag_source=False))[0]
+        for r in (make_repo(owner, "m"), make_repo(owner, "d", repo_type="dataset"), make_repo(owner, "s", repo_type="space"))
+    }
+
+    assert items["dataset"]["disabled"] is False
+    assert "disabled" not in items["model"] and "disabled" not in items["space"]
+
+
+@pytest.mark.asyncio
+async def test_the_trending_score_of_an_item_is_the_one_of_the_trending_sort(lakefs):
+    owner = make_user("alice")
+    busy = make_repo(owner, "busy")
+    quiet = make_repo(owner, "quiet")
+    today = datetime.now(timezone.utc).date()
+    make_daily_stats(busy, today, download_sessions=10)
+    make_daily_stats(busy, today - timedelta(days=1), download_sessions=3)
+
+    items = {i["id"]: i for i in await repo_info._render_local([busy.id, quiet.id], tag_source=False)}
+
+    assert items["alice/busy"]["trendingScore"] == round(math.log(11) + math.log(4) * 0.8, 2)
+    assert items["alice/quiet"]["trendingScore"] == 0
+
+
+@pytest.mark.asyncio
+async def test_the_trending_scores_of_a_page_are_computed_once_for_that_page_only(lakefs, monkeypatch):
+    owner = make_user("alice")
+    ids = [make_repo(owner, f"m{n}").id for n in range(3)]
+    other = make_repo(owner, "elsewhere")
+    calls = []
+    real = repo_info.calculate_trending_scores
+
+    def spy(repo_type, days=7, ids=None):
+        calls.append((repo_type, sorted(ids)))
+        return real(repo_type, days, ids)
+
+    monkeypatch.setattr(repo_info, "calculate_trending_scores", spy)
+
+    await repo_info._render_local(ids, tag_source=False)
+
+    assert calls == [("model", sorted(ids))] and other.id not in calls[0][1]
+
+
+@pytest.mark.asyncio
+async def test_a_page_of_two_kinds_gets_each_kinds_own_scores(lakefs):
+    owner = make_user("alice")
+    model = make_repo(owner, "m")
+    dataset = make_repo(owner, "d", repo_type="dataset")
+    today = datetime.now(timezone.utc).date()
+    make_daily_stats(model, today, download_sessions=1)
+    make_daily_stats(dataset, today, download_sessions=7)
+
+    items = {i["id"]: i for i in await repo_info._render_local([model.id, dataset.id], tag_source=False)}
+
+    assert items["alice/m"]["trendingScore"] == round(math.log(2), 2)
+    assert items["alice/d"]["trendingScore"] == round(math.log(8), 2)
+
+
+def test_the_trending_scores_can_be_asked_for_some_repositories_only():
+    from kohakuhub.api.utils.trending import calculate_trending_scores
+
+    owner = make_user("alice")
+    a, b = make_repo(owner, "a"), make_repo(owner, "b")
+    today = datetime.now(timezone.utc).date()
+    make_daily_stats(a, today, download_sessions=5)
+    make_daily_stats(b, today, download_sessions=5)
+
+    assert set(calculate_trending_scores("model")) == {a.id, b.id}
+    assert set(calculate_trending_scores("model", ids=[a.id])) == {a.id}
+    assert calculate_trending_scores("model", ids=[]) == {}

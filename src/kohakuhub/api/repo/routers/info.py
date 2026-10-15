@@ -33,6 +33,7 @@ from kohakuhub.api.repo.utils import listing
 from kohakuhub.api.utils.paging import next_link
 from kohakuhub.utils.datetime_utils import safe_strftime
 from kohakuhub.utils.commit_id import hub_oid
+from kohakuhub.api.utils.trending import calculate_trending_scores
 from kohakuhub.api.repo.utils.hf import (
     HFErrorCode,
     CARD_PROPERTIES,
@@ -352,6 +353,10 @@ async def _render_local(ids: list[int], tag_source: bool, with_card: bool = Fals
     }
     heads = _latest_main_commits(ids)
     client = get_lakefs_client()
+    # One query per kind on the page, for the page's own rows
+    trending: dict[int, float] = {}
+    for kind in {r.repo_type for r in by_id.values()}:
+        trending.update(calculate_trending_scores(kind, ids=[r.id for r in by_id.values() if r.repo_type == kind]))
     result = []
     for repo_id in ids:
         r = by_id.get(repo_id)
@@ -366,6 +371,7 @@ async def _render_local(ids: list[int], tag_source: bool, with_card: bool = Fals
                 client, resolve_lakefs_repo(r)
             )
         item = {
+            "_id": str(r.id),
             "id": r.full_id,
             "author": r.namespace,
             "private": r.private,
@@ -375,8 +381,13 @@ async def _render_local(ids: list[int], tag_source: bool, with_card: bool = Fals
             "downloads": r.downloads,
             "likes": r.likes_count,
             "gated": False,
+            "trendingScore": round(trending.get(r.id, 0), 2),
             "tags": [],
         }
+        if r.repo_type == "model":
+            item["modelId"] = r.full_id
+        elif r.repo_type == "dataset":
+            item["disabled"] = False
         row = indexed.get(r.id)
         if row is not None:
             declared = json.loads(row.derived)
