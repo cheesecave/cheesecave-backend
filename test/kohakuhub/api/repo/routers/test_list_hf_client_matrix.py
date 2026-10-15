@@ -123,6 +123,20 @@ async def test_the_list_parses_into_the_clients_info_objects(api, owner_client, 
 
 
 @pytest.mark.parametrize("kind,method", TYPES)
+async def test_a_list_item_has_the_ids_and_the_trending_score_the_hub_gives(api, owner_client, kind, method):
+    """On the wire (``_id`` a string, ``modelId`` for models, ``trendingScore``) and as the client reads it."""
+    await _create(owner_client, kind, "ided")
+
+    wire = next(i for i in (await owner_client.get(f"/api/{kind}s", params={"author": "owner", "fallback": "false"})).json() if i["id"] == "owner/ided")
+    item = next(i for i in await _list(api, method, author="owner") if i.id == "owner/ided")
+
+    assert wire["_id"].isdigit() and ("modelId" in wire) == (kind == "model") and wire["trendingScore"] == 0
+    assert item.id == "owner/ided"
+    if hasattr(item, "trending_score"):  # the attribute the clients that know the field read it into
+        assert item.trending_score == 0
+
+
+@pytest.mark.parametrize("kind,method", TYPES)
 async def test_a_limit_is_honoured(api, owner_client, kind, method):
     for i in range(4):
         await _create(owner_client, kind, f"lim{i}")
