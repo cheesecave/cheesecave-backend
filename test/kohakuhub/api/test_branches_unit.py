@@ -5,12 +5,14 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
 
+import httpx
 import pytest
 from fastapi import HTTPException
 
 import kohakuhub.api.branches as branches_api
 import kohakuhub.api.operation_capabilities as operation_capabilities
 from test.kohakuhub.support.factories import make_repo, make_user
+from test.kohakuhub.support.fakes import lakefs_error
 
 
 @asynccontextmanager
@@ -199,7 +201,7 @@ async def test_create_branch_and_tag_routes_cover_success_and_error_paths(monkey
     assert not_found_response.status_code == 404
 
     monkeypatch.setattr(branches_api, "get_repository", lambda *_args: repo)
-    client.raise_on["create_branch"] = RuntimeError("409 conflict")
+    client.raise_on["create_branch"] = lakefs_error(409, "branch already exists: not unique", "POST", "/repositories/r/branches")
     conflict_response = await branches_api.create_branch(
         "model",
         "owner",
@@ -209,6 +211,16 @@ async def test_create_branch_and_tag_routes_cover_success_and_error_paths(monkey
     )
     assert conflict_response.status_code == 409
     assert "already exists" in _response_error_message(conflict_response)
+
+    client.raise_on["create_branch"] = RuntimeError("409 conflict")  # the words alone are not a status
+    words_only = await branches_api.create_branch(
+        "model",
+        "owner",
+        "repo",
+        branches_api.CreateBranchPayload(branch="feature"),
+        user=user,
+    )
+    assert words_only.status_code == 500
 
     client.raise_on["create_branch"] = RuntimeError("boom")
     generic_branch_error = await branches_api.create_branch(
@@ -265,6 +277,40 @@ async def test_delete_branch_and_tag_cover_success_not_found_and_guardrails(monk
     monkeypatch.setattr(branches_api, "get_repository", lambda *_args: None)
     not_found = await branches_api.delete_tag("model", "owner", "repo", "v1", user=user)
     assert not_found.status_code == 404
+
+
+def _lakefs_answered(status):
+    """What ``LakeFSRestClient`` raises for an answer of that status."""
+    return httpx.HTTPStatusError(
+        f"LakeFS API error {status}", request=httpx.Request("DELETE", "http://lakefs"), response=httpx.Response(status)
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("db_scope")
+@pytest.mark.parametrize("kind", ["branch", "tag"])
+async def test_deleting_a_reference_lakefs_does_not_have_is_a_404_not_a_500(monkeypatch, kind):
+    """The client documents ``RevisionNotFoundError`` for deleting a branch or tag that does not
+    exist: that is a 404 ``RevisionNotFound``. A second delete (a concurrent one too) was a 500."""
+    repo = make_repo(make_user("owner"), "repo")
+    user = SimpleNamespace(username="owner")
+    client = _FakeClient()
+    monkeypatch.setattr(branches_api, "get_repository", lambda *_args: repo)
+    monkeypatch.setattr(branches_api, "check_repo_delete_permission", lambda repo_arg, user_arg: None)
+    monkeypatch.setattr(branches_api, "resolve_lakefs_repo", lambda repo: f"{repo.repo_type}:{repo.full_id}")
+    monkeypatch.setattr(branches_api, "get_lakefs_client", lambda: client)
+    delete = getattr(branches_api, f"delete_{kind}")
+
+    client.raise_on[f"delete_{kind}"] = _lakefs_answered(404)
+    missing = await delete("model", "owner", "repo", "gone", user=user)
+    assert missing.status_code == 404
+    assert missing.headers["x-error-code"] == "RevisionNotFound"
+    assert "Revision 'gone' not found in repository 'owner/repo'" in _response_error_message(missing)
+
+    # Any other answer is a failure, and so are words that only say 404: LakeFS did not answer 404
+    for failure in (_lakefs_answered(500), _lakefs_answered(403), RuntimeError("404 not found")):
+        client.raise_on[f"delete_{kind}"] = failure
+        assert (await delete("model", "owner", "repo", "gone", user=user)).status_code == 500
 
 
 @pytest.mark.asyncio
@@ -350,7 +396,7 @@ async def test_merge_branches_covers_not_found_conflict_success_and_tracking_pat
     assert not_found.status_code == 404
 
     monkeypatch.setattr(branches_api, "get_repository", lambda *_args: repo)
-    client.raise_on["merge_into_branch"] = RuntimeError("merge conflict happened")
+    client.raise_on["merge_into_branch"] = lakefs_error(409, "conflict", "POST", "/repositories/r/refs/a/merge/b")
     with pytest.raises(HTTPException) as conflict_error:
         await branches_api.merge_branches(
             "model", "owner", "repo", "feature", "main", branches_api.MergePayload(), user=user

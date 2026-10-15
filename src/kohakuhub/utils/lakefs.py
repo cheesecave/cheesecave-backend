@@ -11,6 +11,25 @@ from kohakuhub.lakefs_rest_client import LakeFSRestClient, get_lakefs_rest_clien
 from kohakuhub.utils.ref_name import ref_prefixes
 
 
+def lakefs_status(error: BaseException) -> int | None:
+    """The HTTP status a LakeFS call failed with, ``None`` for any other failure.
+
+    ``LakeFSRestClient`` raises ``httpx.HTTPStatusError``, so the status is there to read: the text of an
+    error also holds URLs, repository names and ids, in which "404" or "conflict" can be found by chance (#10).
+    """
+    return getattr(getattr(error, "response", None), "status_code", None)
+
+
+def is_lakefs_not_found_error(error: BaseException) -> bool:
+    """LakeFS answered 404 (a missing branch, commit, tag, repository or object)."""
+    return lakefs_status(error) == 404
+
+
+def is_lakefs_conflict_error(error: BaseException) -> bool:
+    """LakeFS answered 409 (the name is taken, or a merge conflicts)."""
+    return lakefs_status(error) == 409
+
+
 def get_lakefs_client() -> LakeFSRestClient:
     """Get configured LakeFS REST client.
 
@@ -127,15 +146,13 @@ async def resolve_revision(
             commit_info = None
         return commit_id, commit_info
     except Exception as branch_error:
-        status = getattr(getattr(branch_error, "response", None), "status_code", None)
+        status = lakefs_status(branch_error)
         if status == 400 or isinstance(branch_error, httpx.InvalidURL):
             # An id LakeFS does not accept (``a..b``, a space, an expression such as ``main~1``,
             # a URL httpx refuses): "Invalid rev id" on the Hub, not a failure of LakeFS
             raise ValueError(f"Revision '{revision}' is not a valid ref") from branch_error
-        # Check if it's a "not found" error (branch doesn't exist)
-        error_str = str(branch_error).lower()
-        if status != 404 and "404" not in error_str and "not found" not in error_str:
-            # Some other error, re-raise
+        # Only "there is no such branch" goes on to try a commit; anything else is a failure of LakeFS
+        if status != 404:
             raise branch_error
 
     # Branch not found, try resolving as a commit hash

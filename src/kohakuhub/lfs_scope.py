@@ -20,13 +20,15 @@ the object id.
 
 from __future__ import annotations
 
+from botocore.exceptions import BotoCoreError, ClientError
+
 from kohakuhub.auth.permissions import RepoReadDeniedError, check_repo_read_permission
 from kohakuhub.config import cfg
 from kohakuhub.db import File, LFSObjectHistory, LfsGrant, LfsHeadRef, Repository
 from kohakuhub.db_operations import repository_holds_lfs_object
 from kohakuhub.lfs_gc import claim_key
 from kohakuhub.logger import get_logger
-from kohakuhub.utils.s3 import delete_objects_with_prefix, object_exists, object_sha256
+from kohakuhub.utils.s3 import S3DeleteFailed, delete_objects_with_prefix, object_exists, object_sha256
 
 logger = get_logger("LFS_SCOPE")
 
@@ -93,7 +95,11 @@ async def prove_claim(repo: Repository, oid: str) -> bool:
         grant.save()
     else:
         logger.warning(f"Claimed bytes for {oid[:8]} do not hash to the object id")
-    await delete_objects_with_prefix(cfg.s3.bucket, key)
+    try:
+        await delete_objects_with_prefix(cfg.s3.bucket, key)
+    except (ClientError, BotoCoreError, S3DeleteFailed) as e:
+        # the bytes are not content anybody may use; a later run of the expiry takes them
+        logger.warning(f"Could not remove the uploaded copy for {oid[:8]}: {e}")
     return matches
 
 

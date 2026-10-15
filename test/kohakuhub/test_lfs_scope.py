@@ -163,6 +163,30 @@ async def test_wrong_bytes_prove_nothing_and_are_removed(m):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("hashes", [True, False], ids=["right bytes", "wrong bytes"])
+async def test_a_copy_that_cannot_be_removed_does_not_change_what_the_proof_says(m, monkeypatch, hashes):
+    """Removing the uploaded copy is clean-up, best effort (#10): the answer is what the hash says.
+
+    Targeted mock: a store that refuses the delete cannot be produced against the real MinIO.
+    """
+    repo = _repo(m)
+    oid, content = _unique()
+    m.scope.record_grant(repo, oid, "claim")
+    key = m.gc.claim_key(repo.id, oid)
+    _put(m, key, content if hashes else content + b"!")
+
+    async def refused(bucket, prefix):
+        raise m.scope.S3DeleteFailed("S3 refused to delete 1 object(s)")
+
+    monkeypatch.setattr(m.scope, "delete_objects_with_prefix", refused)
+
+    assert await m.scope.prove_claim(repo, oid) is hashes
+    assert m.db.LfsGrant.get(m.db.LfsGrant.sha256 == oid).proven is hashes
+    assert _has(m, key)  # left behind for later; nothing may use it
+    m.s3.delete_object(Bucket=m.cfg.s3.bucket, Key=key)
+
+
+@pytest.mark.asyncio
 async def test_there_is_nothing_to_prove_without_a_claim_or_an_upload(m):
     repo = _repo(m)
     never, _ = _unique()

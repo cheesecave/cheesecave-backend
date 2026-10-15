@@ -43,6 +43,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Deleting a branch or tag that is not there is a 404 `RevisionNotFound`, not a 500** (found while auditing #51).
+  `delete_branch` and `delete_tag` of a ref LakeFS does not have (never there, deleted already, or deleted a moment ago by
+  a parallel job) answered `500 Failed to delete branch: LakeFS API error 404`, and `huggingface_hub` raised a server
+  error where its documentation says `RevisionNotFoundError`. Six clients deleting one branch together got a 500 in
+  26 of 30 rounds. LakeFS's answer is now read by its status: 404 is the Hub's 404, anything else is still a 500. Several
+  callers racing on one branch may still all be told 200: LakeFS deletes idempotently inside the window of a race.
 - **A concurrent create of one repository name answers 409, never 500** ([#87](https://github.com/cheesecave/cheesecave-backend/issues/87)).
   Several clients calling `create_repo("ns/name", exist_ok=True)` together (a multi-worker upload, `push_to_hub` from every
   rank) got a 500 about one time in four, and `exist_ok` only takes a 409 as "it exists". The Hub serializes creation, so
