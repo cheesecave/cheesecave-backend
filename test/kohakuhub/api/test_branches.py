@@ -73,3 +73,22 @@ async def test_non_writer_cannot_create_branch(visitor_client):
     )
 
     assert response.status_code == 403
+
+
+async def test_deleting_a_missing_branch_or_tag_is_a_404_revision_not_found(owner_client):
+    """A branch or tag that is not there (never was, or already deleted) is a 404, not a 500."""
+    response = await owner_client.post("/api/repos/create", json={"type": "model", "name": "delete-missing-ref"})
+    assert response.status_code == 200, response.text
+    base = "/api/models/owner/delete-missing-ref"
+    assert (await owner_client.post(f"{base}/branch", json={"branch": "once", "revision": "main"})).status_code == 200
+    assert (await owner_client.post(f"{base}/tag", json={"tag": "v-once", "revision": "main"})).status_code == 200
+
+    for kind, name in (("branch", "once"), ("tag", "v-once")):
+        assert (await owner_client.delete(f"{base}/{kind}/{name}")).status_code == 200
+        for gone in (name, f"never-{name}"):  # already deleted, and never there
+            missing = await owner_client.delete(f"{base}/{kind}/{gone}")
+            assert missing.status_code == 404, (kind, gone, missing.text)
+            assert missing.headers["x-error-code"] == "RevisionNotFound"
+            assert f"Revision '{gone}' not found" in missing.headers["x-error-message"]
+    # What is guarded stays guarded
+    assert (await owner_client.delete(f"{base}/branch/main")).status_code == 400

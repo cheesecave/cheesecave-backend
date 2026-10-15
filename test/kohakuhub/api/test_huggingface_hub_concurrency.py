@@ -33,6 +33,7 @@ from concurrent.futures import ThreadPoolExecutor
 import httpx
 import pytest
 from huggingface_hub import HfApi
+from huggingface_hub.utils import RevisionNotFoundError
 
 from test.kohakuhub.support.bootstrap import DEFAULT_PASSWORD
 
@@ -292,5 +293,82 @@ async def test_hf_api_create_repo_exist_ok_survives_concurrent_callers(live_serv
                 urls = list(pool.map(create, [name] * 6))
             assert {u.rsplit("/", 1)[-1] for u in urls} == {name}
             assert api.repo_info(f"owner/{name}").id == f"owner/{name}"
+
+    await asyncio.to_thread(rounds)
+
+
+async def test_concurrent_deletes_of_one_branch_never_answer_a_5xx(app, owner_client):
+    """Six at once: the branch goes, and no caller is told the server failed. LakeFS deletes
+    idempotently inside the window of a race, so several callers may be told 200; the ones that
+    come after it is gone are told the Hub's 404 RevisionNotFound. They were 500s."""
+    response = await owner_client.post("/api/repos/create", json={"type": "model", "name": "race-delete-branch"})
+    assert response.status_code == 200, response.text
+    clients = [await _owner_session(app) for _ in range(6)]
+    try:
+        for round_ in range(4):
+            branch = f"doomed-{round_}"
+            created = await owner_client.post(
+                "/api/models/owner/race-delete-branch/branch", json={"branch": branch, "revision": "main"}
+            )
+            assert created.status_code == 200, created.text
+            responses = await asyncio.gather(
+                *(c.delete(f"/api/models/owner/race-delete-branch/branch/{branch}") for c in clients)
+            )
+            statuses = [r.status_code for r in responses]
+            assert set(statuses) <= {200, 404} and 200 in statuses, (statuses, [r.text[:120] for r in responses])
+    finally:
+        for c in clients:
+            await c.aclose()
+    refs = (await owner_client.get("/api/models/owner/race-delete-branch/refs")).json()
+    assert [b["name"] for b in refs["branches"]] == ["main"]
+
+
+@pytest.mark.hf_client
+async def test_hf_api_delete_of_a_missing_branch_or_tag_raises_revision_not_found(live_server_url, hf_api_token):
+    """``delete_branch`` and ``delete_tag`` document ``RevisionNotFoundError`` for a ref that does
+    not exist (a second delete of one included); a 500 made them raise a generic server error."""
+    api = HfApi(endpoint=live_server_url, token=hf_api_token)
+
+    def run():
+        api.create_repo("owner/hf-delete-missing", exist_ok=True)
+        api.upload_file(path_or_fileobj=b"x", path_in_repo="a.txt", repo_id="owner/hf-delete-missing")
+        api.create_branch("owner/hf-delete-missing", branch="once")
+        api.create_tag("owner/hf-delete-missing", tag="v-once")
+        api.delete_branch("owner/hf-delete-missing", branch="once")
+        api.delete_tag("owner/hf-delete-missing", tag="v-once")
+        for call, name in ((api.delete_branch, "once"), (api.delete_branch, "never"), (api.delete_tag, "v-once"), (api.delete_tag, "v-never")):
+            kind = "branch" if call == api.delete_branch else "tag"
+            with pytest.raises(RevisionNotFoundError):
+                call("owner/hf-delete-missing", **{kind: name})
+
+    await asyncio.to_thread(run)
+
+
+@pytest.mark.hf_client
+async def test_hf_api_concurrent_delete_branch_is_never_a_server_error(live_server_url, hf_api_token):
+    """Several callers cleaning up the same branch (parallel CI jobs): the branch goes, and a caller
+    is either told it was deleted or gets ``RevisionNotFoundError``, never a server error (LakeFS
+    deletes idempotently inside the window of a race, so more than one may be told it was
+    deleted). Only a server of its own threads shows the race; before the fix about every second
+    round had a 500."""
+    api = HfApi(endpoint=live_server_url, token=hf_api_token)
+
+    def delete(branch):
+        try:
+            api.delete_branch("owner/hf-delete-race", branch=branch)
+            return "deleted"
+        except RevisionNotFoundError:
+            return "not found"
+
+    def rounds():
+        api.create_repo("owner/hf-delete-race", exist_ok=True)
+        api.upload_file(path_or_fileobj=b"x", path_in_repo="a.txt", repo_id="owner/hf-delete-race")
+        for round_ in range(10):
+            branch = f"doomed-{round_}"
+            api.create_branch("owner/hf-delete-race", branch=branch)
+            with ThreadPoolExecutor(6) as pool:
+                outcomes = set(pool.map(delete, [branch] * 6))  # a 500 raises out of the thread
+            assert "deleted" in outcomes and outcomes <= {"deleted", "not found"}
+            assert branch not in [b.name for b in api.list_repo_refs("owner/hf-delete-race").branches]
 
     await asyncio.to_thread(rounds)
