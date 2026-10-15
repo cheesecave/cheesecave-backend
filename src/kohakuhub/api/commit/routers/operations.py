@@ -8,6 +8,7 @@ import hashlib
 import json
 
 import httpx
+from botocore.exceptions import BotoCoreError, ClientError
 from fastapi import APIRouter, Depends, HTTPException, Request
 from peewee import IntegrityError
 
@@ -41,7 +42,7 @@ from kohakuhub.lfs_gc import (
     tombstone_state,
 )
 from kohakuhub.storage_cleanup import enqueue_lfs_collection, record_head_change
-from kohakuhub.api.repo.utils.hf import HFErrorCode, ensure_revision_in_history
+from kohakuhub.api.repo.utils.hf import HFErrorCode, ensure_revision_in_history, lakefs_error_to_http
 
 logger = get_logger("FILE")
 router = APIRouter()
@@ -113,7 +114,7 @@ async def process_regular_file(
     # Decode content
     try:
         data = base64.b64decode(content_b64)
-    except Exception as e:
+    except ValueError as e:  # binascii.Error is one
         raise HTTPException(400, detail={"error": f"Failed to decode base64: {e}"})
 
     # Check file size against LFS threshold (use repo-specific settings)
@@ -156,8 +157,8 @@ async def process_regular_file(
             path=path,
             content=data,
         )
-    except Exception as e:
-        raise HTTPException(500, detail={"error": f"Failed to upload {path}: {e}"})
+    except httpx.HTTPError as e:
+        raise lakefs_error_to_http(e, f"Failed to upload {path}", repo_id=repo.full_id, revision=revision) from e
 
     # Update database - store git blob SHA1 in sha256 column for non-LFS files
     File.insert(
@@ -288,18 +289,15 @@ async def process_lfs_file(
                     f"(oid: {oid[:8]}, size: {size}, physical: {physical_address})"
                 )
 
-            except Exception as e:
+            except httpx.HTTPError as e:
                 logger.exception(
                     f"Failed to restore LFS file in LakeFS: {path} "
                     f"(oid: {oid[:8]}, repo: {lakefs_repo}, branch: {revision})",
                     e,
                 )
-                raise HTTPException(
-                    500,
-                    detail={
-                        "error": f"Failed to restore LFS file {path} in LakeFS: {str(e)}"
-                    },
-                )
+                raise lakefs_error_to_http(
+                    e, f"Failed to restore LFS file {path} in LakeFS", repo_id=repo.full_id, revision=revision
+                ) from e
 
             # Update database to mark as not deleted
             File.update(is_deleted=False, updated_at=datetime.now(timezone.utc)).where(
@@ -369,7 +367,7 @@ async def process_lfs_file(
         await _claim_lfs_object(oid, lfs_key, exists=True)
     except HTTPException:
         raise  # Re-raise HTTPException as-is
-    except Exception as e:
+    except (ClientError, BotoCoreError) as e:
         logger.exception(
             f"Failed to check S3 existence for LFS object {oid[:8]} "
             f"(path: {path}, bucket: {cfg.s3.bucket}, key: {lfs_key})",
@@ -390,7 +388,7 @@ async def process_lfs_file(
                 f"(oid: {oid[:8]}, key: {lfs_key})"
             )
             size = actual_size
-    except Exception as e:
+    except (ClientError, BotoCoreError) as e:
         logger.exception(
             f"Failed to get S3 metadata for LFS object {oid[:8]} "
             f"(path: {path}, bucket: {cfg.s3.bucket}, key: {lfs_key})",
@@ -423,17 +421,16 @@ async def process_lfs_file(
             f"(oid: {oid[:8]}, size: {size}, physical: {physical_address})"
         )
 
-    except Exception as e:
+    except httpx.HTTPError as e:
         logger.exception(
             f"Failed to link LFS file in LakeFS: {path} "
             f"(oid: {oid[:8]}, repo: {lakefs_repo}, branch: {revision}, "
             f"physical_address: {physical_address})",
             e,
         )
-        raise HTTPException(
-            500,
-            detail={"error": f"Failed to link LFS file {path} in LakeFS: {str(e)}"},
-        )
+        raise lakefs_error_to_http(
+            e, f"Failed to link LFS file {path} in LakeFS", repo_id=repo.full_id, revision=revision
+        ) from e
 
     # Update database
     File.insert(
@@ -497,9 +494,10 @@ async def process_deleted_file(
         client = get_lakefs_client()
         await client.delete_object(repository=lakefs_repo, branch=revision, path=path)
         logger.success(f"Successfully deleted file from LakeFS: {path}")
-    except Exception as e:
-        # File might not exist, log warning but continue
-        logger.warning(f"Failed to delete {path} from LakeFS: {e}")
+    except httpx.HTTPError as e:
+        # A path that is not there is a 204, not an error: this is LakeFS failing, and the file must not be
+        # marked deleted in the database while LakeFS still has it (the commit is undone, #10)
+        raise lakefs_error_to_http(e, f"Failed to delete {path}", repo_id=repo.full_id, revision=revision) from e
 
     # Mark as deleted in database (soft delete) on this branch (#11)
     updated_count = (
@@ -568,18 +566,20 @@ async def process_deleted_folder(
         ]
 
         async def delete_file_obj(obj):
-            try:
-                await client.delete_object(
-                    repository=lakefs_repo, branch=revision, path=obj["path"]
-                )
-                logger.info(f"  Deleted: {obj['path']}")
-                return obj["path"]
-            except Exception as e:
-                logger.warning(f"  Failed to delete {obj['path']}: {e}")
-                return None
+            await client.delete_object(
+                repository=lakefs_repo, branch=revision, path=obj["path"]
+            )
+            logger.info(f"  Deleted: {obj['path']}")
+            return obj["path"]
 
-        results = await asyncio.gather(*[delete_file_obj(obj) for obj in file_objects])
-        deleted_files = [path for path in results if path is not None]
+        # Every delete settles before the first failure is raised: the commit is undone as a whole
+        results = await asyncio.gather(
+            *[delete_file_obj(obj) for obj in file_objects], return_exceptions=True
+        )
+        failures = [result for result in results if isinstance(result, BaseException)]
+        if failures:
+            raise failures[0]
+        deleted_files = list(results)
 
         logger.success(f"Deleted {len(deleted_files)} files from folder {folder_path}")
 
@@ -605,8 +605,10 @@ async def process_deleted_folder(
                 f"Marked {updated_count} file(s) as deleted in database (soft delete)"
             )
 
-    except Exception as e:
-        logger.warning(f"Error deleting folder {folder_path}: {e}")
+    except httpx.HTTPError as e:
+        # Not "the folder stays as it was": the files LakeFS still has would be marked deleted, or the
+        # commit would say it deleted what it did not (#10)
+        raise lakefs_error_to_http(e, f"Failed to delete folder {folder_path}", repo_id=repo.full_id, revision=revision) from e
 
     return True
 
@@ -647,12 +649,24 @@ async def process_copy_file(
         f"Copying file: {src_path} -> {dest_path} (from revision: {src_revision})"
     )
 
+    client = get_lakefs_client()
     try:
         # Get source file metadata from LakeFS
-        client = get_lakefs_client()
         src_obj = await client.stat_object(
             repository=lakefs_repo, ref=src_revision, path=src_path
         )
+    except httpx.HTTPError as e:
+        # The revision was found above: a 404 here is the path
+        raise lakefs_error_to_http(
+            e,
+            f"Failed to copy file {src_path} to {dest_path}",
+            repo_id=repo.full_id,
+            revision=src_revision,
+            path=src_path,
+            missing="entry",
+        ) from e
+
+    try:
         # The address says which content is linked; the source path's file
         # row describes its current version, not necessarily src_revision's.
         oid = lfs_oid(src_obj["physical_address"])
@@ -761,13 +775,17 @@ async def process_copy_file(
 
     except HTTPException:
         raise
-    except Exception as e:
+    except httpx.HTTPError as e:
+        raise lakefs_error_to_http(
+            e, f"Failed to copy file {src_path} to {dest_path}", repo_id=repo.full_id, revision=revision
+        ) from e
+    except Exception as e:  # noqa: BLE001 - not LakeFS (the database, the object store): ours, answered 500 with its message
         raise HTTPException(
             500,
             detail={
                 "error": f"Failed to copy file {src_path} to {dest_path}: {str(e)}"
             },
-        )
+        ) from e
 
     if not oid:
         return True, None
@@ -851,7 +869,7 @@ async def _undo(
                     File.delete().where(File.id == row_id).execute()
                 elif row != before[row_id]:
                     File.update(**before[row_id]).where(File.id == row_id).execute()
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - clean-up after a failure: logged, the first failure is what the client sees
         logger.warning(f"Could not restore the File rows of {repo.full_id}: {e}")
     paths, folders = touched
     for path, prefix in [(p, False) for p in paths] + [(f, True) for f in folders]:
@@ -859,7 +877,7 @@ async def _undo(
             await client.reset_uncommitted(
                 repository=lakefs_repo, branch=branch, path=path, prefix=prefix
             )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - clean-up after a failure: logged, the first failure is what the client sees
             logger.warning(f"Could not drop what a failed commit staged at {path!r}: {e}")
 
 
@@ -987,7 +1005,7 @@ async def _no_change_response(client, lakefs_repo: str, revision: str, repo_type
     try:
         branch = await client.get_branch(repository=lakefs_repo, branch=revision)
         commit_id = branch["commit_id"]
-    except Exception:
+    except httpx.HTTPError:
         commit_id = "no-changes"
     commit_url = f"{build_public_repo_path(repo_type, repo_id)}/commit/{hub_oid(commit_id)}"
     return {
@@ -1186,10 +1204,12 @@ async def _commit_on_leased_branch(
         files_changed, pending_lfs_tracking = await _stage_operations(
             operations, repo_row, lakefs_repo, revision, user
         )
-    except Exception as error:
+    except Exception as error:  # noqa: BLE001 - undo whatever it was, then answer by what it was
         await _undo(client, lakefs_repo, revision, repo_row, touched, before)
         if isinstance(error, HTTPException):
             raise
+        if isinstance(error, httpx.HTTPError):
+            raise lakefs_error_to_http(error, "Commit failed", repo_id=repo_id, revision=revision) from error
         raise HTTPException(500, detail={"error": f"Commit failed: {error}"}) from error
 
     # If no files changed, return early
@@ -1238,10 +1258,9 @@ async def _commit_on_leased_branch(
         await _undo(client, lakefs_repo, revision, repo_row, touched, before)
         if isinstance(error, HTTPException):
             raise
-        raise HTTPException(500, detail={"error": f"Commit failed: {error}"}) from error
-    except Exception as e:
-        # No answer: the commit may have landed, so the branch stays as it is
-        raise HTTPException(500, detail={"error": f"Commit failed: {str(e)}"})
+        raise lakefs_error_to_http(error, "Commit failed", repo_id=repo_id, revision=revision) from error
+    except Exception as e:  # noqa: BLE001 - no answer from LakeFS: the commit may have landed, so the branch stays as it is
+        raise lakefs_error_to_http(e, "Commit failed", repo_id=repo_id, revision=revision) from e
 
     # Poll to verify commit is accessible (LakeFS needs time to process large commits)
     commit_id = commit_result["id"]
@@ -1254,7 +1273,7 @@ async def _commit_on_leased_branch(
                 f"Commit {commit_id[:8]} verified after {attempt + 1} attempts"
             )
             break
-        except Exception as e:
+        except httpx.HTTPError as e:
             if attempt < max_attempts - 1:
                 logger.debug(
                     f"Commit not ready yet (attempt {attempt + 1}/{max_attempts}), waiting..."
@@ -1279,7 +1298,7 @@ async def _commit_on_leased_branch(
             description=commit_desc,
         )
         logger.info(f"Recorded commit {commit_result['id'][:8]} by {user.username}")
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - the commit landed; recording it is best effort and logged
         logger.warning(f"Failed to record commit in database: {e}")
         # Don't fail the commit if DB recording fails
 
@@ -1296,7 +1315,7 @@ async def _commit_on_leased_branch(
                 and op["value"].get("path")
             ],
         )
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - the commit landed; recording it is best effort and logged
         logger.warning(f"Failed to record the last commits of {commit_id[:8]}: {e}")
 
     # Generate commit URL

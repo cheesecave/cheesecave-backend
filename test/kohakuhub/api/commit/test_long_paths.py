@@ -203,7 +203,8 @@ async def test_a_commit_that_does_not_land(m, owner_client, lakefs, monkeypatch,
         monkeypatch.setattr(type(lakefs), "commit", refused if answer == "refused" else unknown)
     response = await _post(repo, _file("a.txt", "2"), _file("new.txt", "n"))
 
-    assert response.status_code == (409 if answer == "locked" else 500), response.text
+    # A conflict LakeFS reports is a 409 (it was wrapped into a 500: #10); no answer at all is a 500
+    assert response.status_code == (409 if answer in ("locked", "refused") else 500), response.text
     if answer == "unknown":
         assert await _staged(m, lakefs, repo) == ["a.txt", "new.txt"]
         assert set(_files(m, repo)) == {"a.txt", "new.txt"}

@@ -33,6 +33,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A commit answers a failure of LakeFS by its status, and no longer hides one** ([#10](https://github.com/cheesecave/cheesecave-backend/issues/10)).
+  Every LakeFS failure in the commit route was wrapped into a `500`, and two of them were not even an error to the
+  client: deleting a file or a folder swallowed any failure of LakeFS, marked the files deleted in the database and
+  answered success (a folder whose listing failed, or one of whose deletes failed, stayed as it was while the commit said
+  it was deleted; LakeFS answers `204` for a path that is not there, so nothing the swallowing hid was an expected
+  absence). Now a branch LakeFS does not have is `404 RevisionNotFound` (`RevisionNotFoundError`), a copy source it does
+  not have is `404 EntryNotFound`, a conflict is `409`, a request it refuses is `400`, and anything else is a `500` whose
+  `X-Error-Message` says what LakeFS said; a failed delete fails the commit, which is undone as a whole. Behaviour kept: a
+  delete of a path that is not there is no error, and a LakeFS that does not answer at all is a `500` that leaves the
+  branch as it is (the commit may have landed). `lakefs_error_to_http` (`api/repo/utils/hf.py`) is the one mapping.
+
 - **Deleting a branch or tag that is not there is a 404 `RevisionNotFound`, not a 500** (found while auditing #51).
   `delete_branch` and `delete_tag` of a ref LakeFS does not have (never there, deleted already, or deleted a moment ago by
   a parallel job) answered `500 Failed to delete branch: LakeFS API error 404`, and `huggingface_hub` raised a server
