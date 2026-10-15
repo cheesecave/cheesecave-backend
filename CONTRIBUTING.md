@@ -308,7 +308,7 @@ Read a failure of LakeFS or the object store for what it is, not for what a mess
 - Do not add a broad `except Exception` that turns a failure into "not found" or a partial result. If one must be
   broad (a task boundary, a clean-up that must not mask the real error), say why on its `except` line with
   `# noqa: BLE001`. `python scripts/dev/broad_except_ratchet.py` counts those without a reason: it may go down and
-  must not go up (214 on 2026-10-15).
+  must not go up (211 after this was written, 2026-10-15).
 
 ### Logging
 
