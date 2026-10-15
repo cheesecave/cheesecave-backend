@@ -17,7 +17,7 @@ from peewee import PeeweeException
 
 from kohakuhub.db import File
 from kohakuhub.logger import get_logger
-from kohakuhub.utils.lakefs import ref_in_history
+from kohakuhub.utils.lakefs import lakefs_status, ref_in_history
 
 logger = get_logger("HF")
 
@@ -315,6 +315,52 @@ def hf_server_error(message: str, error_code: Optional[str] = None) -> Response:
         500,
         error_code or HFErrorCode.SERVER_ERROR,
         message,
+    )
+
+
+def _lakefs_message(error: BaseException) -> str:
+    """What LakeFS said (its ``message``), else the error as it is."""
+    try:
+        return str(error.response.json()["message"])
+    except (AttributeError, KeyError, TypeError, ValueError):
+        return str(error)
+
+
+def lakefs_error_to_http(
+    error: BaseException,
+    what: str,
+    *,
+    repo_id: str,
+    revision: str,
+    path: str | None = None,
+    missing: str = "revision",
+) -> HTTPException:
+    """The ``HTTPException`` a failed LakeFS call is answered with, by the status LakeFS gave (#10).
+
+    404 is a wrong branch (``RevisionNotFound``), or, when the call asked for ``path``, a wrong path
+    (``EntryNotFound``, ``missing="entry"``); 409 and 400 keep their status with what LakeFS said; everything else is
+    a 500: a fault of LakeFS, or of our credentials, which the client cannot change. The route raises it ``from`` the
+    error, so the cause stays in the log.
+    """
+    status = lakefs_status(error)
+    if status == 404:
+        if missing == "entry":
+            code = HFErrorCode.ENTRY_NOT_FOUND
+            message = f"Entry '{path}' not found in repository '{repo_id}' at revision '{revision}'"
+        else:
+            code = HFErrorCode.REVISION_NOT_FOUND
+            message = f"Revision '{revision}' not found in repository '{repo_id}'"
+        return _http(404, code, message)
+    if status in (400, 409):
+        return _http(status, HFErrorCode.BAD_REQUEST, f"{what}: {_lakefs_message(error)}")
+    return _http(500, HFErrorCode.SERVER_ERROR, f"{what}: {_lakefs_message(error)}")
+
+
+def _http(status_code: int, error_code: str, message: str) -> HTTPException:
+    return HTTPException(
+        status_code,
+        detail={"error": message},
+        headers={"X-Error-Code": error_code, "X-Error-Message": _sanitize_header_value(message)},
     )
 
 

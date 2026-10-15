@@ -13,7 +13,10 @@ from fastapi import HTTPException
 
 import kohakuhub.api.commit.routers.operations as commit_ops
 from kohakuhub.db import File
+from botocore.exceptions import ClientError, EndpointConnectionError
+
 from test.kohakuhub.support.factories import make_file, make_repo, make_user
+from test.kohakuhub.support.fakes import lakefs_error
 from test.kohakuhub.support.grants import grant_lfs_upload_everywhere
 
 pytestmark = pytest.mark.usefixtures("db_scope")
@@ -197,17 +200,28 @@ async def test_process_regular_file_covers_validation_skip_restore_and_success(m
         False,
     )
 
-    client.raise_on["upload_object"] = RuntimeError("upload failed")
-    with pytest.raises(HTTPException) as upload_error:
-        await commit_ops.process_regular_file(
-            "README.md",
-            base64.b64encode(b"world").decode("ascii"),
-            "base64",
-            repo,
-            "lakefs",
-            "main",
-        )
-    assert upload_error.value.status_code == 500
+    for refusal, status, code in [
+        (lakefs_error(503, "upload failed"), 500, "ServerError"),
+        (lakefs_error(404, "branch not found"), 404, "RevisionNotFound"),  # the branch was deleted meanwhile
+        (lakefs_error(400, "empty value is not allowed"), 400, "BadRequest"),
+    ]:
+        client.raise_on["upload_object"] = refusal
+        with pytest.raises(HTTPException) as upload_error:
+            await commit_ops.process_regular_file(
+                "README.md",
+                base64.b64encode(b"world").decode("ascii"),
+                "base64",
+                repo,
+                "lakefs",
+                "main",
+            )
+        assert upload_error.value.status_code == status
+        assert upload_error.value.headers["X-Error-Code"] == code
+        assert upload_error.value.__cause__ is refusal  # the cause stays in the log
+
+    with pytest.raises(HTTPException) as not_base64:
+        await commit_ops.process_regular_file("README.md", "not base64!", "base64", repo, "lakefs", "main")
+    assert not_base64.value.status_code == 400 and "decode base64" in not_base64.value.detail["error"]
 
 
 @pytest.mark.asyncio
@@ -280,11 +294,16 @@ async def test_process_lfs_file_covers_same_content_new_content_and_failures(mon
     monkeypatch.setattr(commit_ops, "object_exists", lambda bucket, key: _async_return(True))
     monkeypatch.setattr(commit_ops, "claim_for_commit", lambda oid, exists: False)
 
-    monkeypatch.setattr(commit_ops, "get_object_metadata", lambda bucket, key: (_ for _ in ()).throw(RuntimeError("meta fail")))
-    client.raise_on["link_physical_address"] = RuntimeError("link failed")
-    with pytest.raises(HTTPException) as link_error:
-        await commit_ops.process_lfs_file("weights.bin", "newoid", 11, "sha256", repo, "lakefs", "main")
-    assert link_error.value.status_code == 500
+    monkeypatch.setattr(
+        commit_ops,
+        "get_object_metadata",
+        lambda bucket, key: (_ for _ in ()).throw(ClientError({"Error": {"Code": "500", "Message": "meta fail"}}, "HeadObject")),
+    )
+    for refusal, status in [(lakefs_error(500, "link failed"), 500), (lakefs_error(404, "branch not found"), 404)]:
+        client.raise_on["link_physical_address"] = refusal
+        with pytest.raises(HTTPException) as link_error:
+            await commit_ops.process_lfs_file("weights.bin", "newoid", 11, "sha256", repo, "lakefs", "main")
+        assert link_error.value.status_code == status
 
 
 @pytest.mark.asyncio
@@ -297,9 +316,14 @@ async def test_process_deleted_file_and_folder_cover_success_partial_failures_an
     assert deleted is True
     assert File.get_by_id(readme.id).is_deleted is True
 
-    client.raise_on["delete_object"] = RuntimeError("delete failed")
-    deleted = await commit_ops.process_deleted_file("README.md", repo, "lakefs", "main")
-    assert deleted is True
+    # LakeFS failing is a failure of the commit: the file stays active in the database while LakeFS has it (#10)
+    again = make_file(repo, "kept.md", "kept", size=4)
+    for refusal, status in [(lakefs_error(500, "delete failed"), 500), (lakefs_error(404, "branch not found"), 404)]:
+        client.raise_on["delete_object"] = refusal
+        with pytest.raises(HTTPException) as delete_error:
+            await commit_ops.process_deleted_file("kept.md", repo, "lakefs", "main")
+        assert delete_error.value.status_code == status
+        assert File.get_by_id(again.id).is_deleted is False
     client.raise_on.pop("delete_object", None)
 
     inside = [make_file(repo, "folder/a.txt", "a", size=1), make_file(repo, "folder/b.txt", "b", size=1)]
@@ -317,9 +341,10 @@ async def test_process_deleted_file_and_folder_cover_success_partial_failures_an
     assert [File.get_by_id(row.id).is_deleted for row in inside] == [True, True]
     assert File.get_by_id(sibling.id).is_deleted is False
 
-    client.raise_on["list_objects"] = RuntimeError("list failed")
-    folder_deleted = await commit_ops.process_deleted_folder("folder", repo, "lakefs", "main")
-    assert folder_deleted is True
+    client.raise_on["list_objects"] = lakefs_error(500, "list failed")
+    with pytest.raises(HTTPException) as listing_failed:
+        await commit_ops.process_deleted_folder("folder", repo, "lakefs", "main")
+    assert listing_failed.value.status_code == 500
 
 
 @pytest.mark.asyncio
@@ -371,10 +396,15 @@ async def test_process_copy_file_covers_validation_success_and_error(monkeypatch
     assert collected.value.status_code == 409
     client.stat_object = stat
 
-    client.raise_on["stat_object"] = RuntimeError("copy failed")
-    with pytest.raises(HTTPException) as copy_error:
-        await commit_ops.process_copy_file("dest.txt", "src.txt", "main", repo, "lakefs", "main")
-    assert copy_error.value.status_code == 500
+    for refusal, status, code in [
+        (lakefs_error(503, "copy failed"), 500, "ServerError"),
+        (lakefs_error(404, "not found"), 404, "EntryNotFound"),  # the revision was found: the path is what is not there
+    ]:
+        client.raise_on["stat_object"] = refusal
+        with pytest.raises(HTTPException) as copy_error:
+            await commit_ops.process_copy_file("dest.txt", "src.txt", "main", repo, "lakefs", "main")
+        assert copy_error.value.status_code == status
+        assert copy_error.value.headers["X-Error-Code"] == code
 
 
 @pytest.mark.asyncio
@@ -484,10 +514,17 @@ async def test_commit_route_covers_parse_dispatch_noop_and_success_paths(monkeyp
         )
     ]
 
-    client.raise_on["commit"] = RuntimeError("commit failed")
-    with pytest.raises(HTTPException) as commit_failed:
-        await commit_ops.commit(commit_ops.RepoType.model, "owner", "repo", "main", _FakeRequest(success_payload), user=user)
-    assert commit_failed.value.status_code == 500
+    for refusal, status, code in [
+        (lakefs_error(500, "commit failed"), 500, "ServerError"),
+        (lakefs_error(404, "branch not found"), 404, "RevisionNotFound"),
+        (lakefs_error(409, "conflict"), 409, "BadRequest"),
+        (RuntimeError("no answer"), 500, "ServerError"),  # LakeFS did not answer: the commit may have landed
+    ]:
+        client.raise_on["commit"] = refusal
+        with pytest.raises(HTTPException) as commit_failed:
+            await commit_ops.commit(commit_ops.RepoType.model, "owner", "repo", "main", _FakeRequest(success_payload), user=user)
+        assert commit_failed.value.status_code == status
+        assert commit_failed.value.headers["X-Error-Code"] == code
 
     client.raise_on.pop("commit", None)
     monkeypatch.setattr(commit_ops, "process_lfs_file", lambda **kwargs: _async_return((False, None)))
@@ -535,7 +572,7 @@ async def test_restore_refused_by_lakefs_keeps_the_file_deleted(monkeypatch, rep
     monkeypatch.setattr(commit_ops, "object_exists", lambda bucket, key: _async_return(True))
     monkeypatch.setattr(commit_ops, "claim_for_commit", lambda oid, exists: False)
     weights = make_file(repo, "weights.bin", "sameoid", size=10, lfs=True, is_deleted=True)
-    client.raise_on["link_physical_address"] = RuntimeError("link refused")
+    client.raise_on["link_physical_address"] = lakefs_error(500, "link refused")
 
     with pytest.raises(HTTPException) as refused:
         await commit_ops.process_lfs_file("weights.bin", "sameoid", 10, "sha256", repo, "lakefs", "main")
@@ -551,7 +588,7 @@ async def test_lfs_object_check_that_s3_cannot_answer_is_a_server_error(monkeypa
     monkeypatch.setattr(commit_ops, "get_lakefs_client", lambda: client)
 
     async def unreachable(bucket, key):
-        raise RuntimeError("S3 endpoint unreachable")
+        raise EndpointConnectionError(endpoint_url="http://s3.invalid")
 
     monkeypatch.setattr(commit_ops, "object_exists", unreachable)
     grant_lfs_upload_everywhere("newoid")
@@ -600,9 +637,12 @@ async def test_folder_whose_objects_all_refuse_deletion_keeps_its_rows(monkeypat
     monkeypatch.setattr(commit_ops, "get_lakefs_client", lambda: client)
     kept = make_file(repo, "stuck/a.txt", "a", size=1)
     client.list_payload = {"results": [{"path_type": "object", "path": "stuck/a.txt"}]}
-    client.raise_on["delete_object"] = RuntimeError("LakeFS refuses")
+    client.raise_on["delete_object"] = lakefs_error(500, "LakeFS refuses")
 
-    assert await commit_ops.process_deleted_folder("stuck", repo, "lakefs", "main") is True
+    # It is the commit that fails, not a folder that quietly stays: the rows are not touched
+    with pytest.raises(HTTPException) as refused:
+        await commit_ops.process_deleted_folder("stuck", repo, "lakefs", "main")
+    assert refused.value.status_code == 500 and "LakeFS refuses" in refused.value.detail["error"]
     assert File.get_by_id(kept.id).is_deleted is False
 
 
@@ -638,7 +678,7 @@ async def test_blank_lines_and_unknown_operations_are_skipped(monkeypatch, repo)
 async def test_no_change_commit_reports_no_changes_when_the_branch_is_unreadable(monkeypatch, repo):
     client = _FakeLakeFSClient()
     monkeypatch.setattr(commit_ops, "get_lakefs_client", lambda: client)
-    client.raise_on["get_branch"] = RuntimeError("branch unreadable")
+    client.raise_on["get_branch"] = lakefs_error(503, "branch unreadable")
 
     response = await _commit(repo, _ndjson(_HEADER))
 
@@ -655,7 +695,7 @@ async def test_commit_polls_until_lakefs_serves_the_commit(monkeypatch, repo, in
     async def get_commit(**kwargs):
         lookups.append(kwargs["commit_id"])
         if len(lookups) <= 2:
-            raise RuntimeError("commit not ready")
+            raise lakefs_error(404, "commit not found")
         return {"id": kwargs["commit_id"]}
 
     monkeypatch.setattr(client, "get_commit", get_commit)
@@ -678,7 +718,7 @@ async def test_commit_stops_polling_after_120_attempts_and_continues(monkeypatch
 
     async def never_ready(**kwargs):
         lookups.append(kwargs["commit_id"])
-        raise RuntimeError("commit not ready")
+        raise lakefs_error(404, "commit not found")
 
     monkeypatch.setattr(client, "get_commit", never_ready)
 
@@ -708,3 +748,89 @@ async def test_commit_lands_when_its_database_record_fails(monkeypatch, repo):
 
     assert response["commitOid"] == "commit-created"
     assert any("Failed to record commit in database" in message for message in warnings)
+
+
+@pytest.mark.asyncio
+async def test_a_folder_delete_that_fails_in_part_settles_every_delete_and_raises_the_first_failure(monkeypatch, repo):
+    """The commit is undone as a whole: no row is marked deleted for what was deleted before the failure,
+    and every delete has finished by the time it is raised (none runs on after the undo)."""
+    client = _FakeLakeFSClient()
+    monkeypatch.setattr(commit_ops, "get_lakefs_client", lambda: client)
+    rows = [make_file(repo, f"part/{name}.txt", name, size=1) for name in ("a", "b", "c")]
+    client.list_payload = {"results": [{"path_type": "object", "path": f"part/{name}.txt"} for name in ("a", "b", "c")]}
+    finished = []
+
+    async def delete_object(**kwargs):
+        finished.append(kwargs["path"])
+        if kwargs["path"] == "part/b.txt":
+            raise lakefs_error(500, "b refused")
+
+    monkeypatch.setattr(client, "delete_object", delete_object)
+    with pytest.raises(HTTPException) as caught:
+        await commit_ops.process_deleted_folder("part", repo, "lakefs", "main")
+    assert caught.value.status_code == 500 and "b refused" in caught.value.detail["error"]
+    assert sorted(finished) == ["part/a.txt", "part/b.txt", "part/c.txt"]
+    assert [File.get_by_id(row.id).is_deleted for row in rows] == [False, False, False]
+
+
+@pytest.mark.asyncio
+async def test_a_failure_that_is_not_lakefs_is_not_turned_into_a_lakefs_error(monkeypatch, repo):
+    """What is not an answer of LakeFS is not mapped as one: it reaches the caller as it is."""
+    client = _FakeLakeFSClient()
+    monkeypatch.setattr(commit_ops, "get_lakefs_client", lambda: client)
+    client.raise_on["delete_object"] = ValueError("a bug of ours")
+    with pytest.raises(ValueError, match="a bug of ours"):
+        await commit_ops.process_deleted_file("README.md", repo, "lakefs", "main")
+
+
+@pytest.mark.asyncio
+async def test_a_copy_that_fails_on_our_side_is_a_500_with_its_message(monkeypatch, repo):
+    client = _FakeLakeFSClient()
+    monkeypatch.setattr(commit_ops, "get_lakefs_client", lambda: client)
+    make_file(repo, "src.txt", "abc", size=3)
+    monkeypatch.setattr(commit_ops, "get_file", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("the database is unhappy")))
+
+    with pytest.raises(HTTPException) as caught:
+        await commit_ops.process_copy_file("dest.txt", "src.txt", "main", repo, "lakefs", "main")
+    assert caught.value.status_code == 500 and "the database is unhappy" in caught.value.detail["error"]
+
+
+@pytest.mark.asyncio
+async def test_a_copy_into_a_branch_that_is_gone_is_a_revision_not_found(monkeypatch, repo):
+    client = _FakeLakeFSClient()
+    monkeypatch.setattr(commit_ops, "get_lakefs_client", lambda: client)
+    make_file(repo, "src.txt", "abc", size=3)
+    client.raise_on["link_physical_address"] = lakefs_error(404, "branch not found")
+    with pytest.raises(HTTPException) as branch_gone:
+        await commit_ops.process_copy_file("dest.txt", "src.txt", "main", repo, "lakefs", "main")
+    assert branch_gone.value.status_code == 404 and branch_gone.value.headers["X-Error-Code"] == "RevisionNotFound"
+
+
+@pytest.mark.asyncio
+async def test_a_stage_that_fails_in_lakefs_is_undone_and_answered_by_its_status(monkeypatch, repo):
+    client = _FakeLakeFSClient()
+    monkeypatch.setattr(commit_ops, "get_lakefs_client", lambda: client)
+    undone = []
+
+    async def undo(*args, **kwargs):
+        undone.append(True)
+
+    monkeypatch.setattr(commit_ops, "_undo", undo)
+
+    async def stage(*args, **kwargs):
+        raise lakefs_error(404, "branch not found")
+
+    monkeypatch.setattr(commit_ops, "_stage_operations", stage)
+    with pytest.raises(HTTPException) as caught:
+        await _commit(repo, _ndjson(_HEADER, _README), revision="dev")
+    assert caught.value.status_code == 404 and caught.value.headers["X-Error-Code"] == "RevisionNotFound"
+    assert undone == [True]
+
+    async def stage_with_a_bug(*args, **kwargs):
+        raise RuntimeError("a bug of ours")
+
+    monkeypatch.setattr(commit_ops, "_stage_operations", stage_with_a_bug)
+    with pytest.raises(HTTPException) as bug:
+        await _commit(repo, _ndjson(_HEADER, _README), revision="dev")
+    assert bug.value.status_code == 500 and "a bug of ours" in bug.value.detail["error"]
+    assert undone == [True, True]
