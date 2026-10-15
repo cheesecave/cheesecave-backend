@@ -298,6 +298,18 @@ raise HTTPException(
 )
 ```
 
+Read a failure of LakeFS or the object store for what it is, not for what a message says:
+
+- A LakeFS answer is an `httpx.HTTPStatusError`: use `is_lakefs_not_found_error` / `is_lakefs_conflict_error` (or
+  `lakefs_status`) from `kohakuhub.utils.lakefs`, never `"404" in str(error)`. The text of an error holds URLs, names and
+  ids, in which "404", "conflict" or "ref" are found by chance.
+- A permission error or an outage of the object store is not a missing object: `object_exists` answers `False` only
+  for "not found" and raises otherwise, and a route that meets that answers a server error, which clients retry.
+- Do not add a broad `except Exception` that turns a failure into "not found" or a partial result. If one must be
+  broad (a task boundary, a clean-up that must not mask the real error), say why on its `except` line with
+  `# noqa: BLE001`. `python scripts/dev/broad_except_ratchet.py` counts those without a reason: it may go down and
+  must not go up (214 on 2026-10-15).
+
 ### Logging
 
 Use the custom logger system with colored output:

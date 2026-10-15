@@ -279,7 +279,6 @@ def test_generate_download_and_upload_presigned_urls(monkeypatch):
         ("get_object_metadata", "_get_object_metadata_sync", ("bucket", "file.bin")),
         ("object_exists", "_object_exists_sync", ("bucket", "file.bin")),
         ("delete_objects_with_prefix", "_delete_objects_with_prefix_sync", ("bucket", "prefix/")),
-        ("copy_s3_folder", "_copy_s3_folder_sync", ("bucket", "from/", "to/", None)),
     ],
 )
 async def test_async_s3_wrappers_use_shared_executor(monkeypatch, wrapper_name, expected_func_name, args):
@@ -395,59 +394,58 @@ def test_parse_s3_uri_requires_expected_scheme():
         s3_module.parse_s3_uri("https://bucket/path/file.bin")
 
 
-def test_delete_objects_with_prefix_handles_success_empty_and_errors(monkeypatch):
+def test_delete_objects_with_prefix_deletes_what_is_under_it_and_counts_it(monkeypatch):
     service = FakeS3Service()
     service.put_object(Bucket="bucket", Key="prefix/a.txt", Body=b"a")
     service.put_object(Bucket="bucket", Key="prefix/b.txt", Body=b"b")
+    service.put_object(Bucket="bucket", Key="other/c.txt", Body=b"c")
     monkeypatch.setattr(s3_module, "get_s3_client", service.get_client)
 
     assert s3_module._delete_objects_with_prefix_sync("bucket", "prefix/") == 2
     assert s3_module._delete_objects_with_prefix_sync("bucket", "prefix/") == 0
+    assert service.object_exists("bucket", "other/c.txt") is True
 
-    class BrokenClient:
+
+def test_delete_objects_with_prefix_goes_over_a_thousand_in_batches(monkeypatch):
+    service = FakeS3Service()
+    for i in range(1001):
+        service.put_object(Bucket="bucket", Key=f"prefix/{i:04d}.txt", Body=b"x")
+    sizes = []
+
+    class RecordingClient(FakeS3Client):
+        def delete_objects(self, Bucket, Delete):
+            sizes.append(len(Delete["Objects"]))
+            return super().delete_objects(Bucket=Bucket, Delete=Delete)
+
+    monkeypatch.setattr(s3_module, "get_s3_client", lambda: RecordingClient(service))
+
+    assert s3_module._delete_objects_with_prefix_sync("bucket", "prefix/") == 1001
+    assert sizes == [1000, 1]  # the limit of the store
+
+
+def test_delete_objects_with_prefix_fails_instead_of_returning_a_partial_count(monkeypatch):
+    """A store that refuses some objects, or a listing that fails, is an error: the caller must not read 0 or 1 as done (#10)."""
+    service = FakeS3Service()
+    for name in ("a", "b", "c"):
+        service.put_object(Bucket="bucket", Key=f"prefix/{name}.txt", Body=b"x")
+
+    class RefusingClient(FakeS3Client):
+        def delete_objects(self, Bucket, Delete):
+            response = super().delete_objects(Bucket=Bucket, Delete=Delete)
+            response["Errors"] = [{"Key": "prefix/b.txt", "Code": "AccessDenied", "Message": "no"}]
+            return response
+
+    monkeypatch.setattr(s3_module, "get_s3_client", lambda: RefusingClient(service))
+    with pytest.raises(s3_module.S3DeleteFailed, match=r"refused to delete 1 object\(s\) under prefix/, e.g. prefix/b.txt: AccessDenied no"):
+        s3_module._delete_objects_with_prefix_sync("bucket", "prefix/")
+
+    class BrokenListing:
         def get_paginator(self, operation_name: str):
             raise RuntimeError("list failed")
 
-    monkeypatch.setattr(s3_module, "get_s3_client", lambda: BrokenClient())
-    assert s3_module._delete_objects_with_prefix_sync("bucket", "prefix/") == 0
-
-
-def test_copy_s3_folder_supports_exclusions_and_partial_failures(monkeypatch):
-    service = FakeS3Service()
-    service.put_object(Bucket="bucket", Key="from/a.txt", Body=b"a")
-    service.put_object(Bucket="bucket", Key="from/_lakefs/skip.txt", Body=b"skip")
-    service.put_object(Bucket="bucket", Key="from/fail.txt", Body=b"fail")
-
-    class CopyClient(FakeS3Client):
-        def copy_object(self, Bucket: str, CopySource: dict[str, str], Key: str):
-            if CopySource["Key"].endswith("fail.txt"):
-                raise RuntimeError("copy failed")
-            return super().copy_object(Bucket=Bucket, CopySource=CopySource, Key=Key)
-
-    monkeypatch.setattr(s3_module, "get_s3_client", lambda: CopyClient(service))
-
-    copied = s3_module._copy_s3_folder_sync(
-        "bucket",
-        "from/",
-        "to/",
-        exclude_prefix="_lakefs/",
-    )
-
-    assert copied == 1
-    assert service.object_exists("bucket", "to/a.txt") is True
-    assert service.object_exists("bucket", "to/_lakefs/skip.txt") is False
-    assert service.object_exists("bucket", "to/fail.txt") is False
-
-    class MismatchPaginatorClient(CopyClient):
-        def get_paginator(self, operation_name: str):
-            class Paginator:
-                def paginate(self, Bucket: str, Prefix: str = ""):
-                    yield {"Contents": [{"Key": "mismatch.txt"}]}
-
-            return Paginator()
-
-    monkeypatch.setattr(s3_module, "get_s3_client", lambda: MismatchPaginatorClient(service))
-    assert s3_module._copy_s3_folder_sync("bucket", "from/", "to/") == 0
+    monkeypatch.setattr(s3_module, "get_s3_client", lambda: BrokenListing())
+    with pytest.raises(RuntimeError, match="list failed"):
+        s3_module._delete_objects_with_prefix_sync("bucket", "prefix/")
 
 
 @pytest.mark.parametrize("signature", ["s3v4", None])

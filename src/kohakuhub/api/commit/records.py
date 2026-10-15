@@ -35,6 +35,7 @@ from kohakuhub.storage_cleanup import (
     enqueue_lfs_reconciliation,
     record_head_change,
 )
+from kohakuhub.utils.lakefs import is_lakefs_not_found_error
 from kohakuhub.utils.s3 import object_exists
 
 logger = get_logger("RECORDS")
@@ -220,8 +221,7 @@ async def revision_branch(client, lakefs_repo: str, revision: str) -> str | None
     try:
         await client.get_branch(repository=lakefs_repo, branch=revision)
     except Exception as error:
-        text = str(error).lower()
-        if "404" in text or "not found" in text:
+        if is_lakefs_not_found_error(error):
             return None
         raise
     return revision

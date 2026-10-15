@@ -20,6 +20,7 @@ from kohakuhub.storage_cleanup import PURGE_KIND
 from kohakuhub.utils.lakefs import lakefs_repo_name
 from test.kohakuhub.support.db import table_missing
 from test.kohakuhub.support.factories import make_org, make_repo, make_user
+from test.kohakuhub.support.fakes import lakefs_error
 
 pytestmark = pytest.mark.usefixtures("db_scope")
 
@@ -581,10 +582,7 @@ async def test_create_repo_does_not_retry_on_unrelated_lakefs_error(monkeypatch)
 
 
 def test_is_lakefs_repo_id_taken_error_matches_only_the_async_deletion_conflict():
-    taken = RuntimeError(
-        "LakeFS API error 409 Conflict for POST http://lakefs:28000/api/v1/repositories: "
-        '{"message":"error creating repository: not unique"}'
-    )
+    taken = lakefs_error(409, "error creating repository: not unique", "POST", "/repositories")
     assert repo_crud._is_lakefs_repo_id_taken_error(taken) is True
 
     # The namespace-in-use error has its own (S3 marker cleanup) recovery path
@@ -598,9 +596,11 @@ def test_is_lakefs_repo_id_taken_error_matches_only_the_async_deletion_conflict(
 
     for unrelated in (
         RuntimeError("lakefs is on fire"),
-        RuntimeError("LakeFS API error 404 Not Found"),
+        lakefs_error(404, "repository not found"),
+        lakefs_error(409, "something else entirely"),  # a conflict, but not the id being taken
         RuntimeError('409 Conflict {"message":"something else entirely"}'),
-        RuntimeError('{"message":"error creating repository: not unique"}'),  # no 409
+        RuntimeError('{"message":"error creating repository: not unique"}'),  # the words, no status: not guessed from the text
+        RuntimeError("LakeFS API error 409 Conflict: " + '{"message":"error creating repository: not unique"}'),  # same
     ):
         assert repo_crud._is_lakefs_repo_id_taken_error(unrelated) is False
 
@@ -640,10 +640,7 @@ async def test_create_repo_returns_retryable_conflict_when_no_lakefs_id_is_usabl
     class _IdTakenClient(_FakeClient):
         async def create_repository(self, **kwargs):
             self.calls.append(("create_repository", kwargs))
-            raise RuntimeError(
-                "LakeFS API error 409 Conflict for POST /repositories: "
-                '{"message":"error creating repository: not unique"}'
-            )
+            raise lakefs_error(409, "error creating repository: not unique", "POST", "/repositories")
 
     client = _IdTakenClient()
 
@@ -705,7 +702,7 @@ async def test_create_repo_steps_over_a_taken_lakefs_id(monkeypatch):
         async def create_repository(self, **kwargs):
             self.calls.append(("create_repository", kwargs))
             if kwargs["name"] == "m-owner-demo-gen0":
-                raise RuntimeError('LakeFS API error 409: {"message":"error creating repository: not unique"}')
+                raise lakefs_error(409, "error creating repository: not unique", "POST", "/repositories")
 
     client = _FirstIdTaken()
     allocated = _create_repo_env(monkeypatch, client, ["m-owner-demo-gen0", "m-owner-demo-gen1"])
@@ -899,10 +896,7 @@ async def test_create_repo_reports_a_concurrent_winner_as_exists_not_retry(monke
             self.calls.append(("create_repository", kwargs))
             # The concurrent winner's row lands while this create is in flight
             make_repo(owner, "demo-model")
-            raise RuntimeError(
-                "LakeFS API error 409 Conflict: "
-                '{"message":"error creating repository: not unique"}'
-            )
+            raise lakefs_error(409, "error creating repository: not unique", "POST", "/repositories")
 
     async def fake_sleep(seconds):
         sleeps.append(seconds)
@@ -1078,4 +1072,35 @@ async def test_orphan_cleanup_gives_up_when_it_cannot_tell_if_the_repository_exi
     monkeypatch.setattr(repo_crud, "delete_objects_with_prefix", never)
 
     client = SimpleNamespace(repository_exists=broken)
+    assert await repo_crud._cleanup_orphan_namespace_if_safe(client, "m-owner-demo") is False
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        repo_crud.S3DeleteFailed("S3 refused to delete 1 object(s) under m-owner-demo/"),
+        repo_crud.ClientError({"Error": {"Code": "AccessDenied", "Message": "no"}}, "DeleteObjects"),
+    ],
+    ids=["refused", "denied"],
+)
+async def test_orphan_cleanup_that_fails_to_delete_is_not_healed_so_another_id_is_tried(monkeypatch, failure):
+    """A store that cannot delete the residue has not healed the namespace: the caller tries another id (#10).
+
+    It used to count what was deleted before the failure, so a partial delete could read as healed.
+    """
+
+    async def exists(name):
+        return False
+
+    async def only_markers(prefix):
+        return ["m-owner-demo/dummy"]
+
+    async def failing(bucket, prefix):
+        raise failure
+
+    monkeypatch.setattr(repo_crud, "_list_repo_namespace_keys", only_markers)
+    monkeypatch.setattr(repo_crud, "_has_only_internal_lakefs_markers", lambda *a, **k: True)
+    monkeypatch.setattr(repo_crud, "delete_objects_with_prefix", failing)
+
+    client = SimpleNamespace(repository_exists=exists)
     assert await repo_crud._cleanup_orphan_namespace_if_safe(client, "m-owner-demo") is False

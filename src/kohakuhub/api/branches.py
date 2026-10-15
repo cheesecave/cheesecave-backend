@@ -24,6 +24,7 @@ from kohakuhub.auth.permissions import (
 )
 from kohakuhub.utils.lakefs import (
     get_lakefs_client,
+    is_lakefs_conflict_error,
     ref_name_conflict,
     resolve_lakefs_repo,
     resolve_revision,
@@ -169,7 +170,7 @@ async def create_branch(
         error_msg = str(e).replace("\n", " ").replace("\r", " ")
 
         # Check if branch already exists (409)
-        if "409" in error_msg or "conflict" in error_msg.lower():
+        if is_lakefs_conflict_error(e):
             return hf_error_response(
                 409,
                 HFErrorCode.BAD_REQUEST,
@@ -752,7 +753,7 @@ async def merge_branches(
             )
 
         # Check if it's a conflict error
-        if "conflict" in error_msg.lower():
+        if is_lakefs_conflict_error(e):
             raise HTTPException(
                 status_code=409,
                 detail={

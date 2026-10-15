@@ -195,10 +195,6 @@ def test_format_hf_datetime_and_lakefs_error_classifiers(monkeypatch):
     assert hf_utils.format_hf_datetime(None) is None
     assert hf_utils.format_hf_datetime(dt) == "2025-01-15T10:30:45.000000Z"
     assert seen == {"value": dt, "fmt": "%Y-%m-%dT%H:%M:%S.%fZ"}
-    assert hf_utils.is_lakefs_not_found_error(RuntimeError("404 missing")) is True
-    assert hf_utils.is_lakefs_not_found_error(RuntimeError("permission denied")) is False
-    assert hf_utils.is_lakefs_revision_error(RuntimeError("Unknown branch ref")) is True
-    assert hf_utils.is_lakefs_revision_error(RuntimeError("totally different")) is False
 
 
 

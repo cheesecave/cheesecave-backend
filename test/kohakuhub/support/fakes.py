@@ -11,7 +11,26 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
+
+from botocore.exceptions import ClientError
 from urllib.parse import quote
+
+
+def lakefs_error(status: int, message: str = "", method: str = "GET", path: str = "/repositories/r/branches/b"):
+    """The error ``LakeFSRestClient`` raises for a LakeFS answer of ``status``: an ``httpx.HTTPStatusError`` holding the response.
+
+    Code under test reads the status of it (#10), as it does against LakeFS; a bare ``RuntimeError`` with the same words
+    in its message is not what the client raises.
+    """
+    import httpx
+
+    request = httpx.Request(method, f"http://lakefs:28000/api/v1{path}")
+    response = httpx.Response(status, json={"message": message} if message else None, request=request)
+    return httpx.HTTPStatusError(
+        f"LakeFS API error {status} {response.reason_phrase} for {method} {request.url}: {response.text}",
+        request=request,
+        response=response,
+    )
 
 
 def _utc_now() -> datetime:
@@ -109,7 +128,8 @@ class FakeS3Client:
     def head_object(self, Bucket: str, Key: str) -> dict[str, Any]:
         obj = self.service.objects.get((Bucket, Key))
         if obj is None:
-            raise FileNotFoundError(f"S3 object not found: {Bucket}/{Key}")
+            # what a real store answers to a HEAD of a missing key
+            raise ClientError({"Error": {"Code": "404", "Message": "Not Found"}}, "HeadObject")
         return {
             "ContentLength": len(obj.body),
             "ETag": f'"{obj.etag}"',

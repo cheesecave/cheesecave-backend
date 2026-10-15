@@ -17,6 +17,7 @@ dependencies. Web/admin maintain their own package scripts and CI.
 | dev/run_backend.sh / dev/run_worker.sh | Start API / background worker against local persisted services |
 | dev/up_infra.sh / dev/down_infra.sh | Manage local development dependencies |
 | dev/seed_demo_data.py / dev/verify_seed_data.py | Deterministic local demo fixtures |
+| dev/broad_except_ratchet.py | Counts the broad `except Exception` handlers in `src/kohakuhub` that give no reason (`# noqa: BLE001`); a ratchet like `dev/mock_ratchet.py`: it may go down, not up |
 
 Native Compose supports release images and sibling source builds. See
 [deployment instructions](../docs/deployment/docker.md). The former

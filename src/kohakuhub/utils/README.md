@@ -120,14 +120,9 @@ Comprehensive S3-compatible storage utilities with async support.
   - Handles pagination for large object sets
   - Deletes in batches of 1000 objects (S3 limit)
   - Returns count of deleted objects
+  - Raises when listing or deleting fails (`ClientError`) or the store refuses some objects (`S3DeleteFailed`),
+    instead of returning the count of what it got through; running it again deletes the rest
   - Used for repository cleanup operations
-
-- **`copy_s3_folder(bucket, from_prefix, to_prefix, exclude_prefix=None) -> int`**
-  - Copies all objects from one prefix to another
-  - Optional exclusion pattern (e.g., skip `_lakefs/` directories)
-  - Progress logging every 100 objects
-  - Returns count of copied objects
-  - Used for repository rename/move operations
 
 **Utility Functions**:
 
