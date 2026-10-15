@@ -29,7 +29,7 @@ from kohakuhub.auth.dependencies import get_current_user
 from kohakuhub.auth.permissions import check_repo_write_permission
 from kohakuhub.utils.lakefs import get_lakefs_client, resolve_lakefs_repo
 from kohakuhub.utils.commit_id import hub_oid
-from kohakuhub.utils.repo_paths import MAX_PATH_BYTES, has_parent_segment, too_long
+from kohakuhub.utils.repo_paths import MAX_PATH_BYTES, path_problem, too_long
 from kohakuhub.lfs_scope import may_reference
 from kohakuhub.utils.s3 import get_object_metadata, object_exists
 from kohakuhub.api.repo.utils import branch_lock, operation_lock
@@ -817,6 +817,22 @@ def _bad_path(message: str, path: str) -> HTTPException:
     )
 
 
+def _check_paths(op: dict) -> None:
+    """Refuse a path an operation cannot carry (``path_problem``); a delete may still clear what is stored (#99)."""
+    creating = op["key"] in CREATING
+    if not isinstance(op["value"], dict):
+        raise _bad_path("The value of an operation must be an object", repr(op["value"]))
+    for field in ("path", "srcPath"):
+        path = op["value"].get(field) or ""
+        if not isinstance(path, str):
+            raise _bad_path("A path must be a string", repr(path))
+        if field == "path" and creating and too_long(path):
+            raise _path_too_long(path)
+        problem = path_problem(path, creating=creating and field == "path")
+        if problem:
+            raise _bad_path(problem, path)
+
+
 def _touched(operations: list[dict]) -> tuple[list[str], list[str]]:
     """The paths the operations change, and the folders they delete."""
     paths, folders = [], []
@@ -1124,13 +1140,7 @@ async def commit(
 
     # Refused before anything is staged: nothing is left behind
     for op in operations:
-        if op["key"] not in CREATING:  # a delete may still clear what an earlier commit stored
-            continue
-        path = op["value"].get("path") or ""
-        if too_long(path):
-            raise _path_too_long(path)
-        if has_parent_segment(path):
-            raise _bad_path("A path has a '..' segment, which the Hub refuses", path)
+        _check_paths(op)
 
     if len(revision) > BRANCH_NAME_MAX:  # no branch has such a name: refuse before keeping it anywhere
         raise _revision_not_found(repo_id, revision)

@@ -118,6 +118,140 @@ async def test_a_file_that_is_already_there_with_such_a_path_can_still_be_delete
     assert (await _commit(owner_client, [{"key": "deletedFile", "value": {"path": "../never.txt"}}])).status_code == 200
 
 
+# ----- the rest of what a path may not be -----
+
+# What no operation may carry: NUL made the database raise (an unhandled 500); the other controls are not names
+CONTROLS = ["t99/a\x00b.txt", "t99/a\nb.txt", "t99/a\x1fb.txt", "t99/a\x7fb.txt", "\x00"]
+
+
+@pytest.mark.parametrize("path", CONTROLS)
+@pytest.mark.parametrize("key", ["file", "deletedFile", "deletedFolder"])
+async def test_a_control_character_in_a_path_is_refused_whatever_the_operation(owner_client, path, key):
+    before = await _paths(owner_client)
+    operation = _file(path) if key == "file" else {"key": key, "value": {"path": path}}
+
+    response = await _commit(owner_client, [_file("t99/first.txt"), operation])
+
+    assert response.status_code == 400, response.text
+    assert response.headers["x-error-code"] == "BadRequest"
+    assert "control character" in response.headers["x-error-message"]
+    assert await _paths(owner_client) == before
+
+
+@pytest.mark.parametrize("field", ["path", "srcPath"])
+async def test_a_control_character_in_either_path_of_a_copy_is_refused(owner_client, field):
+    assert (await _commit(owner_client, [_file("t99/src.txt", "s")])).status_code == 200
+    value = {"path": "t99/copy.txt", "srcPath": "t99/src.txt", "srcRevision": "main"}
+    value[field] = "t99/a\x00b.txt"
+
+    response = await _commit(owner_client, [{"key": "copyFile", "value": value}])
+
+    assert response.status_code == 400, response.text
+    assert "control character" in response.headers["x-error-message"]
+
+
+@pytest.mark.parametrize("path", [".", ".git", ".git/config", "t99/.git/x", "t99/.GIT/x", "t99/.Git", "t99/a/.git/b/c"])
+async def test_a_path_that_is_a_dot_or_has_a_git_folder_is_refused_and_nothing_is_stored(owner_client, path):
+    before = await _paths(owner_client)
+
+    response = await _commit(owner_client, [_file("t99/first.txt"), _file(path)])
+
+    assert response.status_code == 400, response.text
+    assert response.headers["x-error-code"] == "BadRequest"
+    assert await _paths(owner_client) == before
+
+
+@pytest.mark.parametrize("path", [".git/config", "t99/.git/x"])
+async def test_a_copy_or_an_lfs_file_into_a_git_folder_is_refused(owner_client, path):
+    assert (await _commit(owner_client, [_file("t99/src.txt", "s")])).status_code == 200
+    copy = {"key": "copyFile", "value": {"path": path, "srcPath": "t99/src.txt", "srcRevision": "main"}}
+    lfs = {"key": "lfsFile", "value": {"path": path, "oid": "0" * 64, "size": 10, "algo": "sha256"}}
+
+    for operation in (copy, lfs):
+        response = await _commit(owner_client, [operation])
+        assert response.status_code == 400, response.text
+        assert ".git" in response.headers["x-error-message"]  # the path, not "never uploaded"
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "t99/.gitignore",  # every repository has one of these
+        "t99/.gitattributes",
+        "t99/.github/workflows/ci.yml",
+        "t99/.gitkeep",
+        "t99/git/x",
+        "t99/a.git/x",
+        "t99/.cache/x",  # the client's own cache folder: no reason for a server to refuse it
+        "t99/.hidden/x",
+    ],
+)
+async def test_names_that_only_look_like_the_refused_ones_are_kept(owner_client, path):
+    assert (await _commit(owner_client, [_file(path)])).status_code == 200, path
+    assert path in await _paths(owner_client)
+
+
+@pytest.mark.parametrize("path", [".git/config", "t99/.git/x", "t99/.GIT/y"])
+@pytest.mark.parametrize("key", ["deletedFile", "deletedFolder"])
+async def test_a_delete_of_a_path_in_a_git_folder_is_not_refused(owner_client, path, key):
+    """Only what a commit puts somewhere is checked, so what an earlier commit stored can be cleared."""
+    response = await _commit(owner_client, [_file("t99/first.txt"), {"key": key, "value": {"path": path}}])
+
+    assert response.status_code == 200, response.text
+
+
+@pytest.mark.parametrize("path", [1, True, ["a"], {"a": 1}])
+async def test_a_path_that_is_not_a_string_is_a_400(owner_client, path):
+    response = await _commit(owner_client, [{"key": "file", "value": {"path": path, "content": "", "encoding": "base64"}}])
+
+    assert response.status_code == 400, response.text
+    assert "string" in response.headers["x-error-message"]
+
+
+@pytest.mark.parametrize("value", ["a.txt", 1, ["a"], None])
+async def test_an_operation_whose_value_is_not_an_object_is_a_400(owner_client, value):
+    response = await _commit(owner_client, [{"key": "file", "value": value}])
+
+    assert response.status_code == 400, response.text
+    assert "object" in response.headers["x-error-message"]
+
+
+# ----- the other places a path comes in -----
+
+
+@pytest.mark.parametrize("path", ["a\x00b", "a\nb", ".git/config", "t99/.GIT/x", ".", "../x"])
+async def test_preupload_refuses_a_path_a_commit_would_refuse(owner_client, path):
+    response = await owner_client.post(f"{B}/preupload/main", json={"files": [{"path": path, "size": 1, "sha256": "0" * 64}]})
+
+    assert response.status_code == 400, response.text
+    assert response.headers["x-error-code"] == "BadRequest"
+
+
+async def test_preupload_still_answers_for_the_paths_a_client_sends(owner_client):
+    files = [{"path": name, "size": 1, "sha256": "0" * 64} for name in ("t99/a.txt", "t99/.gitattributes", "t99/.github/x.yml")]
+
+    response = await owner_client.post(f"{B}/preupload/main", json={"files": files})
+
+    assert response.status_code == 200, response.text
+    assert [f["path"] for f in response.json()["files"]] == [f["path"] for f in files]
+
+
+@pytest.mark.parametrize("path", ["a\x00b", "a\nb"])
+async def test_paths_info_refuses_a_control_character_in_a_path(owner_client, path):
+    response = await owner_client.post(f"{B}/paths-info/main", data={"paths": ["README.md", path]})
+
+    assert response.status_code == 400, response.text
+    assert response.headers["x-error-code"] == "BadRequest"
+
+
+async def test_paths_info_answers_for_a_path_in_a_git_folder_that_is_not_there(owner_client):
+    """Only a control character is refused when a path is looked up: nothing is created."""
+    response = await owner_client.post(f"{B}/paths-info/main", data={"paths": [".git/config", "README.md"]})
+
+    assert response.status_code == 200, response.text
+    assert [item["path"] for item in response.json()] == ["README.md"]
+
+
 # ----- a revision that is not there -----
 
 
