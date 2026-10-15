@@ -33,6 +33,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A concurrent create of one repository name answers 409, never 500** ([#87](https://github.com/cheesecave/cheesecave-backend/issues/87)).
+  Several clients calling `create_repo("ns/name", exist_ok=True)` together (a multi-worker upload, `push_to_hub` from every
+  rank) got a 500 about one time in four, and `exist_ok` only takes a 409 as "it exists". The Hub serializes creation, so
+  its losers only ever see 409. Here the losers each create a LakeFS repository, drop it when they lose, and LakeFS
+  deletes asynchronously: a rival creating the same id meanwhile gets `410 repository in deletion` (or `400 failed to
+  access storage` while the namespace is emptied), which was reported as a 500. A create that fails on LakeFS now waits up
+  to 5 s for the rival's row, and answers 409 with its `url` when it appears; one nobody else caused is still a 500.
+
 - **`update_repo_settings(gated=...)` no longer pretends** ([#61](https://github.com/cheesecave/cheesecave-backend/issues/61)).
   `gated=False` and `gated=True` were refused with `422` (the field was a string only), and `"auto"` / `"manual"`
   answered `200` while the repository stayed public, so a request for a gate looked like it had worked. Gated
