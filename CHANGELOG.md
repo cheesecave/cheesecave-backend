@@ -43,6 +43,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A repository name the Hub refuses is a 400, and a name in an error message is no longer a 500.**
+  The server accepted any name: an empty one made a repository called `owner/`, `a/b` one no route can reach, `a--b` or
+  `x.git` names the Hub refuses (`huggingface_hub` stops them before sending, a raw request or another client did not),
+  and a 300-character name was a 500 from the database. `create_repo`, `move_repo` (a new name only: a repository that
+  already has such a name may still change namespace under it), `duplicate_repo` and `/api/validate/check-name` now apply the
+  Hub's rule, the one `validate_repo_id` mirrors: 1 to 96 ASCII letters, digits, `-`, `_` and `.`, starting and ending with a
+  letter, digit or `_`, no `--` or `..`, not ending in `.git`; the answer is `400` `InvalidRepoId`. Separately, an error
+  message holding a character beyond Latin-1 (a repository called `模型` in a "not found") raised `UnicodeEncodeError` while the
+  response was written, so that 404 was a 500: such a character is now written as its `\uXXXX` escape. A sweep of 51 bad
+  requests (a missing branch, revision, file or repository; an invalid name or path) is now a test
+  (`test_bad_input_contract.py`): each request states the status the Hub answers, and the four the server still gets wrong
+  (a body that is not base64, a path with `..`, the history of a missing revision, a merge of a missing branch) are marked
+  `xfail` until their fix lands.
 - **A commit answers a failure of LakeFS by its status, and no longer hides one** ([#10](https://github.com/cheesecave/cheesecave-backend/issues/10)).
   Every LakeFS failure in the commit route was wrapped into a `500`, and two of them were not even an error to the
   client: deleting a file or a folder swallowed any failure of LakeFS, marked the files deleted in the database and

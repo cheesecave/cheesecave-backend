@@ -6,7 +6,7 @@ from fastapi import APIRouter
 from pydantic import BaseModel
 
 from kohakuhub.db import Repository, User
-from kohakuhub.utils.names import normalize_name
+from kohakuhub.utils.names import normalize_name, repo_name_problem
 
 router = APIRouter()
 
@@ -97,6 +97,13 @@ async def check_name_availability(req: CheckNameRequest) -> CheckNameResponse:
 
     # Check repository name
     if req.namespace and req.type:
+        if problem := repo_name_problem(name):
+            return CheckNameResponse(
+                available=False,
+                normalized_name=normalized,
+                conflict_with=None,
+                message=f"Invalid repository name '{name[:100]}': {problem}",
+            )
         # Check if repository exists with this name
         existing = Repository.get_or_none(
             (Repository.repo_type == req.type)
