@@ -33,6 +33,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A concurrent create of one repository name answers 409, never 500** ([#87](https://github.com/cheesecave/cheesecave-backend/issues/87)).
+  Several clients calling `create_repo("ns/name", exist_ok=True)` together (a multi-worker upload, `push_to_hub` from every
+  rank) got a 500 about one time in four, and `exist_ok` only takes a 409 as "it exists". The Hub serializes creation, so
+  its losers only ever see 409. Here the losers each create a LakeFS repository, drop it when they lose, and LakeFS
+  deletes asynchronously: a rival creating the same id meanwhile gets `410 repository in deletion` (or `400 failed to
+  access storage` while the namespace is emptied), which was reported as a 500. A create that fails on LakeFS now waits up
+  to 5 s for the rival's row, and answers 409 with its `url` when it appears; one nobody else caused is still a 500.
+
 - **`update_repo_settings(gated=...)` no longer pretends** ([#61](https://github.com/cheesecave/cheesecave-backend/issues/61)).
   `gated=False` and `gated=True` were refused with `422` (the field was a string only), and `"auto"` / `"manual"`
   answered `200` while the repository stayed public, so a request for a gate looked like it had worked. Gated
@@ -122,6 +130,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a row is read the first time its info is asked for). `POST /api/validate-yaml` follows the Hub:
   `{errors, warnings}`, `400` for metadata that cannot be read (`huggingface_hub` now refuses such a README
   before uploading it; `valid` is still answered).
+- **The parameter count of the weights: `safetensors` in model info** (#63). `{"parameters": {dtype: count}, "total": n}`
+  from the headers of the root `model*.safetensors`, computed in the background after the index of a commit (an info
+  request never waits for it; 200 shards took 0.4 s on a real stack) and kept while the head does not move. Only what the
+  Hub answers too is given (every one of 172 real repositories equal): `null` for quantized models, two sets of weights,
+  incomplete or unreadable sets, diffusers pipelines. `expand=safetensors` is answered. No migration; the rules version
+  rises, so every repository is derived again once after the deploy.
 - **What the files of a model say about it** (#62, #63). `library_name`, `pipeline_tag`, the framework tags
   (`pytorch`, `safetensors`, ...), the model type, `diffusers:<Class>` and `config` are derived from the files
   of the head commit when the card does not say, in repository info (`expand=config` too), the lists and the

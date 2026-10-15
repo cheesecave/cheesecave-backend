@@ -7,6 +7,7 @@ the writes of create, delete and move are real SQL.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from types import SimpleNamespace
 
@@ -101,6 +102,7 @@ async def test_create_repo_covers_conflicts_lakefs_failure_and_success(monkeypat
     monkeypatch.setattr(repo_crud, "get_lakefs_client", lambda: client)
     monkeypatch.setattr(repo_crud.cfg.s3, "bucket", "hub-storage")
     monkeypatch.setattr(repo_crud.cfg.app, "base_url", "https://hub.example.com")
+    monkeypatch.setattr(repo_crud, "RIVAL_POLLS", 1)  # a failure nobody caused is not waited on
 
     demo = make_repo(owner, "demo-model")
     # Only the normalized name matches: "Demo_Model" normalizes like "demo-model"
@@ -1104,3 +1106,55 @@ async def test_orphan_cleanup_that_fails_to_delete_is_not_healed_so_another_id_i
 
     client = SimpleNamespace(repository_exists=exists)
     assert await repo_crud._cleanup_orphan_namespace_if_safe(client, "m-owner-demo") is False
+
+
+async def _fails_as_a_rival_creates(monkeypatch, owner, name, *, rival_after=None):
+    """``create_repo`` whose LakeFS create fails, as it does while a rival creating the same name
+    (and cleaning up after itself) races it: the rival's row lands at once (``rival_after`` None)
+    or that many seconds later."""
+    monkeypatch.setattr(repo_crud.cfg.app, "base_url", "https://hub.example.com")
+    monkeypatch.setattr(repo_crud, "RIVAL_POLL_SECONDS", 0.01)
+
+    async def failing(*args, **kwargs):
+        if rival_after is None:
+            make_repo(owner, name)
+        elif rival_after:
+            asyncio.get_running_loop().call_later(rival_after, make_repo, owner, name)
+        raise RuntimeError("410 repository in deletion")
+
+    monkeypatch.setattr(repo_crud, "_create_lakefs_repository", failing)
+    return await repo_crud.create_repo(
+        repo_crud.CreateRepoPayload(type="model", name=name), user=owner
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("rival_after", [None, 0.05], ids=["row already there", "row lands later"])
+async def test_a_lakefs_failure_while_a_rival_creates_the_name_is_a_conflict(monkeypatch, rival_after):
+    """The Hub answers 409 to a concurrent create of one name, never a 5xx: a client's
+    ``create_repo(exist_ok=True)`` only takes a 409 (with the ``url``) as "it exists"."""
+    owner = make_user("owner")
+    response = await _fails_as_a_rival_creates(monkeypatch, owner, "contended", rival_after=rival_after)
+    assert response.status_code == 409
+    assert response.headers.get("x-error-code") == repo_crud.HFErrorCode.REPO_EXISTS
+    assert json.loads(bytes(response.body))["url"] == "https://hub.example.com/models/owner/contended"
+    assert _repo_count("owner/contended") == 1  # the rival's, and nothing of ours
+
+
+@pytest.mark.asyncio
+async def test_a_lakefs_failure_nobody_else_caused_is_still_a_500_after_the_wait(monkeypatch):
+    owner = make_user("owner")
+    monkeypatch.setattr(repo_crud, "RIVAL_POLLS", 3)
+    sleeps = []
+    real_sleep = asyncio.sleep
+
+    async def counting(seconds):
+        sleeps.append(seconds)
+        await real_sleep(0)
+
+    monkeypatch.setattr(repo_crud.asyncio, "sleep", counting)
+    response = await _fails_as_a_rival_creates(monkeypatch, owner, "alone", rival_after=0)
+    assert response.status_code == 500
+    assert "LakeFS repository creation failed: 410 repository in deletion" in response.headers["x-error-message"]
+    assert sleeps == [0.01] * 3  # it looked for the rival for as long as it said, and no longer
+    assert _repo_count("owner/alone") == 0

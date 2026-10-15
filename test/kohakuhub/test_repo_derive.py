@@ -303,3 +303,137 @@ def test_the_pipeline_class_of_a_diffusers_repository_follows_the_task():
 
 def test_a_merged_task_keeps_the_authors_word_in_the_tags():
     assert compose({"pipeline_tag": "conversational"}, []) == ["conversational", "region:us"]
+
+
+# ---------- the safetensors summary (#63, part 3) ----------
+
+from kohakuhub import repo_derive  # noqa: E402
+
+
+def shards(n, total=None):
+    return [f"model-{i:05}-of-{total or n:05}.safetensors" for i in range(1, n + 1)]
+
+
+def header(blob: dict, metadata=None) -> bytes:
+    import json
+    import struct
+
+    body = json.dumps({**({"__metadata__": metadata} if metadata else {}), **blob}).encode()
+    return struct.pack("<Q", len(body)) + body
+
+
+def tensor(dtype="F32", shape=(2, 3)):
+    return {"dtype": dtype, "shape": list(shape), "data_offsets": [0, 1]}
+
+
+@pytest.mark.parametrize(
+    "names, expected",
+    [
+        (["model.safetensors", "config.json"], ["model.safetensors"]),
+        (shards(3) + ["x.json"], shards(3)),
+        (list(reversed(shards(3))), shards(3)),  # sorted
+        ([], None),
+        (["config.json"], None),
+        (["unet/model.safetensors"], None),  # only the root: the Hub sums diffusers its own way
+        (["model.safetensors"] + shards(2), None),  # two sets: which one is the model?
+        (["model.fp16.safetensors", "model.safetensors"], None),
+        (["model.fp32-00001-of-00002.safetensors"], None),
+        (shards(2, total=3), None),  # a shard is missing
+        ([shards(2)[0], "model-00002-of-00003.safetensors"], None),  # shards of two different sets
+    ],
+)
+def test_the_weight_files_are_one_complete_set_in_the_root(names, expected):
+    assert repo_derive.weight_files(names) == expected
+
+
+def test_a_header_says_how_long_it_is():
+    assert repo_derive.safetensors_header_size(b"\x10\x00\x00\x00\x00\x00\x00\x00") == 16
+    assert repo_derive.safetensors_header_size(b"\x10\x00\x00") is None  # not even the length
+    assert repo_derive.safetensors_header_size((0).to_bytes(8, "little")) is None
+    assert repo_derive.safetensors_header_size((repo_derive.MAX_SAFETENSORS_HEADER + 1).to_bytes(8, "little")) is None
+    assert repo_derive.safetensors_header_size(repo_derive.MAX_SAFETENSORS_HEADER.to_bytes(8, "little")) == repo_derive.MAX_SAFETENSORS_HEADER
+
+
+def test_a_header_is_read_without_its_metadata():
+    blob = header({"w": tensor("BF16", (4, 5))}, metadata={"format": "pt"})
+
+    assert repo_derive.parse_safetensors_header(blob) == {"w": {"dtype": "BF16", "shape": [4, 5]}}
+
+
+@pytest.mark.parametrize(
+    "blob",
+    [
+        b"",
+        b"\x05\x00\x00\x00\x00\x00\x00\x00{}",  # shorter than it says
+        b"\x03\x00\x00\x00\x00\x00\x00\x00abc",  # not JSON
+        b"\x02\x00\x00\x00\x00\x00\x00\x00[]",  # not an object
+        header({"w": "F32"}),  # an entry that is not an object
+        header({"w": {"dtype": "F32"}}),  # no shape
+        header({"w": {"shape": [1]}}),  # no dtype
+        header({"w": {"dtype": 3, "shape": [1]}}),
+        header({"w": {"dtype": "F32", "shape": "12"}}),
+        header({"w": {"dtype": "F32", "shape": [-1]}}),
+        header({"w": {"dtype": "F32", "shape": [True]}}),
+        header({"w": {"dtype": "F32", "shape": [1.5]}}),
+    ],
+)
+def test_a_header_that_is_not_one_is_not_read(blob):
+    assert repo_derive.parse_safetensors_header(blob) is None
+
+
+def parsed(*tensors, **named):
+    return {**{f"t{i}": {"dtype": d, "shape": s} for i, (d, s) in enumerate(tensors)}, **named}
+
+
+def test_the_summary_adds_up_the_parameters_by_dtype():
+    files = ["model-00001-of-00002.safetensors", "model-00002-of-00002.safetensors"]
+    headers = {files[0]: parsed(("BF16", [4, 5]), ("F32", [3])), files[1]: parsed(("BF16", [10]))}
+
+    assert repo_derive.safetensors_summary(files, headers, quantized=False) == {
+        "parameters": {"BF16": 30, "F32": 3},
+        "total": 33,
+    }
+
+
+def test_a_tensor_without_dimensions_is_not_a_parameter_the_hub_counts():
+    headers = {"model.safetensors": parsed(("F32", []), ("F32", [2, 2]))}
+
+    assert repo_derive.safetensors_summary(["model.safetensors"], headers, quantized=False)["total"] == 4
+
+
+def test_a_dimension_of_zero_makes_an_empty_tensor():
+    headers = {"model.safetensors": parsed(("F32", [0, 5]), ("F32", [3]))}
+
+    assert repo_derive.safetensors_summary(["model.safetensors"], headers, quantized=False)["total"] == 3
+
+
+@pytest.mark.parametrize("dtype", ["U32", "U8", "I8", "F8_E4M3", "F8_E5M2", "F4"])
+def test_packed_or_quantized_dtypes_are_not_counted(dtype):
+    """The Hub counts what the model has once unpacked; the stored tensors say less."""
+    headers = {"model.safetensors": parsed(("BF16", [4]), (dtype, [8]))}
+
+    assert repo_derive.safetensors_summary(["model.safetensors"], headers, quantized=False) is None
+
+
+def test_a_quantized_model_is_not_summed():
+    headers = {"model.safetensors": parsed(("BF16", [4]))}
+
+    assert repo_derive.safetensors_summary(["model.safetensors"], headers, quantized=True) is None
+
+
+def test_a_header_that_could_not_be_read_makes_no_summary():
+    files = ["model-00001-of-00002.safetensors", "model-00002-of-00002.safetensors"]
+
+    assert repo_derive.safetensors_summary(files, {files[0]: parsed(("F32", [2])), files[1]: None}, quantized=False) is None
+    assert repo_derive.safetensors_summary(files, {files[0]: parsed(("F32", [2]))}, quantized=False) is None
+
+
+def test_no_parameters_is_no_summary():
+    assert repo_derive.safetensors_summary(["model.safetensors"], {"model.safetensors": {}}, quantized=False) is None
+    assert repo_derive.safetensors_summary(["model.safetensors"], {"model.safetensors": parsed(("F32", []))}, quantized=False) is None
+    assert repo_derive.safetensors_summary(["model.safetensors"], {"model.safetensors": parsed(("F32", [0, 5]))}, quantized=False) is None  # only empty tensors
+
+
+@pytest.mark.parametrize("config, expected", [({"quantization": {"bits": 4}}, True), ({"quantization_config": {}}, True), ({"model_type": "x"}, False), (None, False), ([], False)])
+def test_a_config_says_whether_the_model_is_quantized(config, expected):
+    assert repo_derive.is_quantized(config) is expected

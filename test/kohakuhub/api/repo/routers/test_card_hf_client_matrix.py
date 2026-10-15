@@ -385,3 +385,87 @@ async def test_the_client_sees_the_files_change_with_the_next_commit(api):
     second = await _run(api.model_info, rid)
 
     assert first.library_name is None and second.library_name == "transformers"
+
+
+# --- the summary of the weights, read by the client (#63, part 3) ------------------------
+
+
+def _weights(**arrays):
+    np = pytest.importorskip("numpy")
+    from safetensors.numpy import save
+
+    return save({name: np.zeros(shape, dtype=dtype) for name, (dtype, shape) in arrays.items()})
+
+
+def _st(summary):
+    """``(total, parameters)`` of ``ModelInfo.safetensors``: a dataclass in newer clients, a plain dict in 0.20."""
+    if isinstance(summary, dict):
+        return summary["total"], dict(summary["parameters"])
+    return summary.total, dict(summary.parameters)
+
+
+async def _summary_of(api, rid):
+    """``model_info(...).safetensors``, waited for: the commit sums the weights in the background."""
+    info = None
+    for _ in range(60):
+        info = await _run(api.model_info, rid)
+        if info.safetensors is not None:
+            break
+        await asyncio.sleep(0.25)
+    return info
+
+
+async def test_the_client_reads_the_parameter_count_of_the_weights(api):
+    rid = await _model_with_files(api, "counted-st", {"config.json": json.dumps(BERT_CONFIG).encode(), "model.safetensors": _weights(a=("float32", (4, 5)), b=("float16", (7,)))})
+
+    info = await _summary_of(api, rid)
+
+    assert _st(info.safetensors) == (27, {"F32": 20, "F16": 7})
+
+
+async def test_the_summary_is_what_the_client_computes_from_the_files_itself(api):
+    """``get_safetensors_metadata`` reads the headers through the resolve route and adds them up: the
+    two must agree, or one of them reads the files wrongly."""
+    rid = await _model_with_files(api, "crosscheck", {"config.json": json.dumps(BERT_CONFIG).encode(), "model.safetensors": _weights(a=("float32", (6, 6)), b=("float16", (10,)))})
+
+    info = await _summary_of(api, rid)
+    metadata = await _run(api.get_safetensors_metadata, rid)
+
+    total, parameters = _st(info.safetensors)
+    assert total == sum(metadata.parameter_count.values()) and parameters == dict(metadata.parameter_count)
+
+
+async def test_a_sharded_model_is_summed_for_the_client_too(api):
+    files = {
+        "config.json": json.dumps(BERT_CONFIG).encode(),
+        # the client finds the shards through the index, as every loader does
+        "model.safetensors.index.json": json.dumps({"metadata": {}, "weight_map": {"a": "model-00001-of-00002.safetensors", "b": "model-00002-of-00002.safetensors"}}).encode(),
+        "model-00001-of-00002.safetensors": _weights(a=("float32", (10,))),
+        "model-00002-of-00002.safetensors": _weights(b=("float32", (5,))),
+    }
+    rid = await _model_with_files(api, "sharded-st", files)
+
+    info = await _summary_of(api, rid)
+    metadata = await _run(api.get_safetensors_metadata, rid)
+
+    assert _st(info.safetensors)[0] == 15 == sum(metadata.parameter_count.values())
+
+
+async def test_expand_safetensors_by_the_client(api):
+    if "expand" not in __import__("inspect").signature(api.model_info).parameters:
+        pytest.skip("this huggingface_hub cannot expand model info")
+    rid = await _model_with_files(api, "expand-st", {"config.json": json.dumps(BERT_CONFIG).encode(), "model.safetensors": _weights(a=("float32", (3,)))})
+    await _summary_of(api, rid)
+
+    info = await _run(api.model_info, rid, expand=["safetensors", "library_name"])
+
+    assert _st(info.safetensors)[0] == 3 and info.library_name == "transformers"
+
+
+async def test_a_model_the_rules_do_not_sum_has_no_summary_and_the_client_copes(api):
+    rid = await _model_with_files(api, "quant-st", {"config.json": json.dumps({**BERT_CONFIG, "quantization_config": {"bits": 4}}).encode(), "model.safetensors": _weights(a=("uint32", (8,)))})
+    await asyncio.sleep(2)  # the summary would have been written by now
+
+    info = await _run(api.model_info, rid)
+
+    assert info.safetensors is None and info.library_name == "transformers"
