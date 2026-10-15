@@ -1779,3 +1779,96 @@ async def test_get_paths_info_on_a_side_branch_reports_its_own_identities(monkey
     assert by_path["weights.bin"]["oid"] == SIDE_POINTER_OID
     assert by_path["weights.bin"]["lfs"]["oid"] == SIDE_OID
     assert by_path["README.md"]["oid"] == BLOB_HELLO
+
+
+def _objects(*paths):
+    return [
+        {"path_type": "object", "path": path, "size_bytes": 1, "checksum": f"sum-{i}", "mtime": 1713657600}
+        for i, path in enumerate(paths)
+    ]
+
+
+async def _recursive_listing(monkeypatch, objects, *, path="", cursor=None, expand=False):
+    """The wire items of a recursive listing whose LakeFS page is ``objects``."""
+    _demo_repo()
+
+    async def _resolve_revision(client, lakefs_repo, revision, repo=None):
+        return ("resolved-main", "branch")
+
+    async def _fake_fetch(**kwargs):
+        return {"results": objects, "pagination": {"has_more": False}}
+
+    async def _no_commits(lakefs_repo, revision, targets):
+        return {}
+
+    monkeypatch.setattr(tree_api, "resolve_revision", _resolve_revision)
+    monkeypatch.setattr(tree_api, "get_lakefs_client", lambda: _FakeLakeFSClient())
+    monkeypatch.setattr(tree_api, "fetch_lakefs_objects_page", _fake_fetch)
+    monkeypatch.setattr(tree_api, "resolve_last_commits_for_paths", _no_commits)
+    request = _request("/api/models/owner/demo/tree/main", query={"recursive": "true"})
+    response = await tree_api.list_repo_tree.__wrapped__(
+        "model", "owner", "demo", request, path=path, recursive=True, cursor=cursor, expand=expand, limit=None
+    )
+    return _json_body(response)
+
+
+@pytest.mark.asyncio
+async def test_a_recursive_listing_names_the_directories_its_files_are_in(monkeypatch):
+    items = await _recursive_listing(
+        monkeypatch, _objects("a.txt", "d/e/y.txt", "d/x.txt", "d/z.txt", "g/h/i/j.txt")
+    )
+    # Each directory is named once, before the first file in it: what the Hub does, and what
+    # HfFileSystem builds its directory cache from
+    assert [(i["type"], i["path"]) for i in items] == [
+        ("file", "a.txt"),
+        ("directory", "d"),
+        ("directory", "d/e"),
+        ("file", "d/e/y.txt"),
+        ("file", "d/x.txt"),
+        ("file", "d/z.txt"),
+        ("directory", "g"),
+        ("directory", "g/h"),
+        ("directory", "g/h/i"),
+        ("file", "g/h/i/j.txt"),
+    ]
+    assert {i["oid"] for i in items if i["type"] == "directory"} == {""}
+    assert {i["size"] for i in items if i["type"] == "directory"} == {0}
+
+
+@pytest.mark.asyncio
+async def test_a_later_page_does_not_name_a_directory_the_earlier_one_did(monkeypatch):
+    items = await _recursive_listing(
+        monkeypatch, _objects("d/e/w.txt", "d/z.txt", "f/q.txt"), cursor="d/e/y.txt"
+    )
+    assert [(i["type"], i["path"]) for i in items] == [
+        ("file", "d/e/w.txt"),
+        ("file", "d/z.txt"),
+        ("directory", "f"),
+        ("file", "f/q.txt"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_recursive_listing_below_a_path_names_only_the_directories_below_it(monkeypatch):
+    items = await _recursive_listing(
+        monkeypatch, _objects("d/e/f/k.txt", "d/e/y.txt", "d/x.txt"), path="d"
+    )
+    assert [(i["type"], i["path"]) for i in items] == [
+        ("directory", "d/e"),
+        ("directory", "d/e/f"),
+        ("file", "d/e/f/k.txt"),
+        ("file", "d/e/y.txt"),
+        ("file", "d/x.txt"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_the_directories_of_an_expanded_recursive_listing_have_no_last_commit(monkeypatch):
+    items = await _recursive_listing(monkeypatch, _objects("d/x.txt"), expand=True)
+    directory = next(i for i in items if i["type"] == "directory")
+    assert directory["path"] == "d" and directory["lastCommit"] is None
+
+
+def test_an_entry_that_is_not_an_object_passes_through_a_recursive_listing_unchanged():
+    prefix = {"path_type": "common_prefix", "path": "d/", "checksum": "x"}
+    assert tree_api._with_directories([prefix], "", None) == [prefix]
