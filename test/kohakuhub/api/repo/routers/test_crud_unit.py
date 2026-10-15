@@ -1158,3 +1158,47 @@ async def test_a_lakefs_failure_nobody_else_caused_is_still_a_500_after_the_wait
     assert "LakeFS repository creation failed: 410 repository in deletion" in response.headers["x-error-message"]
     assert sleeps == [0.01] * 3  # it looked for the rival for as long as it said, and no longer
     assert _repo_count("owner/alone") == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name", ["", "a/b", "模型", "a--b", "a..b", "-a", "a-", "foo.git", "x" * 97])
+async def test_create_repo_refuses_a_name_the_hub_would_refuse(monkeypatch, name):
+    """A name that breaks a route (``a/b``), is empty, or does not fit the table (97+ characters)
+    is a 400 ``InvalidRepoId``, not a repository (or a 500 from the database)."""
+    owner = make_user("owner")
+    client = _FakeClient()
+    monkeypatch.setattr(repo_crud, "get_lakefs_client", lambda: client)
+
+    response = await repo_crud.create_repo(repo_crud.CreateRepoPayload(type="model", name=name), user=owner)
+
+    assert response.status_code == 400
+    assert response.headers.get("x-error-code") == repo_crud.HFErrorCode.INVALID_REPO_ID
+    assert "Invalid repository name" in response.headers["x-error-message"]
+    assert client.calls == [], "nothing is made for a name that is refused"
+    assert Repository.select().where(Repository.name == name).count() == 0
+
+
+@pytest.mark.asyncio
+async def test_move_repo_refuses_an_invalid_new_name_but_lets_a_legacy_one_travel(monkeypatch):
+    """A rename to a name the Hub would refuse is a 400. A repository that already has such a name
+    (it was accepted before) may still be moved between namespaces under it: only a new name is judged."""
+    owner = make_user("owner")
+    make_org("acme-legacy", admin=owner)
+    make_repo(owner, "fine")
+    legacy = make_repo(owner, "legacy..name")
+    monkeypatch.setattr(repo_crud.cfg.app, "base_url", "https://hub.example.com")
+
+    for bad in ("owner/bad--name", "owner/a/b", "owner/-x", "owner/bad.git"):
+        refused = await repo_crud.move_repo(
+            repo_crud.MoveRepoPayload(fromRepo="owner/fine", toRepo=bad, type="model"), auth=(owner, False)
+        )
+        assert refused.status_code == 400, bad
+        assert refused.headers.get("x-error-code") == repo_crud.HFErrorCode.INVALID_REPO_ID
+    assert Repository.select().where(Repository.name == "fine").count() == 1
+
+    moved = await repo_crud.move_repo(
+        repo_crud.MoveRepoPayload(fromRepo="owner/legacy..name", toRepo="acme-legacy/legacy..name", type="model"),
+        auth=(owner, False),
+    )
+    assert moved["success"] is True
+    assert Repository.get_by_id(legacy.id).full_id == "acme-legacy/legacy..name"

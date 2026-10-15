@@ -433,3 +433,16 @@ def test_repo_info_response_with_expand_is_only_what_was_asked():
 
     assert json.loads(asked.body) == {"_id": 1, "id": "a/b", "sha": "s", "cardData": None}
     assert json.loads(with_siblings.body) == {"_id": 1, "id": "a/b", "siblings": []}
+
+
+def test_an_error_message_is_safe_in_a_header_whatever_the_user_typed():
+    """A header holds Latin-1: a name with a character beyond it (``模型``) in a "not found" message was a
+    ``UnicodeEncodeError`` while the response was written, so the 404 became a 500."""
+    assert hf_utils._sanitize_header_value("a  b\n c\t d") == "a b c d"  # whitespace, as before
+    assert hf_utils._sanitize_header_value("Repository 'owner/café' not found") == "Repository 'owner/café' not found"  # Latin-1 stays
+    safe = hf_utils._sanitize_header_value("Repository 'owner/模型' not found")
+    assert safe == "Repository 'owner/\\u6a21\\u578b' not found"
+    safe.encode("latin-1")  # what the server does with it
+    response = hf_utils.hf_repo_not_found("owner/模型", "model")
+    assert response.status_code == 404
+    assert "\\u6a21\\u578b" in response.headers["x-error-message"]

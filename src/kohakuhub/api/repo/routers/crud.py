@@ -52,6 +52,7 @@ from kohakuhub.api.repo.utils import operation_lock
 from kohakuhub.api.quota.util import check_quota
 from kohakuhub.api.fallback.cache import get_cache as get_fallback_cache
 from kohakuhub.api.validation import normalize_name
+from kohakuhub.utils.names import repo_name_problem
 from kohakuhub.api.operation_capabilities import (
     ensure_repository_operation_enabled,
     require_repository_squash_enabled,
@@ -397,6 +398,13 @@ async def _cleanup_orphan_namespace_if_safe(
     return deleted_count > 0
 
 
+def _invalid_name_response(name: str, problem: str) -> Response:
+    """The 400 the Hub answers a name it refuses."""
+    return hf_error_response(
+        400, HFErrorCode.INVALID_REPO_ID, f"Invalid repository name '{name[:100]}': {problem}"
+    )
+
+
 def _resolve_create_repo_private(payload: CreateRepoPayload) -> bool:
     """Collapse ``private`` and ``visibility`` into a single bool.
 
@@ -441,6 +449,8 @@ async def create_repo(
     logger.info(
         f"Creating repository: {payload.organization or user.username}/{payload.name}"
     )
+    if problem := repo_name_problem(payload.name):
+        return _invalid_name_response(payload.name, problem)
     resolved_private = _resolve_create_repo_private(payload)
     namespace = payload.organization or user.username
 
@@ -757,6 +767,10 @@ async def move_repo(
 
     from_namespace, from_name = from_parts
     to_namespace, to_name = to_parts
+
+    # Only a new name is judged: a repository made before names were checked keeps its own
+    if to_name != from_name and (problem := repo_name_problem(to_name)):
+        return _invalid_name_response(to_name, problem)
 
     # Check if source repository exists
     repo_row = get_repository(repo_type, from_namespace, from_name)

@@ -77,8 +77,12 @@ class HFErrorCode:
 
 
 def _sanitize_header_value(value: str) -> str:
-    """Normalize header values so HTTP servers can emit them safely."""
-    return " ".join(str(value).split())
+    """Normalize header values so HTTP servers can emit them safely.
+
+    Whitespace is collapsed, and a character beyond Latin-1 (a header holds nothing else) is written
+    as its ``\\uXXXX`` escape: a name the user typed in a message must not turn the answer into a 500.
+    """
+    return " ".join(str(value).split()).encode("latin-1", "backslashreplace").decode("latin-1")
 
 
 def hf_error_response(
