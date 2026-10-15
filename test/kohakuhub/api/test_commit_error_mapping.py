@@ -32,7 +32,8 @@ def _file(path, text):
 
 
 async def _paths(client, ref="main"):
-    return sorted(item["path"] for item in (await client.get(f"{B}/tree/{ref}?recursive=true")).json())
+    items = (await client.get(f"{B}/tree/{ref}?recursive=true")).json()
+    return sorted(item["path"] for item in items if item["type"] == "file")  # a recursive tree names its directories too
 
 
 @pytest.fixture(autouse=True)
