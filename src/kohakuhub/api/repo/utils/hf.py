@@ -76,13 +76,19 @@ class HFErrorCode:
     RANGE_NOT_SATISFIABLE = "RangeNotSatisfiable"
 
 
+_HEADER_CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]")
+
+
 def _sanitize_header_value(value: str) -> str:
     """Normalize header values so HTTP servers can emit them safely.
 
     Whitespace is collapsed, and a character beyond Latin-1 (a header holds nothing else) is written
     as its ``\\uXXXX`` escape: a name the user typed in a message must not turn the answer into a 500.
+    A control character (NUL, the other C0 controls, DEL) is a space: the server refuses to write a header
+    that holds one and drops the connection, so a request for ``.../a%00b`` got no answer at all (#99).
     """
-    return " ".join(str(value).split()).encode("latin-1", "backslashreplace").decode("latin-1")
+    text = _HEADER_CONTROL_CHARS.sub(" ", str(value))
+    return " ".join(text.split()).encode("latin-1", "backslashreplace").decode("latin-1")
 
 
 def hf_error_response(

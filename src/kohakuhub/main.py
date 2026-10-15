@@ -4,7 +4,9 @@ import uuid
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.exception_handlers import http_exception_handler
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from kohakuhub.api import (
@@ -25,7 +27,7 @@ from kohakuhub.api import (
     validation,
 )
 from kohakuhub.api.ref_path import FullRefMiddleware
-from kohakuhub.api.repo.utils.hf import HFErrorCode, hf_repo_not_found
+from kohakuhub.api.repo.utils.hf import HFErrorCode, _sanitize_header_value, hf_repo_not_found
 from kohakuhub.api.invitation import router as invitation
 from kohakuhub.auth import router as auth_router
 from kohakuhub.api.auth import external_tokens
@@ -162,6 +164,22 @@ async def _repo_read_denied_handler(request: Request, exc: RepoReadDeniedError):
     layer is hiding the repo.
     """
     return hf_repo_not_found(exc.repo_id, exc.repo_type)
+
+@app.exception_handler(StarletteHTTPException)
+async def _http_exception_handler(request: Request, exc: StarletteHTTPException):
+    """The default answer of FastAPI, with ``X-Error-Message`` made safe to write (#99).
+
+    Many routes name what the client sent (a path, a revision) in that header. A control character in it makes the HTTP
+    server refuse to write the response and drop the connection, and a character beyond Latin-1 made it a 500; one
+    place here covers every route, whoever builds the exception.
+    """
+    if exc.headers:
+        exc.headers = {
+            name: _sanitize_header_value(value) if name.lower() == "x-error-message" else value
+            for name, value in exc.headers.items()
+        }
+    return await http_exception_handler(request, exc)
+
 
 @app.exception_handler(GitProtocolError)
 async def _git_protocol_error_handler(request: Request, exc: GitProtocolError):

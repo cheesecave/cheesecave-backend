@@ -435,6 +435,19 @@ def test_repo_info_response_with_expand_is_only_what_was_asked():
     assert json.loads(with_siblings.body) == {"_id": 1, "id": "a/b", "siblings": []}
 
 
+def test_a_control_character_in_a_message_never_reaches_a_header():
+    """NUL, the other C0 controls and DEL are not allowed in a header value: the HTTP server refuses to write the response
+    and drops the connection (a request for ``.../a%00b`` was answered with nothing; #99). They become a space, like the
+    whitespace around them."""
+    assert hf_utils._sanitize_header_value("Entry 'a\x00b' not found") == "Entry 'a b' not found"
+    assert hf_utils._sanitize_header_value("a\x01b\x08c\x0ed\x1be\x7ff") == "a b c d e f"
+    assert hf_utils._sanitize_header_value("\x00\x00a\x00") == "a"
+    assert hf_utils._sanitize_header_value("é\x80\xffü") == "é\x80\xffü"  # Latin-1 (C1 included) is allowed and stays
+    response = hf_utils.hf_entry_not_found("owner/repo", "a\x00b", "main")
+    assert response.status_code == 404
+    assert "\x00" not in response.headers["x-error-message"]
+
+
 def test_an_error_message_is_safe_in_a_header_whatever_the_user_typed():
     """A header holds Latin-1: a name with a character beyond it (``模型``) in a "not found" message was a
     ``UnicodeEncodeError`` while the response was written, so the 404 became a 500."""
