@@ -421,7 +421,7 @@ EXPAND_PROPERTIES = {
 }
 
 # The properties that come from the README card: reading one means reading the card
-CARD_PROPERTIES = frozenset({"cardData", "tags", "pipeline_tag", "library_name", "model-index", "sdk", "paperswithcode_id", "config"})
+CARD_PROPERTIES = frozenset({"cardData", "tags", "pipeline_tag", "library_name", "model-index", "sdk", "paperswithcode_id", "config", "safetensors"})
 
 # Properties the Hub returns only when expanded, from another field
 _EXPAND_ONLY = {"downloadsAllTime": "downloads"}
@@ -473,8 +473,11 @@ def repo_info_fields(
         fields["pipeline_tag"] = declared.get("pipeline_tag")
         fields["library_name"] = declared.get("library_name")
         fields["spaces"] = []
-        if config := ((card or {}).get("info") or {}).get("config"):
+        info = (card or {}).get("info") or {}
+        if config := info.get("config"):
             fields["config"] = config
+        if safetensors := info.get("safetensors"):
+            fields["safetensors"] = safetensors
     elif repo_type == "space":
         fields["sdk"] = declared.get("sdk")
     if card_data:

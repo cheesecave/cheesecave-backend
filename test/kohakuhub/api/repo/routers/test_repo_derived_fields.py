@@ -25,13 +25,14 @@ async def _create(owner_client, name, repo_type="model"):
     (await owner_client.post("/api/repos/create", json={"type": repo_type, "name": name, "private": False})).raise_for_status()
 
 
-async def _commit(owner_client, name, files: dict[str, str | None], repo_type="model"):
+async def _commit(owner_client, name, files: dict[str, str | bytes | None], repo_type="model"):
     lines = [json.dumps({"key": "header", "value": {"summary": "files"}})]
     for path, content in files.items():
         if content is None:
             lines.append(json.dumps({"key": "deletedFile", "value": {"path": path}}))
         else:
-            lines.append(json.dumps({"key": "file", "value": {"path": path, "content": base64.b64encode(content.encode()).decode(), "encoding": "base64"}}))
+            raw = content if isinstance(content, bytes) else content.encode()
+            lines.append(json.dumps({"key": "file", "value": {"path": path, "content": base64.b64encode(raw).decode(), "encoding": "base64"}}))
     response = await owner_client.post(f"/api/{repo_type}s/owner/{name}/commit/main", content="\n".join(lines), headers={"content-type": "application/x-ndjson"})
     response.raise_for_status()
 
@@ -53,8 +54,9 @@ def _discovery():
 
 
 async def _settled():
-    """Every background index this process started has finished."""
-    while tasks := list(_discovery()._running.values()):
+    """Every background index, and the weights summary that follows it, this process started has finished."""
+    discovery = _discovery()
+    while tasks := [*discovery._running.values(), *discovery._st_running.values()]:
         await asyncio.gather(*tasks, return_exceptions=True)
 
 
@@ -229,3 +231,118 @@ async def test_a_move_indexes_the_repository_under_its_new_name(anonymous, owner
 
     assert len(scheduled) == 1
     assert (await anonymous.get("/api/models/owner/after")).json()["library_name"] == "transformers"
+
+
+# --- the summary of the weights (#63, part 3) ----------------------------------
+
+
+def _weights(**arrays):
+    """A real safetensors file (the library writes it), ``name=(dtype, shape)``."""
+    np = pytest.importorskip("numpy")
+    from safetensors.numpy import save
+
+    return save({name: np.zeros(shape, dtype=dtype) for name, (dtype, shape) in arrays.items()})
+
+
+async def test_the_info_carries_the_parameter_count_of_the_weights(anonymous, owner_client):
+    await _create(owner_client, "counted")
+    await _commit(owner_client, "counted", {"config.json": BERT, "model.safetensors": _weights(a=("float32", (4, 5)), b=("float16", (7,)), s=("float32", ()))})
+    await _settled()
+
+    body = (await anonymous.get("/api/models/owner/counted")).json()
+
+    assert body["safetensors"] == {"parameters": {"F32": 20, "F16": 7}, "total": 27}
+
+
+async def test_expand_safetensors_answers_it_and_only_it(anonymous, owner_client):
+    await _create(owner_client, "expanded-st")
+    await _commit(owner_client, "expanded-st", {"config.json": BERT, "model.safetensors": _weights(a=("float32", (3,)))})
+    await _settled()
+
+    body = (await anonymous.get("/api/models/owner/expanded-st", params={"expand": "safetensors"})).json()
+
+    assert body == {"_id": body["_id"], "id": "owner/expanded-st", "safetensors": {"parameters": {"F32": 3}, "total": 3}}
+
+
+async def test_the_shards_of_a_model_are_summed_together(anonymous, owner_client):
+    await _create(owner_client, "sharded")
+    index = json.dumps({"metadata": {}, "weight_map": {}})
+    await _commit(owner_client, "sharded", {
+        "config.json": BERT,
+        "model.safetensors.index.json": index,
+        "model-00001-of-00002.safetensors": _weights(a=("float32", (10,))),
+        "model-00002-of-00002.safetensors": _weights(b=("float32", (5,)), c=("float16", (2,))),
+    })
+    await _settled()
+
+    body = (await anonymous.get("/api/models/owner/sharded")).json()
+
+    assert body["safetensors"] == {"parameters": {"F32": 15, "F16": 2}, "total": 17}
+
+
+async def test_a_commit_that_changes_the_weights_changes_the_summary(anonymous, owner_client):
+    await _create(owner_client, "changing-st")
+    await _commit(owner_client, "changing-st", {"config.json": BERT, "model.safetensors": _weights(a=("float32", (3,)))})
+    await _settled()
+    first = (await anonymous.get("/api/models/owner/changing-st")).json()["safetensors"]
+
+    await _commit(owner_client, "changing-st", {"model.safetensors": _weights(a=("float32", (3,)), b=("float32", (4,)))})
+    await _settled()
+    second = (await anonymous.get("/api/models/owner/changing-st")).json()["safetensors"]
+    await _commit(owner_client, "changing-st", {"model.safetensors": None})
+    await _settled()
+    third = (await anonymous.get("/api/models/owner/changing-st")).json()
+
+    assert first["total"] == 3 and second["total"] == 7
+    assert "safetensors" not in third
+
+
+async def test_no_summary_is_better_than_a_wrong_one(anonymous, owner_client):
+    quantized = json.dumps({"model_type": "llama", "architectures": ["LlamaForCausalLM"], "quantization": {"bits": 4}})
+    await _create(owner_client, "quant")
+    await _commit(owner_client, "quant", {"config.json": quantized, "model.safetensors": _weights(a=("uint32", (8,)))})
+    await _create(owner_client, "two-sets")
+    await _commit(owner_client, "two-sets", {"config.json": BERT, "model.safetensors": _weights(a=("float32", (3,))), "model-00001-of-00001.safetensors": _weights(a=("float32", (3,)))})
+    await _create(owner_client, "broken")
+    await _commit(owner_client, "broken", {"config.json": BERT, "model.safetensors": b"this is not a safetensors file at all"})
+    await _settled()
+
+    for name in ("quant", "two-sets", "broken"):
+        body = (await anonymous.get(f"/api/models/owner/{name}")).json()
+        assert "safetensors" not in body and body["library_name"] == "transformers", name
+
+
+async def test_the_summary_does_not_flicker_when_the_index_runs_again(anonymous, owner_client):
+    await _create(owner_client, "steady")
+    await _commit(owner_client, "steady", {"config.json": BERT, "model.safetensors": _weights(a=("float32", (3,)))})
+    await _settled()
+    discovery = _discovery()
+    repo = discovery.Repository.get(discovery.Repository.full_id == "owner/steady")
+
+    discovery.mark_dirty(repo.id)  # what the scheduled refresh does
+    await discovery.index_repository(repo.id)
+
+    assert (await anonymous.get("/api/models/owner/steady")).json()["safetensors"]["total"] == 3
+
+
+async def test_two_hundred_shards_are_summed_in_the_background_without_holding_anything_up(anonymous, owner_client):
+    import time
+
+    count = 200
+    shards = {f"model-{i:05}-of-{count:05}.safetensors": _weights(**{f"w{i}": ("float32", (i + 1,))}) for i in range(1, count + 1)}
+    await _create(owner_client, "big")
+    started = time.perf_counter()
+    await _commit(owner_client, "big", {"config.json": BERT, **shards})
+    committed = time.perf_counter() - started
+
+    answered = time.perf_counter()
+    body = (await anonymous.get("/api/models/owner/big")).json()
+    info_seconds = time.perf_counter() - answered
+    await _settled()
+    summed = time.perf_counter() - started
+    final = (await anonymous.get("/api/models/owner/big")).json()
+
+    print(f"PERF 200 shards: commit {committed:.2f}s, info answered in {info_seconds:.2f}s (no wait for the summary), summary done {summed:.2f}s after the commit began")
+    assert info_seconds < 4  # an info request never waits for the headers
+    assert final["safetensors"]["total"] == sum(range(2, count + 2))
+    assert summed - committed < 60

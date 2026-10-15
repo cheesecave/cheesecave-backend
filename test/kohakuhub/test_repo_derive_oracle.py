@@ -83,3 +83,49 @@ def test_the_rules_still_find_most_of_what_the_hub_knows(results):
         all(r["real"]["config"].get(k) == v for k, v in d["config"].items()) for r, d in configs
     )
     assert equal / len(configs) >= 0.95
+
+
+# ---------- the safetensors summary against the real Hub (#63, part 3) ----------
+
+from kohakuhub import repo_derive  # noqa: E402
+
+ST_ROWS = json.loads((Path(__file__).parents[1] / "fixtures/real_hub_safetensors.json").read_text())
+
+
+def _headers(row):
+    """The fixture keeps each file's tensors as ``[dtype, shape, how many]``: expand them again."""
+    return {
+        name: {f"t{i}.{j}": {"dtype": d, "shape": shape} for i, (d, shape, count) in enumerate(groups) for j in range(count)}
+        for name, groups in row["headers"].items()
+    }
+
+
+def _summary(row):
+    files = repo_derive.weight_files(row["names"])
+    return None if files is None else repo_derive.safetensors_summary(files, _headers(row), row["quantized"])
+
+
+def test_the_safetensors_sample_is_big_enough_to_mean_something():
+    assert len(ST_ROWS) >= 150
+
+
+def test_a_safetensors_summary_we_give_is_the_hubs_exactly():
+    """172 real repositories (files read from huggingface.co): every summary we give equals the Hub's,
+    parameters per dtype and total. What we leave null is not an error."""
+    wrong = [(r["id"], _summary(r), r["real"]) for r in ST_ROWS if _summary(r) is not None and _summary(r) != r["real"]]
+
+    assert wrong == []
+
+
+def test_the_safetensors_rules_still_answer_most_of_what_they_can():
+    """Measured: 147 of 172 are answered (the rest are quantized, hold two sets of weights or are not
+    complete). A floor, so that a rule that stops firing is noticed."""
+    answered = sum(_summary(r) is not None for r in ST_ROWS)
+
+    assert answered >= 140
+
+
+def test_a_quantized_model_is_never_summed_whatever_its_files_say():
+    quantized = [r for r in ST_ROWS if r["quantized"]]
+
+    assert quantized and all(_summary(r) is None for r in quantized)
