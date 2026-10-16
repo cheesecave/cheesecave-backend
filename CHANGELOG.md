@@ -33,7 +33,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `CHEESE_CAVE_<NAME>` first and `KOHAKU_HUB_<NAME>` second. Now the container entrypoint (`docker/startup.py`), the database
   initialisation script of the LakeFS image, the dev and operator scripts, migration 008's `AUTO_MIGRATE`, and the test harness do too,
   and the documentation, `.env.*.example` files and Compose files say `CHEESE_CAVE_*`. The Compose files interpolate the new key
-  first and the old one as the fallback (`${CHEESE_CAVE_X:-${KOHAKU_HUB_X}}`), so **an existing `.env` needs no change**. The image
+  first and the old one as the fallback (`${CHEESE_CAVE_X:-${KOHAKU_HUB_X:-default}}`), so **an existing `.env` needs no change**.
+  The three secrets Compose required (`SESSION_SECRET`, `ADMIN_SECRET_TOKEN`, `DATABASE_KEY`) are now refused by the entrypoint when
+  empty, naming both spellings: a required variable nested inside the fallback fails on Compose 2.40 even when the new key is
+  set, so a missing secret now stops the container at start rather than `docker compose up`. The image
   accepts both pairs of build arguments (`CHEESE_CAVE_GIT_SHA`/`CHEESE_CAVE_BUILD_TIME` and the older `KOHAKU_HUB_*`); `/api/version`
   takes the first non-empty one. At startup the application logs, by name only, the variables that still use the old prefix and any
   set under both. The LakeFS credentials file keeps its old keys (older images and shell scripts read it); both spellings are read.

@@ -145,13 +145,23 @@ def test_a_new_key_wins_over_an_old_one_in_the_same_env_file(tmp_path):
     assert env["CHEESE_CAVE_BASE_URL"] == "https://new.example"
 
 
-@needs_compose
-def test_a_missing_secret_names_both_keys_in_the_error(tmp_path):
-    result = _render(tmp_path, "")
+@pytest.mark.parametrize("compose_file", COMPOSE_FILES)
+def test_no_interpolation_nests_a_required_variable_inside_another(compose_file):
+    # ``${NEW:-${OLD:?msg}}`` fails on Compose 2.40 even when NEW is set: the inner required
+    # variable is evaluated first. Required secrets are checked by the entrypoint instead
+    # (docker/startup.py), so an old .env and a new one both reach the container.
+    text = (ROOT / compose_file).read_text(encoding="utf-8")
+    assert re.findall(r"\$\{[A-Z_]+:-\$\{[A-Z_]+:\?", text) == []
 
-    assert result.returncode != 0
-    assert "CHEESE_CAVE_SESSION_SECRET" in result.stderr
-    assert "KOHAKU_HUB_SESSION_SECRET" in result.stderr
+
+@needs_compose
+@pytest.mark.parametrize("compose_file", COMPOSE_FILES)
+def test_a_missing_secret_still_renders_and_reaches_the_container_empty(tmp_path, compose_file):
+    # The entrypoint refuses to start on an empty secret; Compose does not stop it any more.
+    result = _render(tmp_path, "", compose_file)
+
+    assert result.returncode == 0, result.stderr
+    assert _container_env(result.stdout)["CHEESE_CAVE_SESSION_SECRET"] == ""
 
 
 @needs_compose

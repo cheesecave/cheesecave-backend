@@ -16,7 +16,7 @@ Every setting below is read from `CHEESE_CAVE_<NAME>`. The older `KOHAKU_HUB_<NA
 
 Two things keep their older spelling on purpose: the LakeFS credentials file the containers share (`credentials.env`) is written with `KOHAKU_HUB_LAKEFS_ACCESS_KEY` and `KOHAKU_HUB_LAKEFS_SECRET_KEY`, because older images and shell scripts read it (both spellings are read); and an image build accepts `KOHAKU_HUB_GIT_SHA` and `KOHAKU_HUB_BUILD_TIME` besides the `CHEESE_CAVE_` build arguments.
 
-In Compose, the shipped files read `CHEESE_CAVE_<NAME>` from `.env` first and `KOHAKU_HUB_<NAME>` second, so an existing `.env` needs no change. A Compose override file that sets a `KOHAKU_HUB_<NAME>` variable for a container loses to the `CHEESE_CAVE_<NAME>` the shipped file sets; rename it in the override.
+In Compose, the shipped files read `CHEESE_CAVE_<NAME>` from `.env` first and `KOHAKU_HUB_<NAME>` second, so an existing `.env` needs no change. The three secrets Compose used to require (`SESSION_SECRET`, `ADMIN_SECRET_TOKEN`, `DATABASE_KEY`) are now checked by the container's entrypoint: with neither spelling in `.env` the container exits at start with a message naming both, instead of `docker compose up` failing. A Compose override file that sets a `KOHAKU_HUB_<NAME>` variable for a container loses to the `CHEESE_CAVE_<NAME>` the shipped file sets; rename it in the override.
 
 ## Application Settings
 

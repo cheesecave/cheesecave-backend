@@ -6,7 +6,7 @@ import httpx
 import subprocess
 from pathlib import Path
 
-from kohakuhub.envnames import env_or, has_env
+from kohakuhub.envnames import ENV_PREFIXES, env_or, has_env, read_env
 
 CRED_FILE = Path("/hub-api-creds/credentials.env")
 # Settings are read under CHEESE_CAVE_<NAME> first, then KOHAKU_HUB_<NAME> (kohakuhub.envnames).
@@ -16,6 +16,28 @@ ADMIN_USER = os.getenv("LAKEFS_ADMIN_USER", "admin")
 
 def worker_count() -> int:
     return int(env_or("WORKERS", "4"))
+
+
+REQUIRED_SECRETS = ("SESSION_SECRET", "ADMIN_SECRET_TOKEN", "DATABASE_KEY")
+
+
+def require_secrets() -> None:
+    """Refuse to start with a required secret that is set but empty.
+
+    The shipped Compose files pass ``CHEESE_CAVE_<NAME>``, taken from ``.env`` under either prefix,
+    and an empty value when ``.env`` has neither. Compose used to stop that itself with a required
+    variable, but a required variable nested inside the fallback is evaluated even when the new key
+    is set on Compose 2.40, so the check lives here. Unset (not run through Compose) is left to the
+    application's own warnings.
+    """
+    for name in REQUIRED_SECRETS:
+        if read_env(name) == "":
+            new, old = ENV_PREFIXES
+            print(
+                f"[startup] {new}{name} (or {old}{name}) is empty. "
+                "Set it in .env (generate one with: openssl rand -hex 32)."
+            )
+            sys.exit(1)
 
 
 def lakefs_credentials_in_env() -> bool:
@@ -156,6 +178,7 @@ def run_worker():
 
 
 def main():
+    require_secrets()
     if sys.argv[1:] == ["worker"]:
         run_worker()
         return

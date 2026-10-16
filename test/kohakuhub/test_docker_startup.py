@@ -204,3 +204,52 @@ def test_first_start_sets_lakefs_up_and_keeps_writing_the_old_keys(prefixed, mon
         "KOHAKU_HUB_LAKEFS_ACCESS_KEY=NEW-AK",
         "KOHAKU_HUB_LAKEFS_SECRET_KEY=NEW-SK",
     ]
+
+
+# --- the secrets Compose used to require: now refused by the entrypoint ----------------------------
+
+
+def test_the_start_is_refused_on_an_empty_secret_and_names_both_spellings(prefixed, capsys):
+    module = prefixed()
+    prefixed.environ["CHEESE_CAVE_SESSION_SECRET"] = ""  # what Compose passes when .env has neither key
+
+    with pytest.raises(SystemExit) as stop:
+        module.require_secrets()
+
+    assert stop.value.code == 1
+    out = capsys.readouterr().out
+    assert "CHEESE_CAVE_SESSION_SECRET" in out and "KOHAKU_HUB_SESSION_SECRET" in out
+
+
+@pytest.mark.parametrize("name", ["SESSION_SECRET", "ADMIN_SECRET_TOKEN", "DATABASE_KEY"])
+def test_each_required_secret_is_checked_under_either_prefix(prefixed, name):
+    module = prefixed()
+    prefixed.environ[f"KOHAKU_HUB_{name}"] = ""
+    with pytest.raises(SystemExit):
+        module.require_secrets()
+
+    prefixed.environ[f"KOHAKU_HUB_{name}"] = "set-in-the-old-spelling"
+    module.require_secrets()  # a value under the old name is enough
+
+    prefixed.environ[f"CHEESE_CAVE_{name}"] = ""
+    with pytest.raises(SystemExit):
+        module.require_secrets()  # the new name wins, and it is empty
+
+
+def test_unset_secrets_are_left_to_the_application(prefixed):
+    # Not run through Compose (a bare container, a dev run): the application's own warnings apply.
+    prefixed().require_secrets()
+
+
+def test_the_api_start_checks_the_secrets_first_and_the_worker_does_too(prefixed, monkeypatch):
+    module = prefixed()
+    prefixed.environ["CHEESE_CAVE_ADMIN_SECRET_TOKEN"] = ""
+    monkeypatch.setattr(module.sys, "argv", ["startup.py"])
+    monkeypatch.setattr(module, "wait_for_lakefs", lambda: pytest.fail("started before the check"))
+    with pytest.raises(SystemExit):
+        module.main()
+
+    monkeypatch.setattr(module.sys, "argv", ["startup.py", "worker"])
+    monkeypatch.setattr(module, "run_worker", lambda: pytest.fail("worker started before the check"))
+    with pytest.raises(SystemExit):
+        module.main()
