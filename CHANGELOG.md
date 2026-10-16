@@ -43,6 +43,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`reset`, `merge`, `revert` and `super-squash` answer a revision that is not there, and a merge with nothing to merge, as they should** ([#103](https://github.com/cheesecave/cheesecave-backend/issues/103)).
+  `reset` of a branch LakeFS does not have (or a tag name) was a `500` (its 404 reached a generic handler) that also marked the
+  outcome of a branch that never existed as unknown; it is `404 RevisionNotFound`, and a failure of LakeFS in the middle is
+  the error LakeFS gave, with the outcome marked unknown only then. A `merge` of a source the destination holds already (merged
+  before, an ancestor branch, tag or commit) was a `500` ("update branch main: no changes"); it is a `200` "already up to date"
+  and makes no commit. `revert`, `super-squash` and the availability check answered `404` without `X-Error-Code`, so
+  `huggingface_hub` raised a plain `HfHubHTTPError` where `super_squash_history` documents `RevisionNotFoundError`; they
+  answer `RevisionNotFound` now, with the words they had, and so do a reset or a revert of a commit that is not there.
+
 - **A commit refuses what cannot be what it says, a path has rules, and a revision that is not there is a 404** ([#99](https://github.com/cheesecave/cheesecave-backend/issues/99)).
   A `file` operation whose content is not valid base64 was stored as an empty file (`b64decode` drops what is outside the
   alphabet, so `"!!!"` decoded to nothing) and answered 200; it is a 400 now, and nothing of the commit is stored (line breaks

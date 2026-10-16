@@ -12,12 +12,14 @@ from datetime import datetime, timezone
 from typing import NamedTuple
 
 import httpx
+from fastapi import HTTPException
 from peewee import EXCLUDED, IntegrityError, Value
 
 from kohakuhub import path_commits, usage
 from kohakuhub.api.commit import availability
 from kohakuhub.api.commit.routers.operations import calculate_git_blob_sha1
 from kohakuhub.api.repo.utils import operation_lock
+from kohakuhub.api.repo.utils.hf import revision_not_found_http
 from kohakuhub.config import cfg
 from kohakuhub.db import File, LFSObjectHistory, LfsHeadRef, Repository, User, db
 from kohakuhub.db_operations import create_commit, should_use_lfs
@@ -56,6 +58,14 @@ class OperationRefused(Exception):
     def __init__(self, status: int, detail: dict, rounds=None):
         super().__init__(detail["error"])
         self.status, self.detail, self.rounds = status, detail, rounds or []
+
+    def to_http(self) -> HTTPException:
+        """The HTTP answer: the refusal's status and detail; a ``404`` (a branch that is not there) is ``RevisionNotFound``."""
+        if self.status == 404:
+            error = revision_not_found_http(self.detail["error"])
+            error.detail = self.detail
+            return error
+        return HTTPException(status_code=self.status, detail=self.detail)
 
 
 def refusal(error: httpx.HTTPStatusError) -> str:

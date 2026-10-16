@@ -947,7 +947,7 @@ async def squash_repo(
             whole_repository=True,
         )
     except OperationRefused as e:
-        raise HTTPException(status_code=e.status, detail=e.detail)
+        raise e.to_http() from e
 
     return {
         "success": True,
