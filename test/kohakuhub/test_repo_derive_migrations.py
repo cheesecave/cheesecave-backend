@@ -11,7 +11,7 @@ from types import SimpleNamespace
 import pytest
 from peewee import SqliteDatabase
 
-from kohakuhub.db import Repository, RepositoryCard, RepositoryMetadata, User
+from kohakuhub.db import Repository, RepositoryCard, RepositoryMetadata, User, UserPreference
 from test.kohakuhub.support.db import put_the_old_file_key_back
 
 MIGRATION = Path(__file__).resolve().parents[2] / "scripts/db_migrations/036_repository_derived_info.py"
@@ -27,7 +27,8 @@ def migration(db_dual, monkeypatch):
     backend = "sqlite" if isinstance(db_dual, SqliteDatabase) else "postgres"
     monkeypatch.setattr(module, "db", db_dual)
     monkeypatch.setattr(module, "cfg", SimpleNamespace(app=SimpleNamespace(db_backend=backend)))
-    db_dual.drop_tables([RepositoryCard], safe=True)
+    # the schema before 037 too: with its table present and 036 done, 036 would skip itself as superseded
+    db_dual.drop_tables([RepositoryCard, UserPreference], safe=True)
     db_dual.execute_sql(  # the table as 035 created it
         'CREATE TABLE "repository_card" ("repository_id" INTEGER NOT NULL PRIMARY KEY, "main_sha" VARCHAR(64), '
         '"card" TEXT NOT NULL, "derived" TEXT NOT NULL, '

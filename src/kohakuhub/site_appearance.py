@@ -26,6 +26,9 @@ LEGACY_CREDIT_FIELDS = frozenset(
 )
 Label = Annotated[StrictStr, Field(max_length=100)]
 SafeUrl = Annotated[StrictStr, Field(max_length=2048)]
+# An id the frontend knows how to render; which ids exist is the frontend's business, so an id this release
+# has never heard of is kept and the frontend falls back to its default for it.
+MarkdownStyleId = Annotated[StrictStr, Field(pattern=r"^[a-z0-9-]{1,32}$")]
 Color = Annotated[StrictStr, Field(pattern=r"^#[0-9a-fA-F]{6}$", min_length=7, max_length=7)]
 
 
@@ -115,6 +118,7 @@ class ThemeConfig(AppearanceModel):
     background_dark: Color = "#1c211d"
     card_light: Color = "#fffdf7"
     card_dark: Color = "#282e27"
+    markdown_style: MarkdownStyleId = "github"
 
     @field_validator(
         "primary_light",
