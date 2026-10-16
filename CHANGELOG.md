@@ -43,6 +43,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A commit on a revision that is not a branch is a 404 whatever it holds, a head that cannot be read is no commit id, and a preupload refuses a revision that is nowhere** ([#103](https://github.com/cheesecave/cheesecave-backend/issues/103)).
+  A commit with no operation on a branch that is not there (or on a tag, a commit id, a full ref name) was `200` with the commit
+  id `no-changes`, while the same commit with one operation was `404 RevisionNotFound`; and a LakeFS that failed while the head
+  was read (a connection error, a 500, a 404) was `200` with that made-up id too, even on a branch that is there, which a client
+  keeps in `CommitInfo.oid`. The head that cannot be read is now the error LakeFS gave (`RevisionNotFound`, or a 500 with its
+  words); a commit that changes nothing on a branch that is there is unchanged (`200`, the head). The answer of a commit has the
+  fields of the Hub's schema (`success`, `commitOid`, `commitUrl`, `hookOutput`, `pullRequestUrl`). A preupload on a revision
+  that resolves to no branch, tag or commit is `404 RevisionNotFound` (the client sent the files to the store after it, for
+  nothing); one on a tag or a commit id that is there answers as before (#12).
+
 - **A commit refuses what cannot be what it says, a path has rules, and a revision that is not there is a 404** ([#99](https://github.com/cheesecave/cheesecave-backend/issues/99)).
   A `file` operation whose content is not valid base64 was stored as an empty file (`b64decode` drops what is outside the
   alphabet, so `"!!!"` decoded to nothing) and answered 200; it is a 400 now, and nothing of the commit is stored (line breaks

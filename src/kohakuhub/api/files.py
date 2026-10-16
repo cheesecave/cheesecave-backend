@@ -57,6 +57,7 @@ from kohakuhub.api.repo.utils.hf import (
     repo_info_fields,
     hf_revision_not_found,
     hf_server_error,
+    lakefs_error_to_http,
 )
 
 logger = get_logger("FILE")
@@ -263,6 +264,18 @@ async def preupload(
         if problem:
             return hf_bad_request(problem)
 
+    # A revision that resolves to nothing (no branch, no tag, no commit of that id) is the answer of the commit that follows. Say
+    # it now: the client sends the files themselves to the store after this answer, and would send them for nothing (#103).
+    # A tag or a commit id that is there is answered as it always was (#12): the answer says what to upload, the commit is
+    # what refuses a revision that is not a branch.
+    lakefs_repo = resolve_lakefs_repo(repo_row)
+    try:
+        await resolve_revision(get_lakefs_client(), lakefs_repo, revision, repo_row)
+    except ValueError:
+        return hf_revision_not_found(repo_id, revision)
+    except httpx.HTTPError as error:
+        raise lakefs_error_to_http(error, "Preupload failed", repo_id=repo_id, revision=revision) from error
+
     # Calculate total upload size
     total_upload_bytes = sum(int(f.get("size", 0)) for f in files)
 
@@ -282,8 +295,6 @@ async def preupload(
             },
         )
 
-    # Get LakeFS repository name
-    lakefs_repo = resolve_lakefs_repo(repo_row)
     # Get effective LFS threshold for this repository
     threshold = get_effective_lfs_threshold(repo_row)
 
