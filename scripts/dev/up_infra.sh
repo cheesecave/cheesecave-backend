@@ -33,10 +33,13 @@ fi
 # presigned /resolve/ targets for the pure-client preview (issue #27).
 : "${DEV_MINIO_CORS_ALLOW_ORIGIN:=*}"
 : "${DEV_LAKEFS_ENCRYPT_SECRET_KEY:=dev-lakefs-encrypt-key-32chars}"
-: "${KOHAKU_HUB_S3_BUCKET:=hub-storage}"
-: "${KOHAKU_HUB_S3_REGION:=us-east-1}"
-: "${KOHAKU_HUB_S3_ACCESS_KEY:=${DEV_MINIO_ROOT_USER}}"
-: "${KOHAKU_HUB_S3_SECRET_KEY:=${DEV_MINIO_ROOT_PASSWORD}}"
+# CHEESE_CAVE_<NAME> first, the older KOHAKU_HUB_<NAME> as the fallback.
+# shellcheck disable=SC1091
+source "${ROOT_DIR}/scripts/dev/envnames.sh"
+cheese_cave_default S3_BUCKET hub-storage
+cheese_cave_default S3_REGION us-east-1
+cheese_cave_default S3_ACCESS_KEY "${DEV_MINIO_ROOT_USER}"
+cheese_cave_default S3_SECRET_KEY "${DEV_MINIO_ROOT_PASSWORD}"
 
 container_exists() {
   docker ps -a --format '{{.Names}}' | grep -Fxq "$1"
@@ -175,11 +178,11 @@ ensure_lakefs() {
     -e LAKEFS_DATABASE_LOCAL_PATH=/var/lakefs/data/metadata.db \
     -e LAKEFS_BLOCKSTORE_TYPE=s3 \
     -e "LAKEFS_BLOCKSTORE_S3_ENDPOINT=http://${MINIO_CONTAINER}:9000" \
-    -e "LAKEFS_BLOCKSTORE_S3_BUCKET=${KOHAKU_HUB_S3_BUCKET}" \
+    -e "LAKEFS_BLOCKSTORE_S3_BUCKET=${CHEESE_CAVE_S3_BUCKET}" \
     -e LAKEFS_BLOCKSTORE_S3_FORCE_PATH_STYLE=true \
-    -e "LAKEFS_BLOCKSTORE_S3_CREDENTIALS_ACCESS_KEY_ID=${KOHAKU_HUB_S3_ACCESS_KEY}" \
-    -e "LAKEFS_BLOCKSTORE_S3_CREDENTIALS_SECRET_ACCESS_KEY=${KOHAKU_HUB_S3_SECRET_KEY}" \
-    -e "LAKEFS_BLOCKSTORE_S3_REGION=${KOHAKU_HUB_S3_REGION}" \
+    -e "LAKEFS_BLOCKSTORE_S3_CREDENTIALS_ACCESS_KEY_ID=${CHEESE_CAVE_S3_ACCESS_KEY}" \
+    -e "LAKEFS_BLOCKSTORE_S3_CREDENTIALS_SECRET_ACCESS_KEY=${CHEESE_CAVE_S3_SECRET_KEY}" \
+    -e "LAKEFS_BLOCKSTORE_S3_REGION=${CHEESE_CAVE_S3_REGION}" \
     -e "LAKEFS_AUTH_ENCRYPT_SECRET_KEY=${DEV_LAKEFS_ENCRYPT_SECRET_KEY}" \
     -e LAKEFS_LOGGING_FORMAT=text \
     -e LAKEFS_LISTEN_ADDRESS=0.0.0.0:28000 \

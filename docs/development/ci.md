@@ -34,13 +34,13 @@ Adding or editing this document does not dispatch a run.
 The fast command can also run locally after installing `.[dev]`:
 
 ```sh
-KOHAKU_HUB_DB_BACKEND=sqlite KOHAKU_HUB_DATABASE_URL=sqlite:///:memory: PYTHONPATH=src:. python -m pytest test/kohakuhub -p scripts.ci.select_tests --ci-category fast -q
+CHEESE_CAVE_DB_BACKEND=sqlite CHEESE_CAVE_DATABASE_URL=sqlite:///:memory: PYTHONPATH=src:. python -m pytest test/kohakuhub -p scripts.ci.select_tests --ci-category fast -q
 ```
 
 To inspect selection without executing tests, replace `fast` with any category:
 
 ```sh
-KOHAKU_HUB_DB_BACKEND=sqlite KOHAKU_HUB_DATABASE_URL=sqlite:///:memory: PYTHONPATH=src:. python -m pytest test/kohakuhub -p scripts.ci.select_tests --ci-category fast --collect-only -q
+CHEESE_CAVE_DB_BACKEND=sqlite CHEESE_CAVE_DATABASE_URL=sqlite:///:memory: PYTHONPATH=src:. python -m pytest test/kohakuhub -p scripts.ci.select_tests --ci-category fast --collect-only -q
 ```
 
 Service jobs use `scripts/ci/compose.yml`, not the development or production stack.

@@ -131,7 +131,7 @@ final response is a 404 with `X-Error-Code: RepoNotFound`.
 |---|---|
 | Key | `f"fallback:repo:u={user_id\|anon}:t={tokens_hash\|}:{repo_type}:{namespace}/{name}"` |
 | Value | `{source_url, source_name, source_type, exists, checked_at}` |
-| TTL | `cfg.fallback.cache_ttl_seconds` (env: `KOHAKU_HUB_FALLBACK_CACHE_TTL`, default `300`) |
+| TTL | `cfg.fallback.cache_ttl_seconds` (env: `CHEESE_CAVE_FALLBACK_CACHE_TTL`, default `300`) |
 | Eviction | TTL + LRU at `maxsize` |
 
 `tokens_hash` is `sha256_hex(canonical_json(sorted(merged_tokens.items())))[:16]`,
@@ -216,12 +216,12 @@ Environment variables (overrides `config-example.toml` defaults):
 
 | Variable | Type | Default | Purpose |
 |---|---|---|---|
-| `KOHAKU_HUB_FALLBACK_ENABLED` | bool | `true` | Master switch. |
-| `KOHAKU_HUB_FALLBACK_CACHE_TTL` | int (s) | `300` | Bind-cache TTL. See [#78](https://github.com/deepghs/KohakuHub/issues/78). |
-| `KOHAKU_HUB_FALLBACK_TIMEOUT` | int (s) | `30` | Per-request timeout to upstream sources. |
-| `KOHAKU_HUB_FALLBACK_MAX_CONCURRENT` | int | `5` | Meant as a cap on in-flight upstream requests; **not enforced yet**, see [Known limits](#known-limits). |
-| `KOHAKU_HUB_FALLBACK_REQUIRE_AUTH` | bool | `false` | If true, require an authenticated caller before consulting any fallback source. |
-| `KOHAKU_HUB_FALLBACK_SOURCES` | JSON list | `[]` | Global source list (the admin DB-backed `fallbacksource` table is preferred for non-toy deployments). |
+| `CHEESE_CAVE_FALLBACK_ENABLED` | bool | `true` | Master switch. |
+| `CHEESE_CAVE_FALLBACK_CACHE_TTL` | int (s) | `300` | Bind-cache TTL. See [#78](https://github.com/deepghs/KohakuHub/issues/78). |
+| `CHEESE_CAVE_FALLBACK_TIMEOUT` | int (s) | `30` | Per-request timeout to upstream sources. |
+| `CHEESE_CAVE_FALLBACK_MAX_CONCURRENT` | int | `5` | Meant as a cap on in-flight upstream requests; **not enforced yet**, see [Known limits](#known-limits). |
+| `CHEESE_CAVE_FALLBACK_REQUIRE_AUTH` | bool | `false` | If true, require an authenticated caller before consulting any fallback source. |
+| `CHEESE_CAVE_FALLBACK_SOURCES` | JSON list | `[]` | Global source list (the admin DB-backed `fallbacksource` table is preferred for non-toy deployments). |
 
 Source list is the union of (a) the JSON env var / TOML config and (b)
 the `fallbacksource` DB table managed via the admin API. The DB-backed
@@ -248,7 +248,7 @@ patterns.
 
 ## Known limits
 
-- **`KOHAKU_HUB_FALLBACK_MAX_CONCURRENT` is not enforced.** The setting is read into
+- **`CHEESE_CAVE_FALLBACK_MAX_CONCURRENT` is not enforced.** The setting is read into
   `cfg.fallback.max_concurrent_requests` and documented, but nothing uses it, so upstream
   requests in flight are bounded only by the server's workers and connection limits.
 - An inline `200` answer to a resolve `GET` is read into memory in full (LFS and Xet bytes are

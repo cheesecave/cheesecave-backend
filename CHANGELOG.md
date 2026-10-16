@@ -29,6 +29,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Settings are `CHEESE_CAVE_<NAME>` environment variables everywhere; `KOHAKU_HUB_<NAME>` still works.** The application already read
+  `CHEESE_CAVE_<NAME>` first and `KOHAKU_HUB_<NAME>` second. Now the container entrypoint (`docker/startup.py`), the database
+  initialisation script of the LakeFS image, the dev and operator scripts, migration 008's `AUTO_MIGRATE`, and the test harness do too,
+  and the documentation, `.env.*.example` files and Compose files say `CHEESE_CAVE_*`. The Compose files interpolate the new key
+  first and the old one as the fallback (`${CHEESE_CAVE_X:-${KOHAKU_HUB_X}}`), so **an existing `.env` needs no change**. The image
+  accepts both pairs of build arguments (`CHEESE_CAVE_GIT_SHA`/`CHEESE_CAVE_BUILD_TIME` and the older `KOHAKU_HUB_*`); `/api/version`
+  takes the first non-empty one. At startup the application logs, by name only, the variables that still use the old prefix and any
+  set under both. The LakeFS credentials file keeps its old keys (older images and shell scripts read it); both spellings are read.
+  **Upgrade note:** when both prefixes are set for one setting the new one wins, silently. The shipped `compose.yml` now sets
+  `CHEESE_CAVE_<NAME>` for the container, so a Compose *override* file that sets `KOHAKU_HUB_<NAME>` for the same setting is
+  ignored; rename it there. See `docs/reference/config.md`.
 - **A login session lasts 30 days after its last use, not 7 days from the login.** Using a session renews it (at most about once
   an hour per session) and the cookie is sent again with the new lifetime, so someone who comes back within 30 days is never signed
   out. A new limit, `KOHAKU_HUB_SESSION_ABSOLUTE_DAYS` (default 365, `0` = none), caps a session from the login. Defaults changed:

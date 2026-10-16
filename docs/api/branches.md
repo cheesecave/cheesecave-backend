@@ -58,9 +58,9 @@ disabled while #99 and #107 were fixed (silent data corruption, long hangs and
 outages in real deployments). Each now changes LakeFS metadata only and takes
 about a second, whatever the repository's size.
 
-Each flag stays as an off switch. Set `KOHAKU_HUB_REPOSITORY_REVERT_ENABLED`,
-`KOHAKU_HUB_REPOSITORY_RESET_ENABLED`, or
-`KOHAKU_HUB_REPOSITORY_SQUASH_ENABLED` to `false`, or the matching
+Each flag stays as an off switch. Set `CHEESE_CAVE_REPOSITORY_REVERT_ENABLED`,
+`CHEESE_CAVE_REPOSITORY_RESET_ENABLED`, or
+`CHEESE_CAVE_REPOSITORY_SQUASH_ENABLED` to `false`, or the matching
 `repository_*_enabled` key under `[app]` in `config.toml`.
 
 An operation is available only when:

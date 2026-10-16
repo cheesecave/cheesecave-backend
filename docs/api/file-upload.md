@@ -611,10 +611,10 @@ print(f"Committed: {commit_resp['commitUrl']}")
 
 ```bash
 # When to use multipart (default: 100MB)
-KOHAKU_HUB_LFS_MULTIPART_THRESHOLD_BYTES=104857600
+CHEESE_CAVE_LFS_MULTIPART_THRESHOLD_BYTES=104857600
 
 # Size of each part (default: 50MB, min: 5MB)
-KOHAKU_HUB_LFS_MULTIPART_CHUNK_SIZE_BYTES=52428800
+CHEESE_CAVE_LFS_MULTIPART_CHUNK_SIZE_BYTES=52428800
 ```
 
 **Multipart Flow:**

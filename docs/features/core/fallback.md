@@ -49,12 +49,12 @@ The fallback system allows transparent access to external repositories:
 ### Environment Variables
 
 ```yaml
-KOHAKU_HUB_FALLBACK_ENABLED: true
-KOHAKU_HUB_FALLBACK_CACHE_TTL: 300  # 5 minutes
-KOHAKU_HUB_FALLBACK_TIMEOUT: 10     # Request timeout
-KOHAKU_HUB_FALLBACK_MAX_CONCURRENT: 5
+CHEESE_CAVE_FALLBACK_ENABLED: true
+CHEESE_CAVE_FALLBACK_CACHE_TTL: 300  # 5 minutes
+CHEESE_CAVE_FALLBACK_TIMEOUT: 10     # Request timeout
+CHEESE_CAVE_FALLBACK_MAX_CONCURRENT: 5
 
-KOHAKU_HUB_FALLBACK_SOURCES: |
+CHEESE_CAVE_FALLBACK_SOURCES: |
   [
     {
       "url": "https://huggingface.co",

@@ -163,7 +163,7 @@ performance:
   metadata.
 - `POST /admin/api/cache/metrics/reset` zeros the counters without
   touching cache contents.
-- `KOHAKU_HUB_CACHE_ENABLED=false` disables the cache layer at startup.
+- `CHEESE_CAVE_CACHE_ENABLED=false` disables the cache layer at startup.
   All cache calls then degrade to "miss" silently. CI runs a dedicated job
   with this flag set, so the silent-degradation contract is regression-tested
   on every push.

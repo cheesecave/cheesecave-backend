@@ -11,19 +11,9 @@ try:
 except ModuleNotFoundError:  # pragma: no cover - Python 3.10 fallback
     import tomli as tomllib
 
-# Environment names: CHEESE_CAVE_<NAME> wins, KOHAKU_HUB_<NAME> is the fallback.
-ENV_PREFIXES = ("CHEESE_CAVE_", "KOHAKU_HUB_")
-
-
-def read_env(name: str) -> str | None:
-    """Return the value of CHEESE_CAVE_<name>, else KOHAKU_HUB_<name>, else None.
-
-    An empty value still counts as set, the same as the existing ``in os.environ`` checks.
-    """
-    for prefix in ENV_PREFIXES:
-        if prefix + name in os.environ:
-            return os.environ[prefix + name]
-    return None
+# Environment names: CHEESE_CAVE_<NAME> wins, KOHAKU_HUB_<NAME> is the fallback (see
+# ``kohakuhub.envnames``, which has no import side effects and is shared with the entrypoint).
+from kohakuhub.envnames import ENV_PREFIXES, read_env  # noqa: F401 - re-exported
 
 
 # Default configuration values

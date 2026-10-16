@@ -3,11 +3,21 @@
 from __future__ import annotations
 
 import io
+import os
 from contextlib import contextmanager
 
 import pytest
 
 import kohakuhub.config as hub_config
+
+
+@pytest.fixture(autouse=True)
+def _only_the_old_prefix_is_set_by_these_tests(monkeypatch):
+    """The suite is run with CHEESE_CAVE_* names too; those would win over the KOHAKU_HUB_* values
+    these tests set, so they are cleared for the length of each test."""
+    for name in list(os.environ):
+        if name.startswith("CHEESE_CAVE_"):
+            monkeypatch.delenv(name)
 
 
 @contextmanager

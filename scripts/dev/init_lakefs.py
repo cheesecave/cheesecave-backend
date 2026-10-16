@@ -11,6 +11,8 @@ from pathlib import Path
 
 import httpx
 
+from kohakuhub.envnames import env_or
+
 
 def wait_for_lakefs(endpoint: str, timeout_seconds: int) -> None:
     health_url = f"{endpoint.rstrip('/')}/_health"
@@ -40,6 +42,13 @@ def read_credentials(path: Path) -> dict[str, str]:
         key, value = line.split("=", 1)
         credentials[key] = value
     return credentials
+
+
+def credential(credentials: dict[str, str], name: str) -> str | None:
+    """LAKEFS_<name> from a credentials file, under the new prefix or the old one."""
+    return credentials.get(f"CHEESE_CAVE_LAKEFS_{name}") or credentials.get(
+        f"KOHAKU_HUB_LAKEFS_{name}"
+    )
 
 
 def write_credentials(path: Path, access_key: str, secret_key: str) -> None:
@@ -76,9 +85,8 @@ def initialize_lakefs(
     wait_for_lakefs(endpoint, timeout_seconds)
 
     existing = read_credentials(credentials_file)
-    if existing.get("KOHAKU_HUB_LAKEFS_ACCESS_KEY") and existing.get(
-        "KOHAKU_HUB_LAKEFS_SECRET_KEY"
-    ):
+    # The file is written with the old keys (shell scripts `source` it); one with the new keys counts too.
+    if credential(existing, "ACCESS_KEY") and credential(existing, "SECRET_KEY"):
         print(f"LakeFS credentials already exist: {credentials_file}")
         return 0
 
@@ -114,7 +122,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--endpoint",
-        default=os.environ.get("KOHAKU_HUB_LAKEFS_ENDPOINT", "http://127.0.0.1:28000"),
+        default=env_or("LAKEFS_ENDPOINT", "http://127.0.0.1:28000"),
         help="LakeFS endpoint",
     )
     parser.add_argument(

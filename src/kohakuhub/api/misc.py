@@ -8,7 +8,8 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from kohakuhub.api.utils.accounts import avatar_url
-from kohakuhub.config import cfg, read_env
+from kohakuhub.config import cfg
+from kohakuhub.envnames import read_env_nonempty
 from kohakuhub.repo_card import check_readme
 from kohakuhub.user_preferences import get_preferences
 from kohakuhub.db import User, UserOrganization
@@ -46,11 +47,11 @@ def _checkout_sha(start: Path) -> str | None:
 
 def build_identity(start: Path | None = None) -> dict:
     """Which code this is: set by the image build (``--build-arg
-    KOHAKU_HUB_GIT_SHA=...``), else read from the checkout it runs from."""
+    CHEESE_CAVE_GIT_SHA=...`` or the older ``KOHAKU_HUB_GIT_SHA``), else read from the checkout it runs from."""
     return {
-        "git_sha": read_env("GIT_SHA")
+        "git_sha": read_env_nonempty("GIT_SHA")
         or _checkout_sha(start or Path(__file__).resolve().parent),
-        "build_time": read_env("BUILD_TIME") or None,
+        "build_time": read_env_nonempty("BUILD_TIME"),
     }
 
 

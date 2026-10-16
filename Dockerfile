@@ -19,16 +19,21 @@ COPY ./scripts ./scripts
 COPY ./docker/startup.py /app/startup.py
 RUN chmod +x /app/startup.py
 
-# Which code this image runs, reported by /api/version:
-#   docker compose build --build-arg KOHAKU_HUB_GIT_SHA=$(git rev-parse HEAD) \
-#     --build-arg KOHAKU_HUB_BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+# Which code this image runs, reported by /api/version. Pass CHEESE_CAVE_GIT_SHA and
+# CHEESE_CAVE_BUILD_TIME; the older KOHAKU_HUB_* names still work (build scripts written before
+# the rename pass them). Both pairs are declared and the application takes the first non-empty one:
+#   docker compose build --build-arg CHEESE_CAVE_GIT_SHA=$(git rev-parse HEAD) \
+#     --build-arg CHEESE_CAVE_BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+ARG CHEESE_CAVE_GIT_SHA=
+ARG CHEESE_CAVE_BUILD_TIME=
 ARG KOHAKU_HUB_GIT_SHA=
 ARG KOHAKU_HUB_BUILD_TIME=
-ENV KOHAKU_HUB_GIT_SHA=${KOHAKU_HUB_GIT_SHA} KOHAKU_HUB_BUILD_TIME=${KOHAKU_HUB_BUILD_TIME}
+ENV CHEESE_CAVE_GIT_SHA=${CHEESE_CAVE_GIT_SHA} CHEESE_CAVE_BUILD_TIME=${CHEESE_CAVE_BUILD_TIME} \
+    KOHAKU_HUB_GIT_SHA=${KOHAKU_HUB_GIT_SHA} KOHAKU_HUB_BUILD_TIME=${KOHAKU_HUB_BUILD_TIME}
 
 LABEL org.opencontainers.image.title="CheeseCave Backend" \
       org.opencontainers.image.source="https://github.com/cheesecave/cheesecave-backend" \
-      org.opencontainers.image.revision=${KOHAKU_HUB_GIT_SHA}
+      org.opencontainers.image.revision=${CHEESE_CAVE_GIT_SHA:-${KOHAKU_HUB_GIT_SHA}}
 
 EXPOSE 48888
 CMD ["python", "/app/startup.py"]

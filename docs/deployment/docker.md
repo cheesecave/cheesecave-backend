@@ -55,8 +55,8 @@ CheeseCave/
 
 ```sh
 # Optional build identity; /api/version still uses its compatibility API identifier.
-export KOHAKU_HUB_GIT_SHA="$(git rev-parse HEAD)"
-export KOHAKU_HUB_BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+export CHEESE_CAVE_GIT_SHA="$(git rev-parse HEAD)"
+export CHEESE_CAVE_BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 export CHEESECAVE_WEB_GIT_SHA="$(git -C ../cheesecave-web rev-parse HEAD)"
 export CHEESECAVE_ADMIN_GIT_SHA="$(git -C ../cheesecave-admin rev-parse HEAD)"
 export CHEESECAVE_WEB_GIT_DIRTY=false
@@ -103,7 +103,7 @@ The public gateway keeps `/` for web, `/admin/` for admin, and `/admin/api/`,
 the backend. Cookies and bearer authentication pass through the same origin.
 
 Project/repository names change to CheeseCave. Python imports remain
-`kohakuhub`; `KOHAKU_HUB_*`, `HUB_CONFIG`, database/table names, migration
+`kohakuhub`; `CHEESE_CAVE_*`, `HUB_CONFIG`, database/table names, migration
 numbers, LakeFS repository identifiers and object key prefixes stay compatible.
 Renaming a checkout is not a data migration. Preserve configured credentials
 and historical storage layout during an existing installation's cutover.

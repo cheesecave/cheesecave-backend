@@ -53,7 +53,7 @@ graph TD
     Link --> LakeFS2[LakeFS commit with physical address]
 ```
 
-**Note:** The LFS threshold is configurable via `KOHAKU_HUB_LFS_THRESHOLD_BYTES` (default: 10MB = 10,000,000 bytes). Can also be set per-repository.
+**Note:** The LFS threshold is configurable via `CHEESE_CAVE_LFS_THRESHOLD_BYTES` (default: 10MB = 10,000,000 bytes). Can also be set per-repository.
 
 ### Storage Layout
 
@@ -1189,8 +1189,8 @@ curl -H "Authorization: Bearer |https://huggingface.co,hf_abc123" \
 **Configuration:**
 ```bash
 # Required: Encryption key
-export KOHAKU_HUB_DATABASE_KEY="$(openssl rand -hex 32)"
+export CHEESE_CAVE_DATABASE_KEY="$(openssl rand -hex 32)"
 
 # Optional: Require auth for fallback
-export KOHAKU_HUB_FALLBACK_REQUIRE_AUTH=false  # Default: false
+export CHEESE_CAVE_FALLBACK_REQUIRE_AUTH=false  # Default: false
 ```

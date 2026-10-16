@@ -34,7 +34,7 @@ The admin module is organized into several routers, each handling a specific are
 
 Access to the admin API is protected by a secret token. The token must be provided in the `X-Admin-Token` header of each request. The server verifies the token by comparing SHA3-512 hashes in constant time to prevent timing attacks.
 
-The admin token is configured via the `KOHAKU_HUB_ADMIN_SECRET_TOKEN` environment variable.
+The admin token is configured via the `CHEESE_CAVE_ADMIN_SECRET_TOKEN` environment variable.
 
 ## API Endpoints
 

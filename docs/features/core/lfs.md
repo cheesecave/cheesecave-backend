@@ -25,9 +25,9 @@ Git LFS integration with flexible per-repository settings.
 **Environment variables:**
 
 ```yaml
-KOHAKU_HUB_LFS_THRESHOLD_BYTES: 5000000  # 5MB (decimal: 1MB = 1,000,000)
-KOHAKU_HUB_LFS_KEEP_VERSIONS: 5          # Keep last 5 versions
-KOHAKU_HUB_LFS_AUTO_GC: false            # Keep every version
+CHEESE_CAVE_LFS_THRESHOLD_BYTES: 5000000  # 5MB (decimal: 1MB = 1,000,000)
+CHEESE_CAVE_LFS_KEEP_VERSIONS: 5          # Keep last 5 versions
+CHEESE_CAVE_LFS_AUTO_GC: false            # Keep every version
 ```
 
 **32 default suffix rules** (always use LFS):
@@ -140,7 +140,7 @@ is kept while any of these holds:
 - the head of **any branch** of **any** repository links it (`lfs_head_ref`,
   kept current by commits and branch operations);
 - an active file in any repository has this content;
-- an LFS history row references it. With `KOHAKU_HUB_LFS_AUTO_GC=true`, only
+- an LFS history row references it. With `CHEESE_CAVE_LFS_AUTO_GC=true`, only
   while it is among the newest `keep_versions` unique versions of that
   repository path; with it off (the default) every version is kept.
 
@@ -159,7 +159,7 @@ gone. A commit that links collected content is refused with `409` and the
 client uploads it again.
 
 ```yaml
-KOHAKU_HUB_LFS_AUTO_GC: true  # Collect versions beyond keep_versions
+CHEESE_CAVE_LFS_AUTO_GC: true  # Collect versions beyond keep_versions
 ```
 
 **Upgrading an existing site.** Earlier versions did not record what branch
@@ -177,7 +177,7 @@ and collection waits for it.
 **Upgrading to the version with one commit at a time per branch.** Before it, two commits to
 one branch at the same time could leave files without rows and without links (a commit
 committed the other's staged files, and the other's rows were undone). The collection deleted
-the objects of such files a day after the upload, whatever `KOHAKU_HUB_LFS_AUTO_GC` says. The
+the objects of such files a day after the upload, whatever `CHEESE_CAVE_LFS_AUTO_GC` says. The
 upgrade (migration 034) makes the next reconciliation due, and uploads stay protected until it
 has run: the hourly expiry of uploads queues it and waits, so objects still stored are linked
 before anything is collected. Objects already deleted cannot come back. The reconciliation
@@ -222,7 +222,7 @@ uploading the same content again is a normal upload and revives the object.
 - Check `git lfs env`: the endpoint is the clone URL plus `/info/lfs` (repositories carry no `.lfsconfig`)
 
 **Storage growing:**
-- Old LFS versions are kept unless `KOHAKU_HUB_LFS_AUTO_GC` is on
+- Old LFS versions are kept unless `CHEESE_CAVE_LFS_AUTO_GC` is on
 - Check keep_versions setting
 - Check the `storage.collect_lfs` tasks on the admin **Tasks** page
 

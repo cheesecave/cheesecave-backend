@@ -31,19 +31,19 @@ Storage limits for users, organizations, and repositories.
 
 ```yaml
 # Environment variables
-KOHAKU_HUB_DEFAULT_USER_PUBLIC_QUOTA_BYTES: null     # Unlimited
-KOHAKU_HUB_DEFAULT_USER_PRIVATE_QUOTA_BYTES: null    # Unlimited
-KOHAKU_HUB_DEFAULT_ORG_PUBLIC_QUOTA_BYTES: null      # Unlimited
-KOHAKU_HUB_DEFAULT_ORG_PRIVATE_QUOTA_BYTES: null     # Unlimited
+CHEESE_CAVE_DEFAULT_USER_PUBLIC_QUOTA_BYTES: null     # Unlimited
+CHEESE_CAVE_DEFAULT_USER_PRIVATE_QUOTA_BYTES: null    # Unlimited
+CHEESE_CAVE_DEFAULT_ORG_PUBLIC_QUOTA_BYTES: null      # Unlimited
+CHEESE_CAVE_DEFAULT_ORG_PRIVATE_QUOTA_BYTES: null     # Unlimited
 ```
 
 **Example with limits:**
 
 ```yaml
-KOHAKU_HUB_DEFAULT_USER_PUBLIC_QUOTA_BYTES: 10737418240   # 10GB
-KOHAKU_HUB_DEFAULT_USER_PRIVATE_QUOTA_BYTES: 5368709120   # 5GB
-KOHAKU_HUB_DEFAULT_ORG_PUBLIC_QUOTA_BYTES: 107374182400   # 100GB
-KOHAKU_HUB_DEFAULT_ORG_PRIVATE_QUOTA_BYTES: 53687091200   # 50GB
+CHEESE_CAVE_DEFAULT_USER_PUBLIC_QUOTA_BYTES: 10737418240   # 10GB
+CHEESE_CAVE_DEFAULT_USER_PRIVATE_QUOTA_BYTES: 5368709120   # 5GB
+CHEESE_CAVE_DEFAULT_ORG_PUBLIC_QUOTA_BYTES: 107374182400   # 100GB
+CHEESE_CAVE_DEFAULT_ORG_PRIVATE_QUOTA_BYTES: 53687091200   # 50GB
 ```
 
 ### Per-User Quotas
@@ -177,7 +177,7 @@ curl -X POST http://localhost:28080/api/quota/repo/model/username/repo/recalcula
 The recount runs on a background worker (`khub-worker`); the card warns
 when none is online, since recounts then wait in the queue.
 
-`KOHAKU_HUB_USAGE_RECOUNT_INTERVAL_HOURS` repeats the site-wide recount
+`CHEESE_CAVE_USAGE_RECOUNT_INTERVAL_HOURS` repeats the site-wide recount
 periodically as a safety net (off by default).
 
 ### View Storage Breakdown

@@ -37,106 +37,106 @@ services:
     environment: &hub-env
       ## ===== CRITICAL: Endpoint Configuration (MUST CHANGE) =====
       ## These determine how users access your KohakuHub instance
-      - KOHAKU_HUB_BASE_URL=${KOHAKU_HUB_BASE_URL:-http://127.0.0.1:28080} # Change to your public URL (e.g., https://hub.example.com)
-      - KOHAKU_HUB_S3_PUBLIC_ENDPOINT=${KOHAKU_HUB_S3_PUBLIC_ENDPOINT:-http://127.0.0.1:29001} # Change to your S3 public URL
+      - CHEESE_CAVE_BASE_URL=${CHEESE_CAVE_BASE_URL:-${KOHAKU_HUB_BASE_URL:-http://127.0.0.1:28080}} # Change to your public URL (e.g., https://hub.example.com)
+      - CHEESE_CAVE_S3_PUBLIC_ENDPOINT=${CHEESE_CAVE_S3_PUBLIC_ENDPOINT:-${KOHAKU_HUB_S3_PUBLIC_ENDPOINT:-http://127.0.0.1:29001}} # Change to your S3 public URL
 
       ## ===== CRITICAL: Security Configuration (MUST CHANGE) =====
-      - KOHAKU_HUB_SESSION_SECRET=${KOHAKU_HUB_SESSION_SECRET:?Set KOHAKU_HUB_SESSION_SECRET in .env}
-      - KOHAKU_HUB_ADMIN_SECRET_TOKEN=${KOHAKU_HUB_ADMIN_SECRET_TOKEN:?Set KOHAKU_HUB_ADMIN_SECRET_TOKEN in .env}
-      - KOHAKU_HUB_DATABASE_KEY=${KOHAKU_HUB_DATABASE_KEY:?Set KOHAKU_HUB_DATABASE_KEY in .env} # For external tokens (generate with: openssl rand -hex 32)
+      - CHEESE_CAVE_SESSION_SECRET=${CHEESE_CAVE_SESSION_SECRET:-${KOHAKU_HUB_SESSION_SECRET:?Set CHEESE_CAVE_SESSION_SECRET (or KOHAKU_HUB_SESSION_SECRET) in .env}}
+      - CHEESE_CAVE_ADMIN_SECRET_TOKEN=${CHEESE_CAVE_ADMIN_SECRET_TOKEN:-${KOHAKU_HUB_ADMIN_SECRET_TOKEN:?Set CHEESE_CAVE_ADMIN_SECRET_TOKEN (or KOHAKU_HUB_ADMIN_SECRET_TOKEN) in .env}}
+      - CHEESE_CAVE_DATABASE_KEY=${CHEESE_CAVE_DATABASE_KEY:-${KOHAKU_HUB_DATABASE_KEY:?Set CHEESE_CAVE_DATABASE_KEY (or KOHAKU_HUB_DATABASE_KEY) in .env}} # For external tokens (generate with: openssl rand -hex 32)
 
       ## ===== Performance Configuration =====  
-      - KOHAKU_HUB_WORKERS=4 # Number of worker processes (1-8, recommend: CPU cores)
+      - CHEESE_CAVE_WORKERS=4 # Number of worker processes (1-8, recommend: CPU cores)
 
       ## ===== Database Configuration =====
-      - KOHAKU_HUB_DB_BACKEND=postgres
-      - KOHAKU_HUB_DATABASE_URL=postgresql://${POSTGRES_USER:-hub}:${POSTGRES_PASSWORD:-change-me}@postgres:5432/kohakuhub
-      - KOHAKU_HUB_AUTO_MIGRATE=true # Auto-confirm database migrations (required for Docker)
+      - CHEESE_CAVE_DB_BACKEND=postgres
+      - CHEESE_CAVE_DATABASE_URL=postgresql://${POSTGRES_USER:-hub}:${POSTGRES_PASSWORD:-change-me}@postgres:5432/kohakuhub
+      - CHEESE_CAVE_AUTO_MIGRATE=true # Auto-confirm database migrations (required for Docker)
 
       ## ===== S3 Storage Configuration =====
-      - KOHAKU_HUB_S3_ENDPOINT=http://minio:9000
-      - KOHAKU_HUB_S3_ACCESS_KEY=${MINIO_ROOT_USER:-minioadmin}
-      - KOHAKU_HUB_S3_SECRET_KEY=${MINIO_ROOT_PASSWORD:-minioadmin}
-      - KOHAKU_HUB_S3_BUCKET=hub-storage
-      - KOHAKU_HUB_S3_REGION=us-east-1  # S3 region (us-east-1 for MinIO, auto for R2, or specific AWS region)
-      # - KOHAKU_HUB_S3_SIGNATURE_VERSION=s3v4  # Set for R2/AWS S3; MinIO works with or without it (the public endpoint above is what presigned URLs are signed for)
+      - CHEESE_CAVE_S3_ENDPOINT=http://minio:9000
+      - CHEESE_CAVE_S3_ACCESS_KEY=${MINIO_ROOT_USER:-minioadmin}
+      - CHEESE_CAVE_S3_SECRET_KEY=${MINIO_ROOT_PASSWORD:-minioadmin}
+      - CHEESE_CAVE_S3_BUCKET=hub-storage
+      - CHEESE_CAVE_S3_REGION=us-east-1  # S3 region (us-east-1 for MinIO, auto for R2, or specific AWS region)
+      # - CHEESE_CAVE_S3_SIGNATURE_VERSION=s3v4  # Set for R2/AWS S3; MinIO works with or without it (the public endpoint above is what presigned URLs are signed for)
 
       ## ===== LakeFS Configuration =====
-      - KOHAKU_HUB_LAKEFS_ENDPOINT=http://lakefs:28000
-      - KOHAKU_HUB_LAKEFS_REPO_NAMESPACE=hf
+      - CHEESE_CAVE_LAKEFS_ENDPOINT=http://lakefs:28000
+      - CHEESE_CAVE_LAKEFS_REPO_NAMESPACE=hf
       # LakeFS credentials auto-generated on first start
 
       ## ===== Application Configuration =====
-      - KOHAKU_HUB_SITE_NAME=${KOHAKU_HUB_SITE_NAME:-CheeseCave}
-      - KOHAKU_HUB_LFS_THRESHOLD_BYTES=1000000
-      - KOHAKU_HUB_LFS_MULTIPART_THRESHOLD_BYTES=100_000_000 # 100MB - use multipart for files larger than this
-      - KOHAKU_HUB_LFS_MULTIPART_CHUNK_SIZE_BYTES=50_000_000 # 50MB - size of each part (min 5MB except last)
-      - KOHAKU_HUB_LFS_KEEP_VERSIONS=5
-      - KOHAKU_HUB_LFS_AUTO_GC=true
+      - CHEESE_CAVE_SITE_NAME=${CHEESE_CAVE_SITE_NAME:-${KOHAKU_HUB_SITE_NAME:-CheeseCave}}
+      - CHEESE_CAVE_LFS_THRESHOLD_BYTES=1000000
+      - CHEESE_CAVE_LFS_MULTIPART_THRESHOLD_BYTES=100_000_000 # 100MB - use multipart for files larger than this
+      - CHEESE_CAVE_LFS_MULTIPART_CHUNK_SIZE_BYTES=50_000_000 # 50MB - size of each part (min 5MB except last)
+      - CHEESE_CAVE_LFS_KEEP_VERSIONS=5
+      - CHEESE_CAVE_LFS_AUTO_GC=true
 
       ## ===== Auth & SMTP Configuration =====
-      - KOHAKU_HUB_REQUIRE_EMAIL_VERIFICATION=false
-      - KOHAKU_HUB_INVITATION_ONLY=false # Set to true to require invitation for registration
-      - KOHAKU_HUB_SESSION_EXPIRE_HOURS=720 # 30 days after the last use; using a session renews it
-      - KOHAKU_HUB_SESSION_ABSOLUTE_DAYS=365 # but no session outlives this, counted from the login (0 = no limit)
-      - KOHAKU_HUB_TOKEN_EXPIRE_DAYS=365
-      - KOHAKU_HUB_ADMIN_ENABLED=true
+      - CHEESE_CAVE_REQUIRE_EMAIL_VERIFICATION=false
+      - CHEESE_CAVE_INVITATION_ONLY=false # Set to true to require invitation for registration
+      - CHEESE_CAVE_SESSION_EXPIRE_HOURS=720 # 30 days after the last use; using a session renews it
+      - CHEESE_CAVE_SESSION_ABSOLUTE_DAYS=365 # but no session outlives this, counted from the login (0 = no limit)
+      - CHEESE_CAVE_TOKEN_EXPIRE_DAYS=365
+      - CHEESE_CAVE_ADMIN_ENABLED=true
       # SMTP (Optional - for email verification)
-      - KOHAKU_HUB_SMTP_ENABLED=false
-      - KOHAKU_HUB_SMTP_HOST=smtp.gmail.com
-      - KOHAKU_HUB_SMTP_PORT=587
-      - KOHAKU_HUB_SMTP_USERNAME=
-      - KOHAKU_HUB_SMTP_PASSWORD=
-      - KOHAKU_HUB_SMTP_FROM=noreply@kohakuhub.local
-      - KOHAKU_HUB_SMTP_TLS=true
+      - CHEESE_CAVE_SMTP_ENABLED=false
+      - CHEESE_CAVE_SMTP_HOST=smtp.gmail.com
+      - CHEESE_CAVE_SMTP_PORT=587
+      - CHEESE_CAVE_SMTP_USERNAME=
+      - CHEESE_CAVE_SMTP_PASSWORD=
+      - CHEESE_CAVE_SMTP_FROM=noreply@kohakuhub.local
+      - CHEESE_CAVE_SMTP_TLS=true
 
       ## ===== Storage Quota Configuration (Optional) =====
-      - KOHAKU_HUB_DEFAULT_USER_PRIVATE_QUOTA_BYTES=10_000_000
-      - KOHAKU_HUB_DEFAULT_USER_PUBLIC_QUOTA_BYTES=100_000_000
-      - KOHAKU_HUB_DEFAULT_ORG_PRIVATE_QUOTA_BYTES=10_000_000
-      - KOHAKU_HUB_DEFAULT_ORG_PUBLIC_QUOTA_BYTES=100_000_000
+      - CHEESE_CAVE_DEFAULT_USER_PRIVATE_QUOTA_BYTES=10_000_000
+      - CHEESE_CAVE_DEFAULT_USER_PUBLIC_QUOTA_BYTES=100_000_000
+      - CHEESE_CAVE_DEFAULT_ORG_PRIVATE_QUOTA_BYTES=10_000_000
+      - CHEESE_CAVE_DEFAULT_ORG_PUBLIC_QUOTA_BYTES=100_000_000
 
       ## ===== Fallback Configuration (Optional) =====
-      # - KOHAKU_HUB_FALLBACK_ENABLED=true
-      # - KOHAKU_HUB_FALLBACK_REQUIRE_AUTH=false # Set true to require authentication for fallback access
-      # - KOHAKU_HUB_FALLBACK_SOURCES=[{"url":"https://huggingface.co","name":"HuggingFace","source_type":"huggingface","priority":1}]
+      # - CHEESE_CAVE_FALLBACK_ENABLED=true
+      # - CHEESE_CAVE_FALLBACK_REQUIRE_AUTH=false # Set true to require authentication for fallback access
+      # - CHEESE_CAVE_FALLBACK_SOURCES=[{"url":"https://huggingface.co","name":"HuggingFace","source_type":"huggingface","priority":1}]
 
       ## ===== L2 Cache (Valkey) =====
       # See docs/development/cache.md for the design (multi-tier, write-through
       # invalidation, boot-time flush of mutable namespaces).
-      - KOHAKU_HUB_CACHE_ENABLED=true
-      - KOHAKU_HUB_CACHE_URL=redis://valkey:6379/0
-      # - KOHAKU_HUB_CACHE_NAMESPACE=kh # Override if multiple deployments share Valkey
+      - CHEESE_CAVE_CACHE_ENABLED=true
+      - CHEESE_CAVE_CACHE_URL=redis://valkey:6379/0
+      # - CHEESE_CAVE_CACHE_NAMESPACE=kh # Override if multiple deployments share Valkey
 
       ## ===== Background Task Worker (khub-worker) =====
-      # - KOHAKU_HUB_WORKER_CONCURRENCY=4 # Tasks run at once per worker
-      # - KOHAKU_HUB_WORKER_SUCCEEDED_RETENTION_DAYS=7
-      # - KOHAKU_HUB_WORKER_FAILED_RETENTION_DAYS=30
+      # - CHEESE_CAVE_WORKER_CONCURRENCY=4 # Tasks run at once per worker
+      # - CHEESE_CAVE_WORKER_SUCCEEDED_RETENTION_DAYS=7
+      # - CHEESE_CAVE_WORKER_FAILED_RETENTION_DAYS=30
 
       ## ===== Repository History Operations =====
       # Revert, Reset and Super Squash are enabled by default (db_backend=postgres
       # only; Reset needs LakeFS >= 1.48.1). Uncomment to switch one off.
       # See docs/api/branches.md and docs/deployment/lakefs.md.
-      # - KOHAKU_HUB_REPOSITORY_REVERT_ENABLED=false
-      # - KOHAKU_HUB_REPOSITORY_RESET_ENABLED=false
-      # - KOHAKU_HUB_REPOSITORY_SQUASH_ENABLED=false
+      # - CHEESE_CAVE_REPOSITORY_REVERT_ENABLED=false
+      # - CHEESE_CAVE_REPOSITORY_RESET_ENABLED=false
+      # - CHEESE_CAVE_REPOSITORY_SQUASH_ENABLED=false
     volumes:
       - ./hub-meta/hub-api:/hub-api-creds
 
   # Runs durable background tasks (see kohakuhub.tasks). Same image as hub-api;
   # hub-api runs migrations and writes the LakeFS credentials it reads.
   # Replicas share the queue safely, so pick how many to run at startup:
-  #   KOHAKU_HUB_WORKER_REPLICAS=3 docker compose up -d
+  #   CHEESE_CAVE_WORKER_REPLICAS=3 docker compose up -d
   #   docker compose up -d --scale khub-worker=3
   # No container_name: Docker needs a unique name per replica
   # (<project>-khub-worker-1, -2, ...); use `docker compose logs khub-worker`.
   khub-worker:
     image: ${CHEESECAVE_BACKEND_IMAGE:-ghcr.io/cheesecave/cheesecave-backend:${CHEESECAVE_VERSION:-latest}}
     deploy:
-      replicas: ${KOHAKU_HUB_WORKER_REPLICAS:-1}
+      replicas: ${CHEESE_CAVE_WORKER_REPLICAS:-${KOHAKU_HUB_WORKER_REPLICAS:-1}}
     restart: always
     command: ["python", "/app/startup.py", "worker"]
-    stop_grace_period: 45s # > KOHAKU_HUB_WORKER_SHUTDOWN_GRACE_SECONDS (30) so tasks can drain
+    stop_grace_period: 45s # > CHEESE_CAVE_WORKER_SHUTDOWN_GRACE_SECONDS (30) so tasks can drain
     depends_on:
       - hub-api
     environment: *hub-env

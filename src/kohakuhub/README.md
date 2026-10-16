@@ -397,119 +397,119 @@ Configuration is managed via `config.toml` and can be overridden by environment 
 # --- Application Settings
 # -------------------------------------
 # Base URL of the application (e.g., https://hub.example.com)
-KOHAKU_HUB_BASE_URL=http://localhost:48888
+CHEESE_CAVE_BASE_URL=http://localhost:48888
 # API base path
-KOHAKU_HUB_API_BASE=/api
+CHEESE_CAVE_API_BASE=/api
 # Site name displayed in the UI
-KOHAKU_HUB_SITE_NAME=KohakuHub
+CHEESE_CAVE_SITE_NAME=KohakuHub
 # Log request/response payloads for debugging (can expose sensitive data)
-KOHAKU_HUB_DEBUG_LOG_PAYLOADS=false
+CHEESE_CAVE_DEBUG_LOG_PAYLOADS=false
 
 # -------------------------------------
 # --- S3 Storage Settings
 # -------------------------------------
 # Public-facing S3 endpoint (for client downloads, can be a CDN)
-KOHAKU_HUB_S3_PUBLIC_ENDPOINT=http://localhost:9000
+CHEESE_CAVE_S3_PUBLIC_ENDPOINT=http://localhost:9000
 # Internal S3 endpoint for the application
-KOHAKU_HUB_S3_ENDPOINT=http://localhost:9000
-KOHAKU_HUB_S3_ACCESS_KEY=test-access-key
-KOHAKU_HUB_S3_SECRET_KEY=test-secret-key
-KOHAKU_HUB_S3_BUCKET=test-bucket
+CHEESE_CAVE_S3_ENDPOINT=http://localhost:9000
+CHEESE_CAVE_S3_ACCESS_KEY=test-access-key
+CHEESE_CAVE_S3_SECRET_KEY=test-secret-key
+CHEESE_CAVE_S3_BUCKET=test-bucket
 # S3 region (e.g., us-east-1)
-KOHAKU_HUB_S3_REGION=us-east-1
+CHEESE_CAVE_S3_REGION=us-east-1
 # S3 signature version (e.g., s3v4 for AWS S3/R2)
-KOHAKU_HUB_S3_SIGNATURE_VERSION=
+CHEESE_CAVE_S3_SIGNATURE_VERSION=
 
 # -------------------------------------
 # --- LakeFS Settings
 # -------------------------------------
-KOHAKU_HUB_LAKEFS_ENDPOINT=http://localhost:8000
-KOHAKU_HUB_LAKEFS_ACCESS_KEY=test-access-key
-KOHAKU_HUB_LAKEFS_SECRET_KEY=test-secret-key
+CHEESE_CAVE_LAKEFS_ENDPOINT=http://localhost:8000
+CHEESE_CAVE_LAKEFS_ACCESS_KEY=test-access-key
+CHEESE_CAVE_LAKEFS_SECRET_KEY=test-secret-key
 # Default namespace for repositories in LakeFS
-KOHAKU_HUB_LAKEFS_REPO_NAMESPACE=hf
+CHEESE_CAVE_LAKEFS_REPO_NAMESPACE=hf
 
 # -------------------------------------
 # --- Database Settings
 # -------------------------------------
 # "sqlite" or "postgres"
-KOHAKU_HUB_DB_BACKEND=sqlite
+CHEESE_CAVE_DB_BACKEND=sqlite
 # Connection URL (e.g., "sqlite:///./hub.db" or "postgresql://user:pass@host:port/dbname")
-KOHAKU_HUB_DATABASE_URL=sqlite:///./hub.db
+CHEESE_CAVE_DATABASE_URL=sqlite:///./hub.db
 
 # -------------------------------------
 # --- Git LFS Settings
 # -------------------------------------
 # File size threshold to trigger LFS (bytes)
-KOHAKU_HUB_LFS_THRESHOLD_BYTES=5242880 # 5MB
+CHEESE_CAVE_LFS_THRESHOLD_BYTES=5242880 # 5MB
 # Threshold for using multipart uploads for LFS (bytes)
-KOHAKU_HUB_LFS_MULTIPART_THRESHOLD_BYTES=104857600 # 100MB
+CHEESE_CAVE_LFS_MULTIPART_THRESHOLD_BYTES=104857600 # 100MB
 # Chunk size for LFS multipart uploads (bytes)
-KOHAKU_HUB_LFS_MULTIPART_CHUNK_SIZE_BYTES=52428800 # 50MB
+CHEESE_CAVE_LFS_MULTIPART_CHUNK_SIZE_BYTES=52428800 # 50MB
 # Number of LFS file versions to keep during garbage collection
-KOHAKU_HUB_LFS_KEEP_VERSIONS=5
+CHEESE_CAVE_LFS_KEEP_VERSIONS=5
 # Automatically run garbage collection on commits
-KOHAKU_HUB_LFS_AUTO_GC=false
+CHEESE_CAVE_LFS_AUTO_GC=false
 
 # -------------------------------------
 # --- Authentication & Session Settings
 # -------------------------------------
 # Require email verification for new users
-KOHAKU_HUB_REQUIRE_EMAIL_VERIFICATION=false
+CHEESE_CAVE_REQUIRE_EMAIL_VERIFICATION=false
 # Disable public registration, require invitation
-KOHAKU_HUB_INVITATION_ONLY=false
+CHEESE_CAVE_INVITATION_ONLY=false
 # Secret key for session management (CHANGE IN PRODUCTION)
-KOHAKU_HUB_SESSION_SECRET=change-me-in-production
+CHEESE_CAVE_SESSION_SECRET=change-me-in-production
 # Session lifetime after its last use (hours); using a session renews it
-KOHAKU_HUB_SESSION_EXPIRE_HOURS=720 # 30 days
+CHEESE_CAVE_SESSION_EXPIRE_HOURS=720 # 30 days
 # The longest a session lives from the login (days); 0 = no limit
-KOHAKU_HUB_SESSION_ABSOLUTE_DAYS=365
+CHEESE_CAVE_SESSION_ABSOLUTE_DAYS=365
 # API token expiration (days)
-KOHAKU_HUB_TOKEN_EXPIRE_DAYS=365
+CHEESE_CAVE_TOKEN_EXPIRE_DAYS=365
 
 # -------------------------------------
 # --- Admin API Settings
 # -------------------------------------
-KOHAKU_HUB_ADMIN_ENABLED=true
+CHEESE_CAVE_ADMIN_ENABLED=true
 # Secret token for accessing the admin API (CHANGE IN PRODUCTION)
-KOHAKU_HUB_ADMIN_SECRET_TOKEN=change-me-in-production
+CHEESE_CAVE_ADMIN_SECRET_TOKEN=change-me-in-production
 
 # -------------------------------------
 # --- Storage Quota Settings
 # -------------------------------------
 # Default private repo quota for users (bytes, blank for unlimited)
-KOHAKU_HUB_DEFAULT_USER_PRIVATE_QUOTA_BYTES=
+CHEESE_CAVE_DEFAULT_USER_PRIVATE_QUOTA_BYTES=
 # Default public repo quota for users (bytes, blank for unlimited)
-KOHAKU_HUB_DEFAULT_USER_PUBLIC_QUOTA_BYTES=
+CHEESE_CAVE_DEFAULT_USER_PUBLIC_QUOTA_BYTES=
 # Default private repo quota for organizations (bytes, blank for unlimited)
-KOHAKU_HUB_DEFAULT_ORG_PRIVATE_QUOTA_BYTES=
+CHEESE_CAVE_DEFAULT_ORG_PRIVATE_QUOTA_BYTES=
 # Default public repo quota for organizations (bytes, blank for unlimited)
-KOHAKU_HUB_DEFAULT_ORG_PUBLIC_QUOTA_BYTES=
+CHEESE_CAVE_DEFAULT_ORG_PUBLIC_QUOTA_BYTES=
 
 # -------------------------------------
 # --- Fallback Source Settings
 # -------------------------------------
 # Enable fallback to external sources (e.g., HuggingFace)
-KOHAKU_HUB_FALLBACK_ENABLED=true
+CHEESE_CAVE_FALLBACK_ENABLED=true
 # Cache TTL for fallback repo mappings (seconds)
-KOHAKU_HUB_FALLBACK_CACHE_TTL=300
+CHEESE_CAVE_FALLBACK_CACHE_TTL=300
 # HTTP request timeout for external sources (seconds)
-KOHAKU_HUB_FALLBACK_TIMEOUT=10
+CHEESE_CAVE_FALLBACK_TIMEOUT=10
 # Max concurrent requests to external sources
-KOHAKU_HUB_FALLBACK_MAX_CONCURRENT=5
+CHEESE_CAVE_FALLBACK_MAX_CONCURRENT=5
 # JSON list of global fallback sources
-KOHAKU_HUB_FALLBACK_SOURCES='[]'
+CHEESE_CAVE_FALLBACK_SOURCES='[]'
 
 # -------------------------------------
 # --- SMTP (Email) Settings
 # -------------------------------------
-KOHAKU_HUB_SMTP_ENABLED=false
-KOHAKU_HUB_SMTP_HOST=localhost
-KOHAKU_HUB_SMTP_PORT=587
-KOHAKU_HUB_SMTP_USERNAME=
-KOHAKU_HUB_SMTP_PASSWORD=
-KOHAKU_HUB_SMTP_FROM=noreply@localhost
-KOHAKU_HUB_SMTP_TLS=true
+CHEESE_CAVE_SMTP_ENABLED=false
+CHEESE_CAVE_SMTP_HOST=localhost
+CHEESE_CAVE_SMTP_PORT=587
+CHEESE_CAVE_SMTP_USERNAME=
+CHEESE_CAVE_SMTP_PASSWORD=
+CHEESE_CAVE_SMTP_FROM=noreply@localhost
+CHEESE_CAVE_SMTP_TLS=true
 ```
 
 **Scaling Considerations:**
@@ -524,7 +524,7 @@ KOHAKU_HUB_SMTP_TLS=true
 **Production Requirements:**
 - [ ] Change all default passwords and secrets
 - [ ] Use HTTPS with valid TLS certificates
-- [ ] Set secure `KOHAKU_HUB_SESSION_SECRET` (32+ bytes)
+- [ ] Set secure `CHEESE_CAVE_SESSION_SECRET` (32+ bytes)
 - [ ] Set secure `LAKEFS_AUTH_ENCRYPT_SECRET_KEY`
 - [ ] Only expose port 28080 (nginx), not individual services
 - [ ] Enable email verification if allowing public registration

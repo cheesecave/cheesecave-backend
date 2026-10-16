@@ -53,8 +53,8 @@ The admin portal requires a secret token configured in your environment:
 ```yaml
 # docker-compose.yml
 environment:
-  KOHAKU_HUB_ADMIN_ENABLED: "true"
-  KOHAKU_HUB_ADMIN_SECRET_TOKEN: "your-secret-token-here"  # CHANGE THIS!
+  CHEESE_CAVE_ADMIN_ENABLED: "true"
+  CHEESE_CAVE_ADMIN_SECRET_TOKEN: "your-secret-token-here"  # CHANGE THIS!
 ```
 
 **Security:**
@@ -78,7 +78,7 @@ openssl rand -hex 32
 # Output: a1b2c3d4e5f6...
 
 # Add to docker-compose.yml
-KOHAKU_HUB_ADMIN_SECRET_TOKEN: "a1b2c3d4e5f6..."
+CHEESE_CAVE_ADMIN_SECRET_TOKEN: "a1b2c3d4e5f6..."
 
 # Restart
 docker-compose up -d
@@ -791,7 +791,7 @@ DELETE /admin/api/invitations/{token}      # Delete invitation
 NEW_TOKEN=$(openssl rand -hex 32)
 
 # 2. Update docker-compose.yml
-KOHAKU_HUB_ADMIN_SECRET_TOKEN: "$NEW_TOKEN"
+CHEESE_CAVE_ADMIN_SECRET_TOKEN: "$NEW_TOKEN"
 
 # 3. Restart services
 docker-compose up -d
@@ -924,12 +924,12 @@ docker logs khub-hub-api | grep "\[ADMIN\]"
 ### Can't Login
 
 **Problem:** Invalid admin token
-**Solution:** Check `KOHAKU_HUB_ADMIN_SECRET_TOKEN` in docker-compose.yml matches your input
+**Solution:** Check `CHEESE_CAVE_ADMIN_SECRET_TOKEN` in docker-compose.yml matches your input
 
 ---
 
 **Problem:** "Admin API is disabled"
-**Solution:** Set `KOHAKU_HUB_ADMIN_ENABLED=true` in environment
+**Solution:** Set `CHEESE_CAVE_ADMIN_ENABLED=true` in environment
 
 ---
 
@@ -1161,7 +1161,7 @@ Admin operations run synchronous queries with `db.atomic()`:
 ## Frequently Asked Questions
 
 **Q: Can I disable the admin portal?**
-A: Yes, set `KOHAKU_HUB_ADMIN_ENABLED=false`
+A: Yes, set `CHEESE_CAVE_ADMIN_ENABLED=false`
 
 **Q: Is the admin token different from user tokens?**
 A: Yes, admin token is system-wide. User tokens are per-user.
@@ -1287,10 +1287,10 @@ This reduces external API calls by 80%+.
 **In `docker-compose.yml`:**
 ```yaml
 environment:
-  KOHAKU_HUB_FALLBACK_ENABLED: "true"
-  KOHAKU_HUB_FALLBACK_CACHE_TTL: "300"  # 5 minutes
-  KOHAKU_HUB_FALLBACK_TIMEOUT: "10"     # 10 seconds
-  KOHAKU_HUB_FALLBACK_SOURCES: |
+  CHEESE_CAVE_FALLBACK_ENABLED: "true"
+  CHEESE_CAVE_FALLBACK_CACHE_TTL: "300"  # 5 minutes
+  CHEESE_CAVE_FALLBACK_TIMEOUT: "10"     # 10 seconds
+  CHEESE_CAVE_FALLBACK_SOURCES: |
     [
       {
         "url": "https://huggingface.co",
@@ -1524,9 +1524,9 @@ Only applies when browsing `my-team/*` repos.
 ### Cache Tuning
 
 ```bash
-KOHAKU_HUB_FALLBACK_CACHE_TTL=600       # 10 minutes
-KOHAKU_HUB_FALLBACK_TIMEOUT=20          # 20 second timeout
-KOHAKU_HUB_FALLBACK_MAX_CONCURRENT=10   # 10 concurrent requests
+CHEESE_CAVE_FALLBACK_CACHE_TTL=600       # 10 minutes
+CHEESE_CAVE_FALLBACK_TIMEOUT=20          # 20 second timeout
+CHEESE_CAVE_FALLBACK_MAX_CONCURRENT=10   # 10 concurrent requests
 ```
 
 ---

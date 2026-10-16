@@ -68,7 +68,7 @@ worker: init-env
 
 seed-demo: infra-up
 	# Force the one-time local demo bootstrap even if auto-seed is disabled in .env.dev.
-	KOHAKU_HUB_DEV_AUTO_SEED=true ./scripts/dev/run_backend.sh --prepare-only
+	CHEESE_CAVE_DEV_AUTO_SEED=true ./scripts/dev/run_backend.sh --prepare-only
 	$(MAKE) verify-seed-demo
 
 verify-seed-demo: infra-up

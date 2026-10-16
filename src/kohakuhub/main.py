@@ -42,6 +42,7 @@ from kohakuhub.api.org import router as org
 from kohakuhub.api.quota import router as quota
 from kohakuhub.auth.dependencies import get_optional_user
 from kohakuhub.auth.session import SessionRenewalMiddleware
+from kohakuhub.envnames import legacy_advice
 from kohakuhub.api.git.errors import GitProtocolError, render_protocol_error
 from kohakuhub.auth.permissions import RepoReadDeniedError
 from kohakuhub.utils.s3 import init_storage
@@ -74,6 +75,10 @@ async def lifespan(app: FastAPI):
             "These defaults are fine for development/testing but MUST be changed for production!"
         )
         logger.warning("=" * 80)
+
+    # Variables still under the old KOHAKU_HUB_ prefix keep working; say which, by name only.
+    for advice in legacy_advice():
+        logger.warning(advice)
 
     init_storage()
 

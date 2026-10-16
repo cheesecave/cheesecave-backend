@@ -6,10 +6,20 @@ import httpx
 import subprocess
 from pathlib import Path
 
+from kohakuhub.envnames import env_or, has_env
 
 CRED_FILE = Path("/hub-api-creds/credentials.env")
-LAKEFS_ENDPOINT = os.getenv("KOHAKU_HUB_LAKEFS_ENDPOINT", "http://lakefs:28000")
+# Settings are read under CHEESE_CAVE_<NAME> first, then KOHAKU_HUB_<NAME> (kohakuhub.envnames).
+LAKEFS_ENDPOINT = env_or("LAKEFS_ENDPOINT", "http://lakefs:28000")
 ADMIN_USER = os.getenv("LAKEFS_ADMIN_USER", "admin")
+
+
+def worker_count() -> int:
+    return int(env_or("WORKERS", "4"))
+
+
+def lakefs_credentials_in_env() -> bool:
+    return has_env("LAKEFS_ACCESS_KEY")
 
 
 def wait_for_lakefs():
@@ -74,7 +84,7 @@ def write_credentials(access_key, secret_key):
 
 
 def load_credentials():
-    if "KOHAKU_HUB_LAKEFS_ACCESS_KEY" in os.environ:
+    if lakefs_credentials_in_env():
         return
     with open(CRED_FILE) as f:
         for line in f:
@@ -86,7 +96,7 @@ def load_credentials():
 
 def init_garage():
     """Check if Garage is being used and provide setup instructions."""
-    s3_endpoint = os.getenv("KOHAKU_HUB_S3_ENDPOINT", "")
+    s3_endpoint = env_or("S3_ENDPOINT", "")
 
     # Check if we're using Garage (not MinIO or external S3)
     if "garage" not in s3_endpoint.lower():
@@ -136,7 +146,7 @@ def run_migrations():
 
 def run_worker():
     """Start khub-worker. hub-api owns LakeFS bootstrap and migrations."""
-    if "KOHAKU_HUB_LAKEFS_ACCESS_KEY" not in os.environ:
+    if not lakefs_credentials_in_env():
         while not CRED_FILE.exists():
             print(f"[startup] Waiting for hub-api to write {CRED_FILE}...")
             time.sleep(2)
@@ -153,8 +163,7 @@ def main():
     wait_for_lakefs()
 
     if CRED_FILE.exists() or (
-        "KOHAKU_HUB_LAKEFS_ACCESS_KEY" in os.environ
-        and "KOHAKU_HUB_LAKEFS_SECRET_KEY" in os.environ
+        lakefs_credentials_in_env() and has_env("LAKEFS_SECRET_KEY")
     ):
         load_credentials()
     else:
@@ -180,7 +189,7 @@ def main():
     run_migrations()
 
     # Get worker count from environment
-    workers = int(os.getenv("KOHAKU_HUB_WORKERS", "4"))
+    workers = worker_count()
     print(f"[startup] Starting API server with {workers} worker(s)...")
     subprocess.run(
         [

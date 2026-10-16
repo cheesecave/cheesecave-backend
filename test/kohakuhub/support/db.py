@@ -9,9 +9,10 @@ Two scopes, both running real SQL on the backend the test profile selects:
   the writes of one test never reach the next. Use it for query-shaped tests inside a
   scope created once per module.
 
-The backend comes from ``KOHAKU_HUB_DB_BACKEND``: ``postgres`` reads the URL from
-``KOHAKU_HUB_DATABASE_URL`` (the services CI category sets both); anything else uses a
-SQLite file in the test's temporary directory.
+The backend comes from ``CHEESE_CAVE_DB_BACKEND`` (or the older ``KOHAKU_HUB_DB_BACKEND``):
+``postgres`` reads the URL from ``CHEESE_CAVE_DATABASE_URL`` (or ``KOHAKU_HUB_DATABASE_URL``;
+the services CI category sets both); anything else uses a SQLite file in the test's
+temporary directory.
 """
 
 from __future__ import annotations
@@ -25,6 +26,7 @@ import pytest
 from peewee import PostgresqlDatabase, SqliteDatabase
 
 from kohakuhub.db import BaseModel
+from kohakuhub.envnames import env_or
 
 # Every table model, so one scope can serve any test. create_tables orders them by foreign key.
 MODELS = [model for model in BaseModel.__subclasses__()]
@@ -49,13 +51,13 @@ class _Rollback(Exception):
 
 
 def postgres_configured():
-    """True when ``KOHAKU_HUB_DATABASE_URL`` names a PostgreSQL server."""
-    return os.environ.get("KOHAKU_HUB_DATABASE_URL", "").startswith("postgresql")
+    """True when the database URL (``CHEESE_CAVE_DATABASE_URL`` or ``KOHAKU_HUB_DATABASE_URL``) names a PostgreSQL server."""
+    return env_or("DATABASE_URL", "").startswith("postgresql")
 
 
 # Revert, reset and squash rewrite history. The API enables them only on PostgreSQL and
 # refuses them on any other backend, by design (api/operation_capabilities.py), so the
-# tests that drive them run only when KOHAKU_HUB_DATABASE_URL is PostgreSQL.
+# tests that drive them run only when the database URL is PostgreSQL.
 history_operations_need_postgres = pytest.mark.skipif(
     not postgres_configured(),
     reason="revert, reset and squash are enabled only on PostgreSQL; SQLite refuses them by design",
@@ -75,12 +77,12 @@ concurrent_writers_need_postgres = pytest.mark.skipif(
 def make_database(tmp_path, name="unit", backend=None):
     """Return ``(database, schema)``. ``schema`` is None for SQLite.
 
-    ``backend`` is ``"sqlite"`` or ``"postgres"``; None reads ``KOHAKU_HUB_DB_BACKEND``.
+    ``backend`` is ``"sqlite"`` or ``"postgres"``; None reads ``DB_BACKEND`` from the environment.
     """
     if backend is None:
-        backend = os.environ.get("KOHAKU_HUB_DB_BACKEND", "")
+        backend = env_or("DB_BACKEND", "")
     if backend.lower() == "postgres":
-        url = urlparse(os.environ["KOHAKU_HUB_DATABASE_URL"])
+        url = urlparse(env_or("DATABASE_URL", ""))
         # One schema per scope: a scope that drops its tables must not remove another scope's.
         schema = f"t_{name}_{uuid.uuid4().hex[:12]}"
         database = PostgresqlDatabase(

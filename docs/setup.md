@@ -80,8 +80,8 @@ docker-compose logs -f hub-api
 | `MINIO_ROOT_PASSWORD` | minioadmin | strong_password | S3 storage security |
 | `POSTGRES_PASSWORD` | hubpass | strong_password | Database security |
 | `LAKEFS_AUTH_ENCRYPT_SECRET_KEY` | change_this | random_32_chars | LakeFS encryption |
-| `KOHAKU_HUB_SESSION_SECRET` | change_this | random_string | Session security |
-| `KOHAKU_HUB_ADMIN_SECRET_TOKEN` | change_this | random_string | Admin portal access |
+| `CHEESE_CAVE_SESSION_SECRET` | change_this | random_string | Session security |
+| `CHEESE_CAVE_ADMIN_SECRET_TOKEN` | change_this | random_string | Admin portal access |
 
 **Generate Secure Values:**
 ```bash
@@ -96,13 +96,13 @@ openssl rand -base64 48
 
 | Variable | Default | When to Change |
 |----------|---------|----------------|
-| `KOHAKU_HUB_BASE_URL` | http://localhost:28080 | Deploying to domain |
-| `KOHAKU_HUB_S3_PUBLIC_ENDPOINT` | http://localhost:29001 | The address clients reach S3 at (see [config](reference/config.md)) |
-| `KOHAKU_HUB_LFS_THRESHOLD_BYTES` | 10000000 (10MB) | Adjust LFS threshold |
-| `KOHAKU_HUB_REQUIRE_EMAIL_VERIFICATION` | false | Enable email verification |
-| `KOHAKU_HUB_LFS_KEEP_VERSIONS` | 5 | Change version retention |
-| `KOHAKU_HUB_LFS_AUTO_GC` | false | Enable auto garbage collection |
-| `KOHAKU_HUB_ADMIN_ENABLED` | true | Disable admin portal |
+| `CHEESE_CAVE_BASE_URL` | http://localhost:28080 | Deploying to domain |
+| `CHEESE_CAVE_S3_PUBLIC_ENDPOINT` | http://localhost:29001 | The address clients reach S3 at (see [config](reference/config.md)) |
+| `CHEESE_CAVE_LFS_THRESHOLD_BYTES` | 10000000 (10MB) | Adjust LFS threshold |
+| `CHEESE_CAVE_REQUIRE_EMAIL_VERIFICATION` | false | Enable email verification |
+| `CHEESE_CAVE_LFS_KEEP_VERSIONS` | 5 | Change version retention |
+| `CHEESE_CAVE_LFS_AUTO_GC` | false | Enable auto garbage collection |
+| `CHEESE_CAVE_ADMIN_ENABLED` | true | Disable admin portal |
 
 ## Post-Installation
 
@@ -110,7 +110,7 @@ openssl rand -base64 48
 
 Administration is handled through the standalone admin portal at http://localhost:28080/admin
 
-**No "admin account" registration needed** - Access is controlled via the `KOHAKU_HUB_ADMIN_SECRET_TOKEN` in your docker-compose.yml
+**No "admin account" registration needed** - Access is controlled via the `CHEESE_CAVE_ADMIN_SECRET_TOKEN` in your docker-compose.yml
 
 See [docs/Admin.md](./Admin.md) for complete admin portal documentation.
 
@@ -181,8 +181,8 @@ curl http://localhost:28080/api/version
 
 If deploying on a server:
 
-1. Update `KOHAKU_HUB_BASE_URL` to your domain
-2. Set `KOHAKU_HUB_S3_PUBLIC_ENDPOINT` to the address clients reach S3 at (for an external S3 such as R2 or AWS, the same as `KOHAKU_HUB_S3_ENDPOINT`)
+1. Update `CHEESE_CAVE_BASE_URL` to your domain
+2. Set `CHEESE_CAVE_S3_PUBLIC_ENDPOINT` to the address clients reach S3 at (for an external S3 such as R2 or AWS, the same as `CHEESE_CAVE_S3_ENDPOINT`)
 3. Add reverse proxy with HTTPS (nginx/traefik/caddy)
 4. Only expose port 28080 (or 443 with HTTPS)
 
@@ -272,7 +272,7 @@ services:
     image: kohakuhub-api
     command: uvicorn kohakuhub.main:app --host 0.0.0.0 --port 48888 --workers 4
     environment:
-      - KOHAKU_HUB_BASE_URL=http://localhost:28080
+      - CHEESE_CAVE_BASE_URL=http://localhost:28080
       # ... other env vars
 ```
 

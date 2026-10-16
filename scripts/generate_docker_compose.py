@@ -27,7 +27,7 @@ def main():
         text = (ROOT / ".env.compose.example").read_text(encoding="utf-8")
         for field in ("SESSION_SECRET", "ADMIN_SECRET_TOKEN", "DATABASE_KEY"):
             text = text.replace(
-                f"KOHAKU_HUB_{field}=CHANGE_ME", f"KOHAKU_HUB_{field}={secrets.token_hex(32)}"
+                f"CHEESE_CAVE_{field}=CHANGE_ME", f"CHEESE_CAVE_{field}={secrets.token_hex(32)}"
             )
         for field in ("POSTGRES_PASSWORD", "MINIO_ROOT_PASSWORD", "LAKEFS_AUTH_ENCRYPT_SECRET_KEY"):
             text = text.replace(f"{field}=CHANGE_ME", f"{field}={secrets.token_hex(24)}")

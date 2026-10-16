@@ -78,7 +78,7 @@ Comprehensive S3-compatible storage utilities with async support.
 - **`generate_download_presigned_url(bucket, key, expires_in=3600, filename=None) -> str`**
   - Generates time-limited download URLs
   - Optional Content-Disposition header for custom filenames
-  - Returns a URL signed for, and pointing to, the public endpoint (`KOHAKU_HUB_S3_PUBLIC_ENDPOINT`)
+  - Returns a URL signed for, and pointing to, the public endpoint (`CHEESE_CAVE_S3_PUBLIC_ENDPOINT`)
 
 - **`generate_upload_presigned_url(bucket, key, expires_in=3600, content_type=None, checksum_sha256=None) -> dict`**
   - Generates time-limited upload URLs with PUT method

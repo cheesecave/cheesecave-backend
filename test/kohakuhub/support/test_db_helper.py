@@ -15,15 +15,14 @@ from test.kohakuhub.support import db as dbsupport
 def backend(request, monkeypatch):
     """Run the test on each engine. Postgres needs a configured server (services category)."""
     if request.param == "postgres":
-        url = os.environ.get("KOHAKU_HUB_DATABASE_URL", "")
-        if not url.startswith("postgresql"):
-            pytest.skip("no Postgres configured in KOHAKU_HUB_DATABASE_URL")
-    monkeypatch.setenv("KOHAKU_HUB_DB_BACKEND", request.param)
+        if not dbsupport.postgres_configured():
+            pytest.skip("no Postgres configured in CHEESE_CAVE_DATABASE_URL (or KOHAKU_HUB_DATABASE_URL)")
+    monkeypatch.setenv("CHEESE_CAVE_DB_BACKEND", request.param)
     return request.param
 
 
 def test_sqlite_database_is_used_when_the_backend_is_not_postgres(tmp_path, monkeypatch):
-    monkeypatch.setenv("KOHAKU_HUB_DB_BACKEND", "sqlite")
+    monkeypatch.setenv("CHEESE_CAVE_DB_BACKEND", "sqlite")
     database, schema = dbsupport.make_database(tmp_path, name="t")
     assert isinstance(database, SqliteDatabase)
     assert schema is None
@@ -31,8 +30,8 @@ def test_sqlite_database_is_used_when_the_backend_is_not_postgres(tmp_path, monk
 
 
 def test_explicit_backend_overrides_the_environment(tmp_path, monkeypatch):
-    # db_dual asks for each engine in turn, whatever KOHAKU_HUB_DB_BACKEND says.
-    monkeypatch.setenv("KOHAKU_HUB_DB_BACKEND", "postgres")
+    # db_dual asks for each engine in turn, whatever CHEESE_CAVE_DB_BACKEND says.
+    monkeypatch.setenv("CHEESE_CAVE_DB_BACKEND", "postgres")
     database, schema = dbsupport.make_database(tmp_path, name="explicit", backend="sqlite")
     assert isinstance(database, SqliteDatabase)
     assert schema is None
@@ -40,8 +39,8 @@ def test_explicit_backend_overrides_the_environment(tmp_path, monkeypatch):
 
 
 def test_postgres_database_gets_a_schema_per_scope(tmp_path, monkeypatch):
-    monkeypatch.setenv("KOHAKU_HUB_DB_BACKEND", "postgres")
-    monkeypatch.setenv("KOHAKU_HUB_DATABASE_URL", "postgresql://hub:pw@127.0.0.1:55432/protodb")
+    monkeypatch.setenv("CHEESE_CAVE_DB_BACKEND", "postgres")
+    monkeypatch.setenv("CHEESE_CAVE_DATABASE_URL", "postgresql://hub:pw@127.0.0.1:55432/protodb")
     first, first_schema = dbsupport.make_database(tmp_path, name="a")
     second, second_schema = dbsupport.make_database(tmp_path, name="b")
     assert first_schema != second_schema
@@ -121,4 +120,18 @@ def test_daily_stats_factory_defaults_to_no_downloads_and_accepts_overrides(tmp_
         busy = factories.make_daily_stats(repo, date(2026, 1, 2), download_sessions=7, total_files=9)
         assert empty.download_sessions == 0 and empty.anonymous_downloads == 0
         assert busy.download_sessions == 7 and busy.anonymous_downloads == 7 and busy.total_files == 9
+    database.close()
+
+
+def test_the_older_prefix_still_selects_the_backend_and_the_url(tmp_path, monkeypatch):
+    for name in ("CHEESE_CAVE_DB_BACKEND", "CHEESE_CAVE_DATABASE_URL"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("KOHAKU_HUB_DB_BACKEND", "postgres")
+    monkeypatch.setenv("KOHAKU_HUB_DATABASE_URL", "postgresql://hub:pw@127.0.0.1:55432/protodb")
+    assert dbsupport.postgres_configured() is True
+
+    database, schema = dbsupport.make_database(tmp_path, name="old")
+
+    assert schema is not None
+    assert database.connect_params["host"] == "127.0.0.1"
     database.close()

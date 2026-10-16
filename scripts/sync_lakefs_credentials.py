@@ -82,6 +82,17 @@ def read_credentials_env(filepath: Path) -> dict[str, str]:
     return credentials
 
 
+def lakefs_credential(credentials: dict[str, str], name: str) -> str | None:
+    """The credentials-file value of LAKEFS_<name>, under the new prefix or the old one.
+
+    The file keeps the old keys (older images and shell scripts read them), but one written
+    with the new keys is read too; the new prefix wins.
+    """
+    return credentials.get(f"CHEESE_CAVE_LAKEFS_{name}") or credentials.get(
+        f"KOHAKU_HUB_LAKEFS_{name}"
+    )
+
+
 def update_config_toml(
     config_path: Path, lakefs_access_key: str, lakefs_secret_key: str
 ):
@@ -226,8 +237,8 @@ def main():
     try:
         credentials = read_credentials_env(credentials_path)
 
-        lakefs_access_key = credentials.get("KOHAKU_HUB_LAKEFS_ACCESS_KEY")
-        lakefs_secret_key = credentials.get("KOHAKU_HUB_LAKEFS_SECRET_KEY")
+        lakefs_access_key = lakefs_credential(credentials, "ACCESS_KEY")
+        lakefs_secret_key = lakefs_credential(credentials, "SECRET_KEY")
 
         if not lakefs_access_key or not lakefs_secret_key:
             print("✗ Missing LakeFS credentials in credentials.env")

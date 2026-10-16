@@ -8,8 +8,8 @@ Usage:
     python generate_secret.py           # Default: 64 characters
 
 Use cases:
-    - KOHAKU_HUB_SESSION_SECRET
-    - KOHAKU_HUB_ADMIN_SECRET_TOKEN
+    - CHEESE_CAVE_SESSION_SECRET
+    - CHEESE_CAVE_ADMIN_SECRET_TOKEN
     - LAKEFS_AUTH_ENCRYPT_SECRET_KEY
     - Any other secret configuration values
 """
@@ -54,8 +54,8 @@ def generate_multiple_secrets():
     print("\nGenerated secrets for common configuration values:\n")
 
     secrets_config = [
-        ("KOHAKU_HUB_SESSION_SECRET", 64, "all"),
-        ("KOHAKU_HUB_ADMIN_SECRET_TOKEN", 64, "all"),
+        ("CHEESE_CAVE_SESSION_SECRET", 64, "all"),
+        ("CHEESE_CAVE_ADMIN_SECRET_TOKEN", 64, "all"),
         ("LAKEFS_AUTH_ENCRYPT_SECRET_KEY", 32, "alphanumeric"),
     ]
 
@@ -100,8 +100,8 @@ Common lengths:
   128 - Maximum security (1024 bits)
 
 Common use cases:
-  KOHAKU_HUB_SESSION_SECRET         - 64 chars (all)
-  KOHAKU_HUB_ADMIN_SECRET_TOKEN     - 64 chars (all)
+  CHEESE_CAVE_SESSION_SECRET         - 64 chars (all)
+  CHEESE_CAVE_ADMIN_SECRET_TOKEN     - 64 chars (all)
   LAKEFS_AUTH_ENCRYPT_SECRET_KEY    - 32 chars (alphanumeric)
   Database passwords                 - 32-64 chars (alphanumeric)
         """,
