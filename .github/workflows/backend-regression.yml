@@ -9,7 +9,7 @@ on:
         type: choice
         required: true
         default: fast
-        options: [fast, migrations, services, hf, all]
+        options: [fast, migrations, services, hf, downstream, all]
 
 permissions:
   contents: read
@@ -192,6 +192,79 @@ jobs:
         if: ${{ always() }}
         with:
           name: backend-hf-${{ matrix.hub }}
+          path: lint-reports/ci/
+          retention-days: 7
+          if-no-files-found: warn
+
+  downstream:
+    if: ${{ inputs.category == 'downstream' || inputs.category == 'all' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        # One cell per version of one library: only that library's tests run. Versions differ a great
+        # deal (what a library reads, which architectures it knows), and a case the version cannot read
+        # from disk itself is skipped, not failed.
+        include:
+          - {lib: transformers, name: "transformers 4.40", pkgs: "transformers==4.40.2 sentencepiece protobuf tiktoken", min: 40}
+          - {lib: transformers, name: "transformers 4.46", pkgs: "transformers==4.46.3 sentencepiece protobuf tiktoken", min: 40}
+          - {lib: transformers, name: "transformers 4.57", pkgs: "transformers==4.57.6 sentencepiece protobuf tiktoken", min: 40}
+          - {lib: transformers, name: "transformers latest", pkgs: "transformers sentencepiece protobuf tiktoken", min: 40}
+          - {lib: tokenizers, name: "tokenizers 0.19", pkgs: "tokenizers==0.19.1 huggingface_hub<1.0", min: 40}
+          - {lib: tokenizers, name: "tokenizers 0.21", pkgs: "tokenizers==0.21.4 huggingface_hub<1.0", min: 40}
+          - {lib: tokenizers, name: "tokenizers latest", pkgs: "tokenizers", min: 40}
+          - {lib: datasets, name: "datasets 2.21", pkgs: "datasets==2.21.0 huggingface_hub<1.0 numpy<2 pyarrow<19", min: 40}
+          - {lib: datasets, name: "datasets 3.6", pkgs: "datasets==3.6.0 huggingface_hub<1.0", min: 40}
+          - {lib: datasets, name: "datasets 4.0", pkgs: "datasets==4.0.0 huggingface_hub<1.0", min: 40}
+          - {lib: datasets, name: "datasets latest", pkgs: "datasets", min: 40}
+          - {lib: pandas, name: "pandas 2.1", pkgs: "pandas==2.1.4 pyarrow<19 fsspec huggingface_hub<1.0 numpy<2", min: 40}
+          - {lib: pandas, name: "pandas 2.3", pkgs: "pandas==2.3.3 pyarrow fsspec huggingface_hub<1.0", min: 40}
+          - {lib: pandas, name: "pandas latest", pkgs: "pandas pyarrow fsspec", min: 40}
+          - {lib: fsspec, name: "HfFileSystem hub 0.20", pkgs: "huggingface_hub==0.20.3 fsspec", min: 100}
+          - {lib: fsspec, name: "HfFileSystem hub 0.36", pkgs: "huggingface_hub==0.36.2 fsspec", min: 100}
+          - {lib: fsspec, name: "HfFileSystem hub latest", pkgs: "huggingface_hub fsspec", min: 100}
+          - {lib: safetensors, name: "safetensors 0.4", pkgs: "safetensors==0.4.5 numpy<2 pyarrow<19 huggingface_hub<1.0", min: 40}
+          - {lib: safetensors, name: "safetensors 0.5", pkgs: "safetensors==0.5.3 numpy huggingface_hub<1.0", min: 40}
+          - {lib: safetensors, name: "safetensors latest", pkgs: "safetensors numpy huggingface_hub", min: 40}
+    name: downstream (${{ matrix.name }})
+    env:
+      HF_HUB_DISABLE_XET: "1"
+      KOHAKU_HUB_CACHE_ENABLED: "true"
+      PKGS: ${{ matrix.pkgs }}  # a version bound has a '<' in it: expand it, do not put it in the script
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install the backend, then the one library of this cell (no torch)
+        run: |
+          python -m pip install -e ".[dev]"
+          python -m pip install $PKGS
+          python -m pip list 2>/dev/null | grep -iE "^(transformers|tokenizers|datasets|pandas|safetensors|huggingface.hub|fsspec) "
+          if python -c "import torch" 2>/dev/null; then echo "torch must not be installed"; exit 1; fi
+      - name: Start isolated service stack
+        run: docker compose -f scripts/ci/compose.yml up -d --wait --wait-timeout 180
+      - name: Run the downstream regressions of this library
+        run: |
+          mkdir -p lint-reports/ci
+          python -m pytest test/kohakuhub -p scripts.ci.select_tests --ci-category downstream --downstream-lib ${{ matrix.lib }} -q --junitxml=lint-reports/ci/downstream.xml 2>&1 | tee lint-reports/ci/downstream.log
+      - name: Check what the cell proved
+        run: python scripts/ci/check_downstream.py lint-reports/ci/downstream.xml --lib ${{ matrix.lib }} --min-passed ${{ matrix.min }}
+      - name: Collect infrastructure logs and remove temporary data
+        if: ${{ always() }}
+        run: |
+          mkdir -p lint-reports/ci
+          docker compose -f scripts/ci/compose.yml logs --no-color > lint-reports/ci/services.log 2>&1 || true
+          docker compose -f scripts/ci/compose.yml down --volumes --remove-orphans
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        if: ${{ always() }}
+        with:
+          name: backend-downstream-${{ matrix.lib }}-${{ strategy.job-index }}
           path: lint-reports/ci/
           retention-days: 7
           if-no-files-found: warn

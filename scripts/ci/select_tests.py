@@ -40,8 +40,12 @@ FAST_FILES = {
 def pytest_addoption(parser):
     parser.addoption(
         "--ci-category",
-        choices=("fast", "migrations", "services", "hf"),
+        choices=("fast", "migrations", "services", "hf", "downstream"),
         help="Select a manual CI regression category; omitted means the normal full suite",
+    )
+    parser.addoption(
+        "--downstream-lib",
+        help="With the downstream category: only the tests of this library (test_downstream_<lib>.py)",
     )
 
 
@@ -73,6 +77,11 @@ def pytest_collection_modifyitems(config, items):
         elif category == "migrations":
             # Legacy migration tests that need the full seeded stack run in services.
             keep = path.name.endswith("_migrations.py") and not service_backed
+        elif category == "downstream":
+            lib = config.getoption("--downstream-lib")
+            keep = path.name.startswith("test_downstream_") and (
+                not lib or path.name in (f"test_downstream_{lib}.py", "test_downstream_support.py")
+            )
         else:
             keep = (
                 path.name.startswith("test_huggingface_hub_")
