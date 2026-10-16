@@ -70,7 +70,8 @@ By default, the application looks for `config.toml` in the current working direc
 | `KOHAKU_HUB_REQUIRE_EMAIL_VERIFICATION` | If `true`, requires email verification for new users. | `false` |
 | `KOHAKU_HUB_INVITATION_ONLY` | If `true`, disables public registration and requires an invitation. | `false` |
 | `KOHAKU_HUB_SESSION_SECRET` | The secret key for session management. **CHANGE IN PRODUCTION!** | `change-me-in-production` |
-| `KOHAKU_HUB_SESSION_EXPIRE_HOURS` | The session cookie expiration time in hours. | `168` (7 days) |
+| `KOHAKU_HUB_SESSION_EXPIRE_HOURS` | How long a login session lasts after its last use, in hours. Using a session renews it (and its cookie), so someone who comes back within this window stays signed in. | `720` (30 days) |
+| `KOHAKU_HUB_SESSION_ABSOLUTE_DAYS` | The longest a session lives from the login, in days, however often it is used. `0` means no limit. | `365` |
 | `KOHAKU_HUB_TOKEN_EXPIRE_DAYS` | The API token expiration time in days. | `365` |
 
 ## Admin API Settings

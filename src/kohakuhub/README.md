@@ -460,8 +460,10 @@ KOHAKU_HUB_REQUIRE_EMAIL_VERIFICATION=false
 KOHAKU_HUB_INVITATION_ONLY=false
 # Secret key for session management (CHANGE IN PRODUCTION)
 KOHAKU_HUB_SESSION_SECRET=change-me-in-production
-# Session cookie expiration (hours)
-KOHAKU_HUB_SESSION_EXPIRE_HOURS=168 # 7 days
+# Session lifetime after its last use (hours); using a session renews it
+KOHAKU_HUB_SESSION_EXPIRE_HOURS=720 # 30 days
+# The longest a session lives from the login (days); 0 = no limit
+KOHAKU_HUB_SESSION_ABSOLUTE_DAYS=365
 # API token expiration (days)
 KOHAKU_HUB_TOKEN_EXPIRE_DAYS=365
 

@@ -77,7 +77,8 @@ services:
       ## ===== Auth & SMTP Configuration =====
       - KOHAKU_HUB_REQUIRE_EMAIL_VERIFICATION=false
       - KOHAKU_HUB_INVITATION_ONLY=false # Set to true to require invitation for registration
-      - KOHAKU_HUB_SESSION_EXPIRE_HOURS=168
+      - KOHAKU_HUB_SESSION_EXPIRE_HOURS=720 # 30 days after the last use; using a session renews it
+      - KOHAKU_HUB_SESSION_ABSOLUTE_DAYS=365 # but no session outlives this, counted from the login (0 = no limit)
       - KOHAKU_HUB_TOKEN_EXPIRE_DAYS=365
       - KOHAKU_HUB_ADMIN_ENABLED=true
       # SMTP (Optional - for email verification)

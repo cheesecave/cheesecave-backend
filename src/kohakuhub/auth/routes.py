@@ -31,6 +31,7 @@ from kohakuhub.db_operations import (
 from kohakuhub.logger import get_logger
 from kohakuhub.api.validation import RESERVED_NAMES
 from kohakuhub.auth.dependencies import get_current_user
+from kohakuhub.auth.session import next_expiry, set_session_cookie
 from kohakuhub.auth.email import send_verification_email
 from kohakuhub.auth.utils import (
     generate_session_secret,
@@ -240,22 +241,18 @@ async def verify_email(token: str, response: Response):
         session_id = generate_token()
         session_secret = generate_session_secret()
 
+        now = datetime.now(timezone.utc)
+        expires_at = next_expiry(now, now)
         create_session(
             session_id=session_id,
             user=user,
             secret=session_secret,
-            expires_at=get_expiry_time(cfg.auth.session_expire_hours),
+            expires_at=expires_at,
         )
 
     # Set session cookie
     redirect_response = RedirectResponse(url=f"/{user.username}", status_code=302)
-    redirect_response.set_cookie(
-        key="session_id",
-        value=session_id,
-        httponly=True,
-        max_age=cfg.auth.session_expire_hours * 3600,
-        samesite="lax",
-    )
+    set_session_cookie(redirect_response, session_id, expires_at, now)
 
     logger.success(
         f"Auto-login session created for: {user.username} (session={session_id[:8]}...)"
@@ -288,21 +285,17 @@ async def login(req: LoginRequest, response: Response):
     session_id = generate_token()
     session_secret = generate_session_secret()
 
+    now = datetime.now(timezone.utc)
+    expires_at = next_expiry(now, now)
     create_session(
         session_id=session_id,
         user=user,
         secret=session_secret,
-        expires_at=get_expiry_time(cfg.auth.session_expire_hours),
+        expires_at=expires_at,
     )
 
     # Set cookie
-    response.set_cookie(
-        key="session_id",
-        value=session_id,
-        httponly=True,
-        max_age=cfg.auth.session_expire_hours * 3600,
-        samesite="lax",
-    )
+    set_session_cookie(response, session_id, expires_at, now)
 
     logger.success(f"User logged in: {user.username} (session={session_id[:8]}...)")
 

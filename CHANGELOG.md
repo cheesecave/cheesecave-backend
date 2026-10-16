@@ -29,6 +29,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A login session lasts 30 days after its last use, not 7 days from the login.** Using a session renews it (at most about once
+  an hour per session) and the cookie is sent again with the new lifetime, so someone who comes back within 30 days is never signed
+  out. A new limit, `KOHAKU_HUB_SESSION_ABSOLUTE_DAYS` (default 365, `0` = none), caps a session from the login. Defaults changed:
+  `KOHAKU_HUB_SESSION_EXPIRE_HOURS` 168 → 720; a deployment that sets it explicitly (the shipped `compose.yml` did, to 168) keeps its
+  value until it changes it. Sessions issued before this keep working and are renewed on their next use. Expired sessions are deleted
+  hourly by the worker (nothing deleted them before). No migration.
 - **Unsupported Hub surfaces answer `501` with the reason, not a bare `404`**. `huggingface_hub` calls for papers, jobs,
   Space logs, Space templates and the hardware list, storage buckets, kernels and the gated-access requests used to get
   `{"detail":"Not Found"}`, which reads like a bug. They now answer `501 Not Implemented` with

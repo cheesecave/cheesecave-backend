@@ -67,7 +67,10 @@ class AuthConfig(BaseModel):
     require_email_verification: bool = False
     invitation_only: bool = False  # Disable public registration, require invitation
     session_secret: str = "change-me-in-production"
-    session_expire_hours: int = 168  # 7 days
+    # A login session lasts this long after its last use (using it renews it) ...
+    session_expire_hours: int = 720  # 30 days
+    # ... but never longer than this from the login; 0 means no limit.
+    session_absolute_days: int = 365
     token_expire_days: int = 365
 
 
@@ -413,6 +416,8 @@ def load_config(path: str = None) -> Config:
         auth_env["session_secret"] = read_env("SESSION_SECRET")
     if read_env("SESSION_EXPIRE_HOURS") is not None:
         auth_env["session_expire_hours"] = int(read_env("SESSION_EXPIRE_HOURS"))
+    if read_env("SESSION_ABSOLUTE_DAYS") is not None:
+        auth_env["session_absolute_days"] = int(read_env("SESSION_ABSOLUTE_DAYS"))
     if read_env("TOKEN_EXPIRE_DAYS") is not None:
         auth_env["token_expire_days"] = int(read_env("TOKEN_EXPIRE_DAYS"))
     if auth_env:
