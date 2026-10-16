@@ -202,3 +202,60 @@ async def test_a_refusal_that_is_not_a_missing_revision_keeps_its_status_and_has
 
     assert response.status_code == 400
     assert response.headers.get("x-error-code") != "RevisionNotFound"
+
+
+# ----- the other ways a history operation fails (revert, a ref LakeFS cannot answer, a fault of ours)
+
+
+@pytest.mark.parametrize("route", ["reset", "revert"])
+async def test_a_ref_that_lakefs_cannot_answer_is_its_error_and_not_a_missing_commit(m, owner_client, monkeypatch, route):
+    """It was `404 Commit not found` whatever the failure was; only "no such commit" is that."""
+    repo, first, _ = await _repo(m, owner_client, f"{route}-ref503")
+
+    async def failing(self, **kwargs):
+        raise lakefs_error(503, "unavailable")
+
+    monkeypatch.setattr(type(m.client), "get_commit", failing)
+    payload = {"ref": first, "force": True} if route == "reset" else {"ref": first}
+    response = await owner_client.post(f"/api/models/{repo.id}/branch/dev/{route}", json=payload)
+
+    assert response.status_code == 500, response.text
+    assert response.headers["x-error-code"] == "ServerError"
+    assert "failed" in response.headers["x-error-message"]
+
+
+@pytest.mark.parametrize("failure", ["503", "connect", "404"])
+async def test_a_revert_that_fails_in_lakefs_is_its_error_and_its_outcome_unknown_only_when_it_is(m, owner_client, monkeypatch, reconciliations, failure):
+    repo, _, second = await _repo(m, owner_client, f"rv-fail-{failure}")
+
+    async def failing(*args, **kwargs):
+        if failure == "connect":
+            raise httpx.ConnectError("lakefs is down")
+        raise lakefs_error(int(failure), "the branch is gone" if failure == "404" else "unavailable")
+
+    monkeypatch.setattr(m.revert, "revert_commit", failing)
+    response = await owner_client.post(f"/api/models/{repo.id}/branch/dev/revert", json={"ref": second})
+
+    if failure == "404":
+        _revision_not_found(response, "dev")
+        assert reconciliations == []
+    else:
+        assert response.status_code == 500 and response.headers["x-error-code"] == "ServerError", response.text
+        assert "Revert failed" in response.headers["x-error-message"]
+        assert reconciliations == [1]
+
+
+@pytest.mark.parametrize("route,module,function", [("reset", "reset", "reset_branch"), ("revert", "revert", "revert_commit")])
+async def test_a_fault_of_ours_in_a_history_operation_is_a_500_and_its_outcome_unknown(m, owner_client, monkeypatch, reconciliations, route, module, function):
+    repo, first, second = await _repo(m, owner_client, f"{route}-bug")
+
+    async def broken(*args, **kwargs):
+        raise ValueError("a bug of ours")
+
+    monkeypatch.setattr(getattr(m, module), function, broken)
+    payload = {"ref": first, "force": True} if route == "reset" else {"ref": second}
+    response = await owner_client.post(f"/api/models/{repo.id}/branch/dev/{route}", json=payload)
+
+    assert response.status_code == 500
+    assert "a bug of ours" in response.text
+    assert reconciliations == [1]
