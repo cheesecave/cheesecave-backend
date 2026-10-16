@@ -207,6 +207,34 @@ async def fetch_lakefs_objects_page(
     )
 
 
+def _directories_above(path: str, base_prefix: str) -> list[str]:
+    """The directories above ``path`` and below ``base_prefix``, the outermost first."""
+    if not path.startswith(base_prefix):
+        return []
+    parts = path[len(base_prefix) :].split("/")[:-1]
+    return [base_prefix + "/".join(parts[: i + 1]) for i in range(len(parts))]
+
+
+def _with_directories(results: list[dict], base_prefix: str, cursor: str | None) -> list[dict]:
+    """A recursive listing with the directories named, as the Hub does.
+
+    LakeFS lists objects only when it does not group them by directory. The Hub names each directory
+    once, before the first file in it, and ``HfFileSystem`` builds its directory cache from those
+    entries: without them it finds only the files at the top of a repository after a ``glob``.
+    A later page does not name a directory an earlier one did: those are the ones above its cursor.
+    """
+    named = set(_directories_above(cursor or "", base_prefix))
+    out = []
+    for obj in results:
+        if obj.get("path_type") == "object":
+            for directory in _directories_above(obj["path"], base_prefix):
+                if directory not in named:
+                    named.add(directory)
+                    out.append({"path_type": "common_prefix", "path": f"{directory}/", "checksum": ""})
+        out.append(obj)
+    return out
+
+
 def _make_tree_item(
     obj: dict,
     repository: Repository,
@@ -551,6 +579,9 @@ async def list_repo_tree(
         and not cursor
     ):
         return hf_entry_not_found(repo_id, clean_path, revision)
+
+    if recursive:
+        page_results = _with_directories(page_results, base_prefix, cursor)
 
     file_objects = {
         _normalize_repo_path(obj["path"]): obj
