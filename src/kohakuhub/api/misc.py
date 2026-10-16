@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from kohakuhub.api.utils.accounts import avatar_url
 from kohakuhub.config import cfg, read_env
 from kohakuhub.repo_card import check_readme
+from kohakuhub.user_preferences import get_preferences
 from kohakuhub.db import User, UserOrganization
 from kohakuhub.logger import get_logger
 from kohakuhub.site_branding import get_public_branding
@@ -168,6 +169,8 @@ def whoami_v2(user: User | None = Depends(get_optional_user)):
         "canPay": False,
         "isPro": False,
         "orgs": orgs_list,
+        # KohakuHub-specific: what the reader chose for themselves, so the page does not flash the site's default
+        "preferences": get_preferences(user),
         "auth": {
             "type": "access_token",
             "accessToken": {"displayName": "Auto-generated token", "role": "write"},

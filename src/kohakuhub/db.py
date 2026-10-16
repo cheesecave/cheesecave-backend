@@ -173,6 +173,20 @@ class User(BaseModel):
     created_at = DateTimeField(default=partial(datetime.now, tz=timezone.utc))
 
 
+class UserPreference(BaseModel):
+    """What an account chose for itself (the README style, to start with).
+
+    A table of its own so a release from before it keeps running on the same database. No row means
+    the reader follows the site's defaults; only the keys that were set are kept, as JSON.
+    """
+
+    user = ForeignKeyField(User, primary_key=True, on_delete="CASCADE")
+    data = TextField()
+
+    class Meta:
+        table_name = "user_preference"
+
+
 class UserFollow(BaseModel):
     """Following is an interest signal, never a repository permission."""
 
@@ -946,6 +960,7 @@ def init_db():
             SiteHomepage,
             SiteAppearance,
             User,
+            UserPreference,
             UserFollow,
             EmailVerification,
             Session,

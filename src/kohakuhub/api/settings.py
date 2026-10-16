@@ -28,6 +28,7 @@ from kohakuhub.api.quota.util import check_quota
 from kohakuhub.api.repo.utils.hf import hf_bad_request, hf_not_implemented, hf_repo_not_found
 from kohakuhub.auth.dependencies import get_current_user
 from kohakuhub.auth.permissions import check_repo_delete_permission
+from kohakuhub.user_preferences import Preferences, get_preferences, update_preferences
 from kohakuhub.utils.datetime_utils import safe_isoformat
 
 logger = get_logger("SETTINGS")
@@ -103,6 +104,27 @@ async def update_user_settings(
         update_user(user, **update_fields)
 
     return {"success": True, "message": "User settings updated successfully"}
+
+
+def _own_account(username: str, user: User):
+    if user.username != username:
+        raise HTTPException(403, detail="Not authorized to use this user's preferences")
+
+
+@router.get("/users/{username}/preferences")
+async def read_user_preferences(username: str, user: User = Depends(get_current_user)):
+    """The reader's own choices (only the keys they set); an empty object follows the site's defaults."""
+    _own_account(username, user)
+    return get_preferences(user)
+
+
+@router.put("/users/{username}/preferences")
+async def update_user_preferences(
+    username: str, req: Preferences, user: User = Depends(get_current_user)
+):
+    """Change the keys that are sent; ``null`` removes a key. Returns everything the reader has set."""
+    _own_account(username, user)
+    return update_preferences(user, {key: getattr(req, key) for key in req.model_fields_set})
 
 
 @router.get("/users/{username}/type")

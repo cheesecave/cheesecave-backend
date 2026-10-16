@@ -367,3 +367,12 @@ Rollback facts and the command are in
   made. The release that adds it raises `repo_derive.VERSION`, so the rows of 036 are derived again on the next read or refresh
   (forty repositories a page, as for 036 itself) and each model with weights then reads their headers once, in the background.
   Rolling back is leaving the key: older code ignores `info`.
+
+## User preferences: 037
+
+- **037** (`037_user_preferences.py`) creates `user_preference`: one row per account that chose something (`data`, JSON, only the
+  keys that were set), gone with the account. No row means the reader follows the site's defaults.
+- **A table of its own on purpose**, as for 035: an older release does not know it and ignores it, so rolling back is leaving it.
+- Nothing is backfilled. `CREATE TABLE IF NOT EXISTS`; two containers starting together take turns on an advisory lock.
+- The site's default style needs no migration: it is a field of the `theme` section of `site_appearance` that is filled in from the
+  code when a stored theme lacks it.

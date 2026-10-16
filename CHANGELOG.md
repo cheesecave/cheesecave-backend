@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A reader's own choices are kept on the server** (the README style, to start with). `GET`/`PUT /api/users/{username}/preferences`
+  (only the account itself) keep the keys a reader set; `null` removes a key, which means "follow the site". `whoami-v2` carries them
+  as `preferences`, so a page does not flash the site's default first. The site's default style is the new `theme.markdown_style` of
+  the site appearance (`/api/site-appearance`, admin `PUT`): a theme saved before it reads as `github` and is not rewritten. Migration
+  037 adds the table `user_preference`.
 - **Duplicate a repository** ([#68](https://github.com/cheesecave/cheesecave-backend/issues/68)).
   `huggingface_hub`'s `duplicate_repo` and `duplicate_space` called `POST /api/{type}s/{repo}/duplicate`, which was a 404.
   It copies a repository in LakeFS rather than file by file (the storage keys in parallel, then the commit records): over

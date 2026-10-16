@@ -47,6 +47,7 @@ def test_public_defaults_do_not_insert_overrides(appearance_client):
         "background_dark": "#1c211d",
         "card_light": "#fffdf7",
         "card_dark": "#282e27",
+        "markdown_style": "github",
     }
     assert [group["title"] for group in expected["footer"]["groups"]] == [
         "Using this hub",
@@ -136,11 +137,12 @@ def test_saved_theme_colors_survive_default_palette_change(appearance_client):
     }
     stored_json = json.dumps(saved_theme)
     SiteAppearance.create(id=1, theme=stored_json)
-    assert session.get(PUBLIC_URL).json()["theme"] == saved_theme
+    # A theme saved before the README style existed reads with the built-in style, and is not rewritten
+    assert session.get(PUBLIC_URL).json()["theme"] == {**saved_theme, "markdown_style": "github"}
     assert SiteAppearance.get_by_id(1).theme == stored_json
     response = session.put(ADMIN_URL, headers=HEADERS, json={"footer": {"show_build_info": False}})
     assert response.status_code == 200
-    assert response.json()["theme"] == saved_theme
+    assert response.json()["theme"] == {**saved_theme, "markdown_style": "github"}
     assert SiteAppearance.get_by_id(1).theme == stored_json
 
 
@@ -358,3 +360,16 @@ def test_init_db_creates_appearance_table(monkeypatch):
     monkeypatch.setattr(db_module, "db", database)
     db_module.init_db()
     assert SiteAppearance in database.create_tables.call_args.args[0]
+
+
+def test_the_site_default_readme_style_is_saved_and_validated(appearance_client):
+    session, _ = appearance_client
+
+    saved = session.put(ADMIN_URL, headers=HEADERS, json={"theme": {"markdown_style": "gitlab"}})
+    assert saved.status_code == 200
+    assert session.get(PUBLIC_URL).json()["theme"]["markdown_style"] == "gitlab"
+
+    for bad in ("GitLab", "", "x" * 33, 7):
+        refused = session.put(ADMIN_URL, headers=HEADERS, json={"theme": {"markdown_style": bad}})
+        assert refused.status_code == 422, bad
+    assert session.get(PUBLIC_URL).json()["theme"]["markdown_style"] == "gitlab"
