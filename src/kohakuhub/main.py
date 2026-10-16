@@ -41,6 +41,7 @@ from kohakuhub.api.files import resolve_file_get, resolve_file_head
 from kohakuhub.api.org import router as org
 from kohakuhub.api.quota import router as quota
 from kohakuhub.auth.dependencies import get_optional_user
+from kohakuhub.auth.session import SessionRenewalMiddleware
 from kohakuhub.api.git.errors import GitProtocolError, render_protocol_error
 from kohakuhub.auth.permissions import RepoReadDeniedError
 from kohakuhub.utils.s3 import init_storage
@@ -132,6 +133,7 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
 
 
 app.add_middleware(RequestIdMiddleware)
+app.add_middleware(SessionRenewalMiddleware)
 app.add_middleware(FullRefMiddleware)
 
 

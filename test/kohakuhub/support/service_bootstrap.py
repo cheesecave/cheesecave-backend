@@ -118,7 +118,7 @@ def apply_service_test_env() -> None:
         "KOHAKU_HUB_INTERNAL_BASE_URL": "http://testserver",
         "KOHAKU_HUB_API_BASE": "/api",
         "KOHAKU_HUB_SESSION_SECRET": "test-session-secret",
-        "KOHAKU_HUB_SESSION_EXPIRE_HOURS": "168",
+        "KOHAKU_HUB_SESSION_EXPIRE_HOURS": "720",
         "KOHAKU_HUB_TOKEN_EXPIRE_DAYS": "365",
         "KOHAKU_HUB_REQUIRE_EMAIL_VERIFICATION": "false",
         "KOHAKU_HUB_INVITATION_ONLY": "false",

@@ -10,6 +10,7 @@ from fastapi import Cookie, Header, HTTPException, Request
 from kohakuhub.config import cfg
 from kohakuhub.db import Session, Token, User
 from kohakuhub.logger import get_logger
+from kohakuhub.auth.session import renew_session
 from kohakuhub.auth.utils import hash_token
 from kohakuhub.auth.external_token_parser import parse_auth_header
 
@@ -83,6 +84,7 @@ def get_current_user(
                 logger.debug(
                     f"Authenticated via session: {user.username} (session={session_id[:8]}...)"
                 )
+                renew_session(request, session)
                 return user
             else:
                 logger.warning(

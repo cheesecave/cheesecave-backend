@@ -442,8 +442,11 @@ register_resp = requests.post(
 ### Environment Variables
 
 ```bash
-# Session duration (hours)
+# How long a session lasts after its last use (hours); using it renews it
 KOHAKU_HUB_SESSION_EXPIRE_HOURS=720  # 30 days default
+
+# The longest a session lives from the login (days); 0 = no limit
+KOHAKU_HUB_SESSION_ABSOLUTE_DAYS=365  # default
 
 # Email verification
 KOHAKU_HUB_REQUIRE_EMAIL_VERIFICATION=false

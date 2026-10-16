@@ -84,6 +84,7 @@ def test_load_config_merges_file_and_environment(monkeypatch):
     monkeypatch.setenv("KOHAKU_HUB_INVITATION_ONLY", "true")
     monkeypatch.setenv("KOHAKU_HUB_SESSION_SECRET", "session-secret")
     monkeypatch.setenv("KOHAKU_HUB_SESSION_EXPIRE_HOURS", "12")
+    monkeypatch.setenv("KOHAKU_HUB_SESSION_ABSOLUTE_DAYS", "90")
     monkeypatch.setenv("KOHAKU_HUB_TOKEN_EXPIRE_DAYS", "30")
     monkeypatch.setenv("KOHAKU_HUB_ADMIN_ENABLED", "false")
     monkeypatch.setenv("KOHAKU_HUB_ADMIN_SECRET_TOKEN", "admin-secret")
@@ -140,6 +141,8 @@ def test_load_config_merges_file_and_environment(monkeypatch):
     assert cfg.auth.require_email_verification is True
     assert cfg.auth.invitation_only is True
     assert cfg.auth.session_secret == "session-secret"
+    assert cfg.auth.session_expire_hours == 12
+    assert cfg.auth.session_absolute_days == 90
     assert cfg.admin.enabled is False
     assert cfg.admin.secret_token == "admin-secret"
     assert cfg.quota.default_user_private_quota_bytes == 100

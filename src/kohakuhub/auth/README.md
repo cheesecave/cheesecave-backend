@@ -203,7 +203,8 @@ from kohakuhub.config import cfg
 cfg.auth.require_email_verification  # Enable/disable email verification
 
 # Session management
-cfg.auth.session_expire_hours  # Session cookie lifetime
+cfg.auth.session_expire_hours   # Session lifetime after its last use (renewed on use)
+cfg.auth.session_absolute_days  # Longest a session lives from the login (0 = no limit)
 
 # SMTP settings (for email)
 cfg.smtp.enabled  # Enable/disable email sending
@@ -233,12 +234,15 @@ cfg.app.base_url  # Base URL for verification links
    - System verifies credentials and account status
    - Creates session with random session_id and secret
    - Sets HTTP-only cookie with session_id
-   - Cookie lifetime: configured session_expire_hours
+   - Cookie lifetime: session_expire_hours, renewed while the session is used
+     (see `auth/session.py`), never past session_absolute_days from the login
 
 3. **Authenticated Requests:**
    - Browser sends session_id cookie automatically
    - `get_current_user` validates session and expiry
    - Returns User object for use in route handlers
+   - A session used more than an hour after its last renewal is renewed: the
+     expiry moves forward and the cookie is sent again with the new lifetime
 
 4. **Logout:**
    - Deletes all user sessions from database
