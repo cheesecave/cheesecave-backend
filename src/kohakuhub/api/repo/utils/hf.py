@@ -368,6 +368,15 @@ def _http(status_code: int, error_code: str, message: str) -> HTTPException:
     )
 
 
+def revision_not_found_http(message: str) -> HTTPException:
+    """A ``404`` with ``X-Error-Code: RevisionNotFound`` and ``message`` (the words of the route are kept: ``Branch not found: x``).
+
+    ``huggingface_hub`` dispatches on that header: a route that answers a revision that is not there with a bare 404 gives the
+    client a plain ``HfHubHTTPError`` where the others give ``RevisionNotFoundError`` (#103).
+    """
+    return _http(404, HFErrorCode.REVISION_NOT_FOUND, message)
+
+
 def hf_not_implemented(
     feature: str,
     reason: Optional[str] = None,

@@ -146,7 +146,7 @@ a path either percent-encoded (`feature%2Fx`, as `huggingface_hub` sends it) or 
 **Status Codes:**
 - `200 OK` - Branch deleted
 - `400 Bad Request` - Attempting to delete main branch
-- `404 Not Found` - Repository or branch not found
+- `404 Not Found` - Repository or branch not found (a branch that is not there is `X-Error-Code: RevisionNotFound`, also for reset, revert and super-squash)
 
 ---
 
@@ -197,8 +197,14 @@ a path either percent-encoded (`feature%2Fx`, as `huggingface_hub` sends it) or 
 }
 ```
 
+**Nothing to merge** (the destination holds the source already: merged before, or the source is an ancestor branch, tag or commit) is not a failure, as in a version-control "already up to date": `200`, no commit is made, and `result` is `null`:
+```json
+{"success": true, "message": "main is already up to date with feature", "result": null}
+```
+
 **Status Codes:**
-- `200 OK` - Merged successfully
+- `200 OK` - Merged successfully, or nothing to merge
+- `404 Not Found` - The source or the destination is not there (`X-Error-Code: RevisionNotFound`)
 - `409 Conflict` - Merge conflict (use strategy to resolve)
 - `500 Internal Server Error` - Merge failed
 

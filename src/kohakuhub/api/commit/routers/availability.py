@@ -13,7 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from kohakuhub.api.commit import availability
-from kohakuhub.api.repo.utils.hf import ensure_revision_in_history, hf_repo_not_found
+from kohakuhub.api.repo.utils.hf import ensure_revision_in_history, hf_repo_not_found, revision_not_found_http
 from kohakuhub.auth.dependencies import get_optional_user
 from kohakuhub.auth.permissions import check_repo_read_permission, check_repo_write_permission
 from kohakuhub.db import User
@@ -43,7 +43,7 @@ async def _branch_head(client, lakefs_repo: str, branch: str) -> str:
     except httpx.HTTPStatusError as e:
         if e.response.status_code != 404:
             raise
-        raise HTTPException(404, detail={"error": f"Branch not found: {branch}"})
+        raise revision_not_found_http(f"Branch not found: {branch}")
 
 
 async def _commit(client, lakefs_repo: str, commit_id: str) -> dict | None:
@@ -90,7 +90,7 @@ async def commit_operations(
     head = await _branch_head(client, lakefs_repo, branch)
     commit = await _commit(client, lakefs_repo, commit_id)
     if commit is None:
-        raise HTTPException(404, detail={"error": f"Commit not found: {commit_id}"})
+        raise revision_not_found_http(f"Commit not found: {commit_id}")
 
     caps, can_write = availability.capabilities(), _can_write(repo, user)
     result = _gate(caps, can_write)
@@ -190,7 +190,7 @@ async def commit_unavailable_files(
     head = await _branch_head(client, lakefs_repo, branch)
     commit = await _commit(client, lakefs_repo, commit_id)
     if commit is None:
-        raise HTTPException(404, detail={"error": f"Commit not found: {commit_id}"})
+        raise revision_not_found_http(f"Commit not found: {commit_id}")
     files = await availability.unavailable_files(
         client, lakefs_repo, repo, commit["id"], branch, head
     )

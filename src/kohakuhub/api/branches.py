@@ -2,6 +2,7 @@
 
 from typing import Any, Optional
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -26,6 +27,7 @@ from kohakuhub.utils.lakefs import (
     get_lakefs_client,
     is_lakefs_conflict_error,
     is_lakefs_not_found_error,
+    lakefs_status,
     ref_name_conflict,
     resolve_lakefs_repo,
     resolve_revision,
@@ -41,6 +43,7 @@ from kohakuhub.api.repo.utils.hf import (
     hf_revision_not_found,
     hf_server_error,
     lakefs_error_to_http,
+    revision_not_found_http,
 )
 from kohakuhub.api.operation_capabilities import (
     ensure_repository_operation_enabled,
@@ -65,6 +68,15 @@ class CreateBranchCompatPayload(BaseModel):
     """Hugging Face compatible payload for branch creation."""
 
     startingPoint: Optional[str] = None
+
+
+def _operation_failed(error: httpx.HTTPError, what: str, repo_row: Repository, repo_id: str, branch: str) -> HTTPException:
+    """The answer of a history operation (reset, revert) that LakeFS failed in the middle, by the status it gave, as the commit
+    route does (#10, #103). A branch LakeFS does not have is ``RevisionNotFound`` and nothing happened to it; any other failure
+    leaves it unknown whether the operation landed, and the reconciliation records what the branch links."""
+    if lakefs_status(error) != 404:
+        records.outcome_unknown(repo_row, branch)
+    return lakefs_error_to_http(error, f"{what} failed", repo_id=repo_id, revision=branch)
 
 
 async def _delete_new_branch(client, lakefs_repo: str, name: str) -> None:
@@ -627,12 +639,11 @@ async def revert_branch(
         commit = await client.get_commit(repository=lakefs_repo, commit_id=payload.ref)
         commit_id = commit["id"]
         logger.info(f"Reverting commit {commit_id[:8]} on branch {branch}")
-    except Exception as e:
+    except httpx.HTTPError as e:
         logger.error(f"Failed to resolve ref {payload.ref}: {e}")
-        raise HTTPException(
-            status_code=404,
-            detail={"error": f"Commit not found: {payload.ref}"},
-        )
+        if lakefs_status(e) not in (400, 404):  # not a commit id, or no such commit: "not found"; the rest is a failure of LakeFS
+            raise lakefs_error_to_http(e, "Revert failed", repo_id=repo_id, revision=payload.ref) from e
+        raise revision_not_found_http(f"Commit not found: {payload.ref}") from e
 
     # LakeFS reverts natively and atomically; what it restores is checked
     # and claimed first, and the commit it makes recorded like a commit's
@@ -656,8 +667,11 @@ async def revert_branch(
     except HTTPException:
         raise  # refused while an operation holds the repository
     except records.OperationRefused as e:
-        raise HTTPException(status_code=e.status, detail=e.detail)
-    except Exception as e:
+        raise e.to_http() from e
+    except httpx.HTTPError as e:
+        logger.exception(f"Failed to revert commit: {e}", e)
+        raise _operation_failed(e, "Revert", repo_row, repo_id, branch) from e
+    except Exception as e:  # noqa: BLE001 - a fault of ours: what it did to the branch is unknown, and so is whether it landed
         logger.exception(f"Failed to revert commit: {e}", e)
         # Whether the revert landed is unknown here
         records.outcome_unknown(repo_row, branch)
@@ -748,6 +762,15 @@ async def merge_branches(
     except HTTPException:
         raise  # refused while an operation holds the repository
     except Exception as e:
+        if isinstance(e, httpx.HTTPStatusError) and records.refusal(e) == "unchanged":
+            # LakeFS: "no changes". The destination holds the source already (merged before, or an ancestor
+            # branch, tag or commit): nothing to merge is not a failure, as git's "Already up to date" (#103)
+            logger.info(f"Nothing to merge: {destination_branch} holds {source_ref} in {repo_id}")
+            return {
+                "success": True,
+                "message": f"{destination_branch} is already up to date with {source_ref}",
+                "result": None,
+            }
         logger.exception(f"Failed to merge {source_ref} into {destination_branch}", e)
         error_msg = str(e)
         logger.error(f"Failed to merge branches: {error_msg}")
@@ -884,13 +907,12 @@ async def reset_branch(
         # Get the commit to reset to
         commit = await client.get_commit(repository=lakefs_repo, commit_id=payload.ref)
         commit_id = commit["id"]
-    except Exception as e:
+    except httpx.HTTPError as e:
         logger.exception(f"Failed to resolve ref {payload.ref}", e)
         logger.error(f"Failed to resolve ref {payload.ref}: {e}")
-        raise HTTPException(
-            status_code=404,
-            detail={"error": f"Commit not found: {payload.ref}"},
-        )
+        if lakefs_status(e) not in (400, 404):  # not a commit id, or no such commit: "not found"; the rest is a failure of LakeFS
+            raise lakefs_error_to_http(e, "Reset failed", repo_id=repo_id, revision=payload.ref) from e
+        raise revision_not_found_http(f"Commit not found: {payload.ref}") from e
 
     # A new commit whose tree equals the target's: history is kept, and no
     # object is copied (#99, #133). LFS objects are always checked,
@@ -910,8 +932,11 @@ async def reset_branch(
         await records.record_commits(
             client, lakefs_repo, repo_row, branch, e.rounds, user, message, f"Reset to {commit_id}"
         )
-        raise HTTPException(status_code=e.status, detail=e.detail)
-    except Exception as e:
+        raise e.to_http() from e
+    except httpx.HTTPError as e:
+        logger.exception(f"Failed to reset branch: {e}", e)
+        raise _operation_failed(e, "Reset", repo_row, repo_id, branch) from e
+    except Exception as e:  # noqa: BLE001 - a fault of ours: what it did to the branch is unknown, and so is whether it landed
         logger.exception(f"Failed to reset branch: {e}", e)
         # Whether the commit landed before the failure is unknown here
         records.outcome_unknown(repo_row, branch)
@@ -960,7 +985,7 @@ async def super_squash_branch(
             whole_repository=False,
         )
     except records.OperationRefused as e:
-        raise HTTPException(status_code=e.status, detail=e.detail)
+        raise e.to_http() from e
     return {"commitOid": hub_oid(commit_id)}
 
 
