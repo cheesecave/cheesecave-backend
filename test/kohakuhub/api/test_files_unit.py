@@ -13,6 +13,7 @@ from fastapi import HTTPException
 import kohakuhub.api.files as files_api
 from kohakuhub.db import File
 from test.kohakuhub.support.factories import make_file, make_repo, make_user
+from test.kohakuhub.support.fakes import lakefs_error
 
 
 class _FakeClient:
@@ -174,6 +175,40 @@ async def test_process_preupload_file_uses_batch_metadata_without_file_queries(
 
 
 @pytest.mark.asyncio
+async def test_preupload_refuses_a_revision_that_resolves_to_nothing_and_maps_a_failure_of_lakefs(monkeypatch):
+    """A branch, a tag or a commit id that is not there is ``RevisionNotFound`` before anything is looked up (#103);
+    a LakeFS that fails is the error of what it said, never an upload mode."""
+    repo = SimpleNamespace(id=1, private=False, created_at=None, namespace="alice", name="demo")
+    monkeypatch.setattr(files_api, "check_repo_write_permission", lambda *_args: None)
+    monkeypatch.setattr(files_api, "get_repository", lambda *_args: repo)
+    monkeypatch.setattr(files_api, "resolve_lakefs_repo", lambda _repo: "lakefs-repo")
+    monkeypatch.setattr(files_api, "get_lakefs_client", lambda: object())
+    body = {"files": [{"path": "file.txt", "size": 5}]}
+
+    async def nothing(*_args, **_kwargs):
+        raise ValueError("Revision 'nope' not found as branch or commit")
+
+    monkeypatch.setattr(files_api, "resolve_revision", nothing)
+    missing = await files_api.preupload(files_api.RepoType.model, "alice", "demo", "nope", _FakeRequest(body=body), user=SimpleNamespace(username="alice"))
+    assert missing.status_code == 404
+    assert missing.headers["x-error-code"] == "RevisionNotFound"
+
+    for failure, status, code in (
+        (lakefs_error(503, "unavailable"), 500, "ServerError"),
+        (lakefs_error(404, "gone"), 404, "RevisionNotFound"),
+        (httpx.ConnectError("down"), 500, "ServerError"),
+    ):
+        async def failing(*_args, _failure=failure, **_kwargs):
+            raise _failure
+
+        monkeypatch.setattr(files_api, "resolve_revision", failing)
+        with pytest.raises(HTTPException) as refused:
+            await files_api.preupload(files_api.RepoType.model, "alice", "demo", "main", _FakeRequest(body=body), user=SimpleNamespace(username="alice"))
+        assert refused.value.status_code == status
+        assert refused.value.headers["X-Error-Code"] == code
+
+
+@pytest.mark.asyncio
 async def test_preupload_batch_load_is_limited_to_sha256_paths(monkeypatch):
     repo = SimpleNamespace(
         private=True,
@@ -189,6 +224,7 @@ async def test_preupload_batch_load_is_limited_to_sha256_paths(monkeypatch):
     monkeypatch.setattr(files_api, "get_repository", lambda *_args: repo)
     monkeypatch.setattr(files_api, "check_quota", lambda *_args: (True, None))
     monkeypatch.setattr(files_api, "resolve_lakefs_repo", lambda _repo: "lakefs-repo")
+    monkeypatch.setattr(files_api, "resolve_revision", _async_return(("head", None)))  # the revision is there
     monkeypatch.setattr(files_api, "get_effective_lfs_threshold", lambda _repo: 1024)
 
     def _batch_map(_repo, paths, branch="main"):
@@ -235,6 +271,7 @@ async def test_preupload_and_revision_cover_validation_quota_and_resolution_erro
     monkeypatch.setattr(files_api, "get_organization", lambda namespace: None)
     monkeypatch.setattr(files_api, "get_effective_lfs_threshold", lambda repo_row: 1024)
     monkeypatch.setattr(files_api, "resolve_lakefs_repo", lambda repo: "model:owner/repo")
+    monkeypatch.setattr(files_api, "resolve_revision", _async_return(("head", None)))  # the revision is there
     monkeypatch.setattr(
         files_api,
         "process_preupload_file",
@@ -767,6 +804,7 @@ async def test_preupload_on_a_side_branch_never_skips_on_main_rows(monkeypatch):
     monkeypatch.setattr(files_api, "check_quota", lambda namespace, total, private, is_org: (True, None))
     monkeypatch.setattr(files_api, "get_organization", lambda namespace: None)
     monkeypatch.setattr(files_api, "resolve_lakefs_repo", lambda repo_row: "lake")
+    monkeypatch.setattr(files_api, "resolve_revision", _async_return(("head", None)))  # both branches are there
     body = {"files": [{"path": "weights.bin", "size": 10, "sha256": SIDE_OID}]}
 
     on_branch = await files_api.preupload(

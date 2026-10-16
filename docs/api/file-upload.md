@@ -22,6 +22,7 @@ Direct file upload and commit operations using HuggingFace-compatible NDJSON pro
 - Determine upload mode (regular vs LFS)
 - Check for duplicate files (content deduplication)
 - Validate quota before upload
+- Refuse a revision that resolves to nothing (`404 RevisionNotFound`) before the client sends the files to the store; a tag or a commit id that is there is answered like a branch, and the commit is what refuses a revision that is not a branch
 
 **Request Body:**
 ```json
@@ -282,20 +283,28 @@ A request whose `parentCommit` names a branch that does not exist is answered `4
 **Success:**
 ```json
 {
+  "success": true,
   "commitUrl": "http://localhost:28080/username/my-model/commit/abc123def",
   "commitOid": "abc123def456789...",
-  "pullRequestUrl": null
+  "pullRequestUrl": null,
+  "hookOutput": ""
 }
 ```
 
-**No Changes:**
+**No Changes** (the same fields; the commit is the current head of the branch):
 ```json
 {
+  "success": true,
   "commitUrl": "http://localhost:28080/username/my-model/commit/previous_commit",
   "commitOid": "previous_commit_hash",
-  "pullRequestUrl": null
+  "pullRequestUrl": null,
+  "hookOutput": ""
 }
 ```
+
+**A revision that is not a branch that is there** is `404` with `X-Error-Code: RevisionNotFound` (the Hub's answer; `huggingface_hub` raises
+`RevisionNotFoundError`), whatever the commit holds: also a commit with no operation, which used to be answered `200` with a
+commit id of `no-changes`. A LakeFS that fails while the head is read is an error with what it said, never a commit id.
 
 ---
 
