@@ -8,6 +8,7 @@ import importlib
 import json
 from types import SimpleNamespace
 
+import httpx
 import pytest
 from fastapi import HTTPException
 
@@ -669,15 +670,56 @@ async def test_blank_lines_and_unknown_operations_are_skipped(monkeypatch, repo)
 
 
 @pytest.mark.asyncio
-async def test_no_change_commit_reports_no_changes_when_the_branch_is_unreadable(monkeypatch, repo):
+async def test_a_no_change_commit_reports_the_head_with_the_fields_of_the_hub(monkeypatch, repo):
     client = _FakeLakeFSClient()
     monkeypatch.setattr(commit_ops, "get_lakefs_client", lambda: client)
-    client.raise_on["get_branch"] = lakefs_error(503, "branch unreadable")
 
     response = await _commit(repo, _ndjson(_HEADER))
 
-    assert response["commitOid"] == "no-changes"
-    assert response["commitUrl"] == "models/owner/repo/commit/no-changes"
+    assert response["commitOid"] == "head-commit"
+    assert response["commitUrl"] == "models/owner/repo/commit/head-commit"
+    assert response["success"] is True and response["hookOutput"] == "" and response["pullRequestUrl"] is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "unreadable,status,code",
+    [
+        (lakefs_error(503, "branch unreadable"), 500, "ServerError"),
+        (lakefs_error(404, "branch not found"), 404, "RevisionNotFound"),
+        (httpx.ConnectError("lakefs is down"), 500, "ServerError"),
+    ],
+)
+async def test_a_no_change_commit_whose_head_cannot_be_read_is_an_error_not_a_commit_id(monkeypatch, repo, unreadable, status, code):
+    """It was ``200`` with the made-up commit id ``no-changes`` whatever the failure was (#103)."""
+    client = _FakeLakeFSClient()
+    monkeypatch.setattr(commit_ops, "get_lakefs_client", lambda: client)
+    client.raise_on["get_branch"] = unreadable
+
+    with pytest.raises(HTTPException) as refused:
+        await _commit(repo, _ndjson(_HEADER))
+
+    assert refused.value.status_code == status
+    assert refused.value.headers["X-Error-Code"] == code
+    assert "no-changes" not in json.dumps(refused.value.detail)
+    assert isinstance(refused.value.__cause__, httpx.HTTPError)  # raised from what LakeFS did, so the log keeps it
+
+
+@pytest.mark.asyncio
+async def test_a_commit_that_lakefs_refuses_as_unchanged_answers_the_head_or_the_error_of_reading_it(monkeypatch, repo):
+    """The second way to a commit with no effective change: the staged content is what the branch holds, and LakeFS says so."""
+    client = _FakeLakeFSClient()
+    monkeypatch.setattr(commit_ops, "get_lakefs_client", lambda: client)
+    client.raise_on["commit"] = lakefs_error(400, "commit: no changes")
+
+    answered = await _commit(repo, _ndjson(_HEADER, _README))
+
+    assert answered["commitOid"] == "head-commit" and answered["success"] is True
+    client.raise_on["get_branch"] = lakefs_error(404, "branch not found")
+    with pytest.raises(HTTPException) as unreadable:
+        await _commit(repo, _ndjson(_HEADER, _README))
+    assert unreadable.value.status_code == 404
+    assert unreadable.value.headers["X-Error-Code"] == "RevisionNotFound"
 
 
 @pytest.mark.asyncio

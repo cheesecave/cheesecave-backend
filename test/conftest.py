@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import importlib
+
 import httpx
 import pytest
 import pytest_asyncio
@@ -222,7 +224,19 @@ async def admin_client(app):
 
 
 @pytest.fixture
-def live_server_url(app, backend_test_state):
+def live_server_url(app, backend_test_state, monkeypatch):
+    # The server runs in a thread with an event loop of its own, and the test's loop (the in-process app) uses the same pooled
+    # LakeFS client: a keep-alive connection one loop opened is "bound to a different event loop" for the other, and the request
+    # that picks it fails with a 500. A process has one loop in production; here no idle connection is kept to be shared.
+    rest = importlib.import_module("kohakuhub.lakefs_rest_client")
+    monkeypatch.setattr(
+        rest,
+        "_HTTPX_LIMITS",
+        httpx.Limits(max_connections=rest._HTTPX_LIMITS.max_connections, max_keepalive_connections=0),
+    )
+    pooled = getattr(rest, "_singleton_client", None)
+    if pooled is not None:
+        pooled._httpx_client = None  # built again with the limits above, by whichever loop asks first
     cfg = backend_test_state.modules.config_module.cfg
     previous_base_url = cfg.app.base_url
     previous_internal_base_url = cfg.app.internal_base_url

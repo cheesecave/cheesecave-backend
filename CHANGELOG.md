@@ -43,6 +43,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A commit on a revision that is not a branch is a 404 whatever it holds, a head that cannot be read is no commit id, and a preupload refuses a revision that is nowhere** ([#103](https://github.com/cheesecave/cheesecave-backend/issues/103)).
+  A commit with no operation on a branch that is not there (or on a tag, a commit id, a full ref name) was `200` with the commit
+  id `no-changes`, while the same commit with one operation was `404 RevisionNotFound`; and a LakeFS that failed while the head
+  was read (a connection error, a 500, a 404) was `200` with that made-up id too, even on a branch that is there, which a client
+  keeps in `CommitInfo.oid`. The head that cannot be read is now the error LakeFS gave (`RevisionNotFound`, or a 500 with its
+  words); a commit that changes nothing on a branch that is there is unchanged (`200`, the head). The answer of a commit has the
+  fields of the Hub's schema (`success`, `commitOid`, `commitUrl`, `hookOutput`, `pullRequestUrl`). A preupload on a revision
+  that resolves to no branch, tag or commit is `404 RevisionNotFound` (the client sent the files to the store after it, for
+  nothing); one on a tag or a commit id that is there answers as before (#12).
+
 - **`reset`, `merge`, `revert` and `super-squash` answer a revision that is not there, and a merge with nothing to merge, as they should** ([#103](https://github.com/cheesecave/cheesecave-backend/issues/103)).
   `reset` of a branch LakeFS does not have (or a tag name) was a `500` (its 404 reached a generic handler) that also marked the
   outcome of a branch that never existed as unknown; it is `404 RevisionNotFound`, and a failure of LakeFS in the middle is

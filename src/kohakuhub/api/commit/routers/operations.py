@@ -1021,19 +1021,30 @@ async def _stage_operations(
     return files_changed, pending_lfs_tracking
 
 
-async def _no_change_response(client, lakefs_repo: str, revision: str, repo_type, repo_id: str) -> dict:
-    """What a commit with no effective change answers: the branch's head, 200."""
-    try:
-        branch = await client.get_branch(repository=lakefs_repo, branch=revision)
-        commit_id = branch["commit_id"]
-    except httpx.HTTPError:
-        commit_id = "no-changes"
-    commit_url = f"{build_public_repo_path(repo_type, repo_id)}/commit/{hub_oid(commit_id)}"
+def _commit_answer(commit_id: str, repo_type, repo_id: str) -> dict:
+    """What a commit answers: the fields of the Hub's schema (``success``, ``commitOid``, ``commitUrl``, ``hookOutput``,
+    and ``pullRequestUrl``, which is ``None`` here: no pull requests)."""
     return {
-        "commitUrl": commit_url,
+        "success": True,
+        "commitUrl": f"{build_public_repo_path(repo_type, repo_id)}/commit/{hub_oid(commit_id)}",
         "commitOid": hub_oid(commit_id),
         "pullRequestUrl": None,
+        "hookOutput": "",
     }
+
+
+async def _no_change_response(client, lakefs_repo: str, revision: str, repo_type, repo_id: str) -> dict:
+    """What a commit with no effective change answers: the branch's head, 200.
+
+    A head that cannot be read is an error, not a commit id of its own (#103): a branch LakeFS does not have (a revision that
+    is a tag, a commit id or nothing at all, which a commit with no operation reaches without staging anything) is
+    ``404 RevisionNotFound``, as the same commit with one operation is; a LakeFS that fails is a 500 with what it said.
+    """
+    try:
+        branch = await client.get_branch(repository=lakefs_repo, branch=revision)
+    except httpx.HTTPError as error:
+        raise lakefs_error_to_http(error, "Commit failed", repo_id=repo_id, revision=revision) from error
+    return _commit_answer(branch["commit_id"], repo_type, repo_id)
 
 
 @router.post("/{repo_type}s/{namespace}/{name}/commit/{revision:path}")
@@ -1411,8 +1422,4 @@ async def _commit_on_leased_branch(
 
         await count_main_move(client, lakefs_repo, repo_row, commit_result["id"])
 
-    return {
-        "commitUrl": commit_url,
-        "commitOid": hub_oid(commit_result["id"]),
-        "pullRequestUrl": None,
-    }
+    return _commit_answer(commit_result["id"], repo_type, repo_id)
