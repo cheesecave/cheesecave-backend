@@ -335,16 +335,18 @@ def write_docker_compose(
     for line in lines:
         stripped = line.strip()
 
-        # Replace known variables
-        if stripped.startswith("- CHEESE_CAVE_") or stripped.startswith(
-            "- LAKEFS_BLOCKSTORE_"
-        ):
+        # Replace known variables. The base is usually the operator's existing file, whose lines may
+        # still carry the old prefix; the migrated values are keyed CHEESE_CAVE_<NAME>, and the line
+        # is written back under that name.
+        if stripped.startswith(("- CHEESE_CAVE_", "- KOHAKU_HUB_", "- LAKEFS_BLOCKSTORE_")):
             match = re.match(
-                r"(\s*)- ((?:CHEESE_CAVE|LAKEFS_BLOCKSTORE)_\w+)=(.+?)(?:\s+#.*)?$",
+                r"(\s*)- ((?:CHEESE_CAVE|KOHAKU_HUB|LAKEFS_BLOCKSTORE)_\w+)=(.+?)(?:\s+#.*)?$",
                 line,
             )
             if match:
                 indent, key, old_value = match.groups()
+                if key.startswith("KOHAKU_HUB_"):
+                    key = "CHEESE_CAVE_" + key[len("KOHAKU_HUB_") :]
                 if key in env_vars:
                     # Keep comment from original line
                     comment_match = re.search(r"(#.+)$", line)

@@ -87,6 +87,26 @@ def test_the_migrated_values_are_written_into_the_new_template(tmp_path):
     assert "- CHEESE_CAVE_OTHER=keep" in written
 
 
+def test_an_existing_old_file_is_updated_in_place_and_renamed(tmp_path):
+    # main() reads the existing docker-compose.yml as the base it writes back into, so the lines it
+    # replaces are the old-prefixed ones the operator has.
+    migrate = _load("migrate_config")
+    out = tmp_path / "docker-compose.yml"
+
+    migrate.write_docker_compose(
+        out,
+        {"CHEESE_CAVE_SITE_NAME": "Old Site", "CHEESE_CAVE_SESSION_SECRET": "keep-me"},
+        base_content=LEGACY_COMPOSE,
+    )
+
+    written = out.read_text()
+    assert "- CHEESE_CAVE_SITE_NAME=Old Site" in written
+    assert "- CHEESE_CAVE_SESSION_SECRET=keep-me" in written
+    assert "KOHAKU_HUB_SITE_NAME" not in written and "KOHAKU_HUB_SESSION_SECRET" not in written
+    # a line with no migrated value is left exactly as it was
+    assert "- KOHAKU_HUB_BASE_URL=https://old.example" in written
+
+
 def test_new_fields_are_offered_under_the_new_prefix():
     migrate = _load("migrate_config")
 
