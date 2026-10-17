@@ -70,7 +70,7 @@ class RepoSourceCache:
         bound-source consistency window bounded, but still long enough
         to amortise chain-probe cost across a typical hf_hub session
         (which fires 1–10 calls within seconds). Override via
-        ``KOHAKU_HUB_FALLBACK_CACHE_TTL`` / ``cfg.fallback.cache_ttl_seconds``
+        ``CHEESE_CAVE_FALLBACK_CACHE_TTL`` / ``cfg.fallback.cache_ttl_seconds``
         if a deployment prefers a different self-heal window.
 
         Args:

@@ -27,7 +27,8 @@ in `NOTICE.md`, `LICENSE` and `provenance/` intact when editing inherited code.
   modules and documentation. See [CONTRIBUTING.md](CONTRIBUTING.md#test-and-coverage-scope).
 - **Compatibility.** Keep the Python package name `kohakuhub`, protocol identities, storage
   identifiers and client paths. Settings are read from `CHEESE_CAVE_<NAME>` first and fall back to
-  `KOHAKU_HUB_<NAME>` (see `read_env` in `kohakuhub.config`); never remove the fallback. Renames of user-facing product
+  `KOHAKU_HUB_<NAME>` (see `read_env` in `kohakuhub.envnames`, re-exported by `kohakuhub.config`; scripts and the entrypoint
+  use the same module, shell scripts `scripts/dev/envnames.sh`); never remove the fallback. Renames of user-facing product
   text use CheeseCave; KohakuHub appears only as attribution.
 - **Deployment.** Production deployment is a manual workflow on `main`. Do not change deployment
   targets, hosts or secrets from code.
@@ -75,7 +76,7 @@ in `NOTICE.md`, `LICENSE` and `provenance/` intact when editing inherited code.
 ```sh
 pip install -e ".[dev]"            # backend and test dependencies
 make test-backend RANGE_DIR=...    # one area of the suite; full suite needs PostgreSQL, MinIO, LakeFS, Valkey
-KOHAKU_HUB_DB_BACKEND=sqlite KOHAKU_HUB_DATABASE_URL="sqlite:///:memory:" PYTHONPATH=src:. \
+CHEESE_CAVE_DB_BACKEND=sqlite CHEESE_CAVE_DATABASE_URL="sqlite:///:memory:" PYTHONPATH=src:. \
   python -m pytest test/kohakuhub -p scripts.ci.select_tests --ci-category fast -q
 ```
 

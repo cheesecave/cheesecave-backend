@@ -5,15 +5,15 @@ services:
     build:
       context: .
       args:
-        KOHAKU_HUB_GIT_SHA: ${KOHAKU_HUB_GIT_SHA:-}
-        KOHAKU_HUB_BUILD_TIME: ${KOHAKU_HUB_BUILD_TIME:-}
+        CHEESE_CAVE_GIT_SHA: ${CHEESE_CAVE_GIT_SHA:-${KOHAKU_HUB_GIT_SHA:-}}
+        CHEESE_CAVE_BUILD_TIME: ${CHEESE_CAVE_BUILD_TIME:-${KOHAKU_HUB_BUILD_TIME:-}}
   khub-worker:
     image: ${CHEESECAVE_BACKEND_IMAGE:-cheesecave-backend:local}
     build:
       context: .
       args:
-        KOHAKU_HUB_GIT_SHA: ${KOHAKU_HUB_GIT_SHA:-}
-        KOHAKU_HUB_BUILD_TIME: ${KOHAKU_HUB_BUILD_TIME:-}
+        CHEESE_CAVE_GIT_SHA: ${CHEESE_CAVE_GIT_SHA:-${KOHAKU_HUB_GIT_SHA:-}}
+        CHEESE_CAVE_BUILD_TIME: ${CHEESE_CAVE_BUILD_TIME:-${KOHAKU_HUB_BUILD_TIME:-}}
   hub-web:
     image: ${CHEESECAVE_WEB_IMAGE:-cheesecave-web:local}
     build:

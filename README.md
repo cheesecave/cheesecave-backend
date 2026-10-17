@@ -111,8 +111,10 @@ changes, checking migration and background-job compatibility. See the deployment
 guide for rollback instructions.
 
 The project and distribution are named CheeseCave, while Python imports remain
-`kohakuhub`. Existing `KOHAKU_HUB_*` settings, protocol identities, migrations,
-storage identifiers and client paths are retained. CheeseCave is the default
+`kohakuhub`. Settings are `CHEESE_CAVE_<NAME>` environment variables; the existing
+`KOHAKU_HUB_<NAME>` names are still read as a fallback, and the new name wins when
+both are set. Protocol identities, migrations, storage identifiers and client
+paths are retained. CheeseCave is the default
 display name; administrator-configured branding takes precedence. New frontend
 features require supporting backend APIs, and incompatible changes must be
 documented explicitly.

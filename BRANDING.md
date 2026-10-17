@@ -9,8 +9,8 @@ about page and the license files.
 - **CheeseCave** names the service, the three repositories, the container images
   (`ghcr.io/cheesecave/*`) and the PyPI names `cheesecave` and `cheesecave-backend`.
 - **KohakuHub** is used only to describe the origin of the code, never as the product name.
-- The Python import package remains `kohakuhub`, and `KOHAKU_HUB_*` settings remain as they are;
-  they are compatibility identifiers, not branding.
+- The Python import package remains `kohakuhub`. Settings are `CHEESE_CAVE_<NAME>` environment variables;
+  the `KOHAKU_HUB_<NAME>` names are kept as a compatibility fallback (the new name wins when both are set).
 - Administrators may set their own display name and logo at runtime. That choice takes precedence
   over the defaults in this repository.
 

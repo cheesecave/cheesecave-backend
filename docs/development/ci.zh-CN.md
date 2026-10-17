@@ -29,13 +29,13 @@ workflow 已集成到默认分支 `main`。在 GitHub Actions UI 选择
 安装 `.[dev]` 后，可运行无需服务的分类：
 
 ```sh
-KOHAKU_HUB_DB_BACKEND=sqlite KOHAKU_HUB_DATABASE_URL=sqlite:///:memory: PYTHONPATH=src:. python -m pytest test/kohakuhub -p scripts.ci.select_tests --ci-category fast -q
+CHEESE_CAVE_DB_BACKEND=sqlite CHEESE_CAVE_DATABASE_URL=sqlite:///:memory: PYTHONPATH=src:. python -m pytest test/kohakuhub -p scripts.ci.select_tests --ci-category fast -q
 ```
 
 仅检查选择结果时，分类可替换为任意分类：
 
 ```sh
-KOHAKU_HUB_DB_BACKEND=sqlite KOHAKU_HUB_DATABASE_URL=sqlite:///:memory: PYTHONPATH=src:. python -m pytest test/kohakuhub -p scripts.ci.select_tests --ci-category fast --collect-only -q
+CHEESE_CAVE_DB_BACKEND=sqlite CHEESE_CAVE_DATABASE_URL=sqlite:///:memory: PYTHONPATH=src:. python -m pytest test/kohakuhub -p scripts.ci.select_tests --ci-category fast --collect-only -q
 ```
 
 服务任务使用 `scripts/ci/compose.yml`，使用测试专用地址与凭证，并通过 `up --wait`

@@ -7,14 +7,18 @@ set -e
 
 echo "=== KohakuHub Database Initialization ==="
 
+# The URL is CHEESE_CAVE_DATABASE_URL, or the older KOHAKU_HUB_DATABASE_URL when that is not set
+# (an empty value counts as set), the same rule as kohakuhub.envnames. This image has no Python.
+DATABASE_URL="${CHEESE_CAVE_DATABASE_URL-${KOHAKU_HUB_DATABASE_URL-}}"
+
 # Extract PostgreSQL connection details from DATABASE_URL or individual vars
-if [ -n "$KOHAKU_HUB_DATABASE_URL" ]; then
+if [ -n "$DATABASE_URL" ]; then
     # Parse connection string: postgresql://user:pass@host:port/dbname
-    POSTGRES_USER=$(echo "$KOHAKU_HUB_DATABASE_URL" | sed -n 's|.*://\([^:]*\):.*|\1|p')
-    POSTGRES_PASSWORD=$(echo "$KOHAKU_HUB_DATABASE_URL" | sed -n 's|.*://[^:]*:\([^@]*\)@.*|\1|p')
-    POSTGRES_HOST=$(echo "$KOHAKU_HUB_DATABASE_URL" | sed -n 's|.*@\([^:]*\):.*|\1|p')
-    POSTGRES_PORT=$(echo "$KOHAKU_HUB_DATABASE_URL" | sed -n 's|.*:\([0-9]*\)/.*|\1|p')
-    POSTGRES_DB=$(echo "$KOHAKU_HUB_DATABASE_URL" | sed -n 's|.*/\([^?]*\).*|\1|p')
+    POSTGRES_USER=$(echo "$DATABASE_URL" | sed -n 's|.*://\([^:]*\):.*|\1|p')
+    POSTGRES_PASSWORD=$(echo "$DATABASE_URL" | sed -n 's|.*://[^:]*:\([^@]*\)@.*|\1|p')
+    POSTGRES_HOST=$(echo "$DATABASE_URL" | sed -n 's|.*@\([^:]*\):.*|\1|p')
+    POSTGRES_PORT=$(echo "$DATABASE_URL" | sed -n 's|.*:\([0-9]*\)/.*|\1|p')
+    POSTGRES_DB=$(echo "$DATABASE_URL" | sed -n 's|.*/\([^?]*\).*|\1|p')
 else
     POSTGRES_USER="${POSTGRES_USER:-hub}"
     POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-hubpass}"

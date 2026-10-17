@@ -443,26 +443,26 @@ register_resp = requests.post(
 
 ```bash
 # How long a session lasts after its last use (hours); using it renews it
-KOHAKU_HUB_SESSION_EXPIRE_HOURS=720  # 30 days default
+CHEESE_CAVE_SESSION_EXPIRE_HOURS=720  # 30 days default
 
 # The longest a session lives from the login (days); 0 = no limit
-KOHAKU_HUB_SESSION_ABSOLUTE_DAYS=365  # default
+CHEESE_CAVE_SESSION_ABSOLUTE_DAYS=365  # default
 
 # Email verification
-KOHAKU_HUB_REQUIRE_EMAIL_VERIFICATION=false
+CHEESE_CAVE_REQUIRE_EMAIL_VERIFICATION=false
 
 # Invitation-only registration
-KOHAKU_HUB_INVITATION_ONLY=false
+CHEESE_CAVE_INVITATION_ONLY=false
 
 # Session secret (for cookie signing)
-KOHAKU_HUB_SESSION_SECRET=change_this_in_production
+CHEESE_CAVE_SESSION_SECRET=change_this_in_production
 
 # Email SMTP (for verification emails)
-KOHAKU_HUB_SMTP_HOST=smtp.gmail.com
-KOHAKU_HUB_SMTP_PORT=587
-KOHAKU_HUB_SMTP_USERNAME=your_email@gmail.com
-KOHAKU_HUB_SMTP_PASSWORD=your_app_password
-KOHAKU_HUB_SMTP_FROM=noreply@yourdomain.com
+CHEESE_CAVE_SMTP_HOST=smtp.gmail.com
+CHEESE_CAVE_SMTP_PORT=587
+CHEESE_CAVE_SMTP_USERNAME=your_email@gmail.com
+CHEESE_CAVE_SMTP_PASSWORD=your_app_password
+CHEESE_CAVE_SMTP_FROM=noreply@yourdomain.com
 ```
 
 ---

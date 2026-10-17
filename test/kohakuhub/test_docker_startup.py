@@ -66,3 +66,190 @@ def test_write_credentials_replaces_file_atomically(startup):
         "KOHAKU_HUB_LAKEFS_ACCESS_KEY=ak\nKOHAKU_HUB_LAKEFS_SECRET_KEY=sk\n"
     )
     assert list(startup.CRED_FILE.parent.iterdir()) == [startup.CRED_FILE]
+
+
+# --- settings are read under CHEESE_CAVE_<NAME> first, KOHAKU_HUB_<NAME> as the fallback ------------
+#
+# The LakeFS credentials file is a data format older images and shell scripts read, so it is still
+# written with the old keys, and what it holds is exported under the keys it was written with.
+
+
+@pytest.fixture
+def prefixed(monkeypatch, tmp_path):
+    """A loader of fresh entrypoint modules, each over a private environment without hub variables."""
+    import os
+
+    environ = {
+        k: v for k, v in os.environ.items() if not k.startswith(("CHEESE_CAVE_", "KOHAKU_HUB_"))
+    }
+    monkeypatch.setattr(os, "environ", environ)
+
+    def load():
+        spec = importlib.util.spec_from_file_location("khub_startup_prefixed", STARTUP_PATH)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        module.CRED_FILE = tmp_path / "creds" / "credentials.env"
+        return module
+
+    load.environ = environ
+    return load
+
+
+def test_the_lakefs_endpoint_defaults_and_is_read_under_either_prefix(prefixed):
+    assert prefixed().LAKEFS_ENDPOINT == "http://lakefs:28000"
+    prefixed.environ["KOHAKU_HUB_LAKEFS_ENDPOINT"] = "http://old:1"
+    assert prefixed().LAKEFS_ENDPOINT == "http://old:1"
+    prefixed.environ["CHEESE_CAVE_LAKEFS_ENDPOINT"] = "http://new:2"
+    assert prefixed().LAKEFS_ENDPOINT == "http://new:2"
+
+
+def test_the_worker_count_is_read_under_either_prefix(prefixed):
+    module = prefixed()
+    assert module.worker_count() == 4
+    prefixed.environ["KOHAKU_HUB_WORKERS"] = "6"
+    assert module.worker_count() == 6
+    prefixed.environ["CHEESE_CAVE_WORKERS"] = "2"
+    assert module.worker_count() == 2
+
+
+def test_garage_is_detected_from_the_s3_endpoint_under_either_prefix(prefixed, capsys):
+    module = prefixed()
+    module.init_garage()
+    assert capsys.readouterr().out == ""
+
+    prefixed.environ["KOHAKU_HUB_S3_ENDPOINT"] = "http://garage:3900"
+    module.init_garage()
+    assert "Detected Garage" in capsys.readouterr().out
+
+    prefixed.environ["CHEESE_CAVE_S3_ENDPOINT"] = "http://minio:9000"
+    module.init_garage()
+    assert capsys.readouterr().out == ""
+
+
+def test_credentials_in_the_environment_under_either_prefix_are_not_replaced_by_the_file(prefixed):
+    module = prefixed()
+    module.write_credentials("FILE-AK", "FILE-SK")
+
+    prefixed.environ["CHEESE_CAVE_LAKEFS_ACCESS_KEY"] = "ENV-AK"
+    module.load_credentials()
+    assert prefixed.environ["CHEESE_CAVE_LAKEFS_ACCESS_KEY"] == "ENV-AK"
+    assert "KOHAKU_HUB_LAKEFS_ACCESS_KEY" not in prefixed.environ
+
+    del prefixed.environ["CHEESE_CAVE_LAKEFS_ACCESS_KEY"]
+    prefixed.environ["KOHAKU_HUB_LAKEFS_ACCESS_KEY"] = "OLD-ENV-AK"
+    module.load_credentials()
+    assert prefixed.environ["KOHAKU_HUB_LAKEFS_ACCESS_KEY"] == "OLD-ENV-AK"
+
+
+def test_a_credentials_file_with_the_new_keys_is_read_as_written(prefixed):
+    module = prefixed()
+    module.CRED_FILE.parent.mkdir(parents=True)
+    module.CRED_FILE.write_text(
+        "CHEESE_CAVE_LAKEFS_ACCESS_KEY=NEW-AK\nCHEESE_CAVE_LAKEFS_SECRET_KEY=NEW-SK\n\nnot a pair\n"
+    )
+
+    module.load_credentials()
+
+    assert prefixed.environ["CHEESE_CAVE_LAKEFS_ACCESS_KEY"] == "NEW-AK"
+    assert prefixed.environ["CHEESE_CAVE_LAKEFS_SECRET_KEY"] == "NEW-SK"
+
+
+def test_the_worker_needs_no_file_when_credentials_are_given_under_the_new_prefix(prefixed, monkeypatch):
+    module = prefixed()
+    execs = []
+    monkeypatch.setattr(module.os, "execvp", lambda file, args: execs.append(args))
+    prefixed.environ["CHEESE_CAVE_LAKEFS_ACCESS_KEY"] = "AK"
+
+    module.run_worker()  # would wait for the missing file forever if it looked only at the old name
+
+    assert execs == [[sys.executable, "-m", "kohakuhub.worker"]]
+    assert not module.CRED_FILE.exists()
+
+
+def test_the_server_starts_with_the_configured_worker_count_and_credentials_of_either_prefix(
+    prefixed, monkeypatch
+):
+    module = prefixed()
+    prefixed.environ.update(
+        CHEESE_CAVE_WORKERS="3",
+        CHEESE_CAVE_LAKEFS_ACCESS_KEY="AK",
+        KOHAKU_HUB_LAKEFS_SECRET_KEY="SK",
+    )
+    ran = []
+    monkeypatch.setattr(module, "wait_for_lakefs", lambda: None)
+    monkeypatch.setattr(module, "run_migrations", lambda: None)
+    monkeypatch.setattr(module, "is_initialized", lambda client: pytest.fail("set up again"))
+    monkeypatch.setattr(module.subprocess, "run", lambda cmd, **kw: ran.append(cmd))
+    monkeypatch.setattr(module.sys, "argv", ["startup.py"])
+
+    module.main()
+
+    assert ran[0][ran[0].index("--workers") + 1] == "3"
+
+
+def test_first_start_sets_lakefs_up_and_keeps_writing_the_old_keys(prefixed, monkeypatch):
+    module = prefixed()
+    monkeypatch.setattr(module, "wait_for_lakefs", lambda: None)
+    monkeypatch.setattr(module, "run_migrations", lambda: None)
+    monkeypatch.setattr(module, "is_initialized", lambda client: False)
+    monkeypatch.setattr(module, "do_setup", lambda client: ("NEW-AK", "NEW-SK"))
+    monkeypatch.setattr(module.subprocess, "run", lambda cmd, **kw: None)
+    monkeypatch.setattr(module.sys, "argv", ["startup.py"])
+
+    module.main()
+
+    assert prefixed.environ["KOHAKU_HUB_LAKEFS_ACCESS_KEY"] == "NEW-AK"
+    assert prefixed.environ["KOHAKU_HUB_LAKEFS_SECRET_KEY"] == "NEW-SK"
+    assert module.CRED_FILE.read_text().splitlines() == [
+        "KOHAKU_HUB_LAKEFS_ACCESS_KEY=NEW-AK",
+        "KOHAKU_HUB_LAKEFS_SECRET_KEY=NEW-SK",
+    ]
+
+
+# --- the secrets Compose used to require: now refused by the entrypoint ----------------------------
+
+
+def test_the_start_is_refused_on_an_empty_secret_and_names_both_spellings(prefixed, capsys):
+    module = prefixed()
+    prefixed.environ["CHEESE_CAVE_SESSION_SECRET"] = ""  # what Compose passes when .env has neither key
+
+    with pytest.raises(SystemExit) as stop:
+        module.require_secrets()
+
+    assert stop.value.code == 1
+    out = capsys.readouterr().out
+    assert "CHEESE_CAVE_SESSION_SECRET" in out and "KOHAKU_HUB_SESSION_SECRET" in out
+
+
+@pytest.mark.parametrize("name", ["SESSION_SECRET", "ADMIN_SECRET_TOKEN", "DATABASE_KEY"])
+def test_each_required_secret_is_checked_under_either_prefix(prefixed, name):
+    module = prefixed()
+    prefixed.environ[f"KOHAKU_HUB_{name}"] = ""
+    with pytest.raises(SystemExit):
+        module.require_secrets()
+
+    prefixed.environ[f"KOHAKU_HUB_{name}"] = "set-in-the-old-spelling"
+    module.require_secrets()  # a value under the old name is enough
+
+    prefixed.environ[f"CHEESE_CAVE_{name}"] = ""
+    with pytest.raises(SystemExit):
+        module.require_secrets()  # the new name wins, and it is empty
+
+
+def test_unset_secrets_are_left_to_the_application(prefixed):
+    # Not run through Compose (a bare container, a dev run): the application's own warnings apply.
+    prefixed().require_secrets()
+
+
+def test_the_api_start_checks_the_secrets_first_and_the_worker_does_too(prefixed, monkeypatch):
+    module = prefixed()
+    prefixed.environ["CHEESE_CAVE_ADMIN_SECRET_TOKEN"] = ""
+    monkeypatch.setattr(module.sys, "argv", ["startup.py"])
+    monkeypatch.setattr(module, "wait_for_lakefs", lambda: pytest.fail("started before the check"))
+    with pytest.raises(SystemExit):
+        module.main()
+
+    monkeypatch.setattr(module.sys, "argv", ["startup.py", "worker"])
+    monkeypatch.setattr(module, "run_worker", lambda: pytest.fail("worker started before the check"))
+    with pytest.raises(SystemExit):
+        module.main()

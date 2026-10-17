@@ -35,7 +35,7 @@ This directory contains database migration scripts for KohakuHub.
 
 **If you have an existing database:**
 - Migrations 001-007 will automatically skip (changes already included in 008)
-- Migration 008 requires confirmation (or set `KOHAKU_HUB_AUTO_MIGRATE=true` in Docker)
+- Migration 008 requires confirmation (or set `CHEESE_CAVE_AUTO_MIGRATE=true` in Docker)
 - **BACKUP YOUR DATABASE BEFORE RUNNING 008**
 
 **For fresh/new databases:**
@@ -189,7 +189,7 @@ This is faster and cleaner than running all migrations sequentially.
 ### For Existing Databases
 1. **Backup first!** Always backup before running migrations
 2. Run migrations via the automatic startup process
-3. Set `KOHAKU_HUB_AUTO_MIGRATE=true` to skip confirmation prompts in Docker
+3. Set `CHEESE_CAVE_AUTO_MIGRATE=true` to skip confirmation prompts in Docker
 4. Monitor logs for migration status
 
 ### For Development

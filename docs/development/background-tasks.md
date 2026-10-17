@@ -237,7 +237,7 @@ changes between runs from the same state.
   - lost and stopped workers silent for over 24 hours are hidden unless **Show workers inactive for over 24h** is ticked (`?include_inactive=true`);
   - the page header shows how many workers are online, and a task's **Worker** field jumps to its row.
 
-  A worker's name is its hostname, which in Docker is the container id that `docker ps` shows. Set `KOHAKU_HUB_WORKER_NAME` to prefix it, for example `gpu-box-3f9a1c2e7b10`.
+  A worker's name is its hostname, which in Docker is the container id that `docker ps` shows. Set `CHEESE_CAVE_WORKER_NAME` to prefix it, for example `gpu-box-3f9a1c2e7b10`.
 
   The endpoints behind these are:
   - `POST /admin/api/tasks/{id}/cancel`;
@@ -270,9 +270,9 @@ make worker
 
 Docker Compose runs it as the `khub-worker` service from the same image as
 `hub-api`. See `docker-compose.example.yml`. Run several replicas with
-`KOHAKU_HUB_WORKER_REPLICAS=3 docker compose up -d`; see
+`CHEESE_CAVE_WORKER_REPLICAS=3 docker compose up -d`; see
 [Running several workers](../deployment/docker.md#running-several-workers).
-Tune it with the `KOHAKU_HUB_WORKER_*` variables in the
+Tune it with the `CHEESE_CAVE_WORKER_*` variables in the
 [configuration reference](../reference/config.md#background-task-worker-settings).
 If no worker is running, tasks accumulate as `queued`; the API does not depend
 on them.

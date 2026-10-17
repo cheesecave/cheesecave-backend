@@ -55,27 +55,27 @@ server {
 
 **Update base URL:**
 ```yaml
-KOHAKU_HUB_BASE_URL: https://hub.yourdomain.com
+CHEESE_CAVE_BASE_URL: https://hub.yourdomain.com
 ```
 
 ## External S3
 
 **Cloudflare R2:**
 ```yaml
-KOHAKU_HUB_S3_ENDPOINT: https://account.r2.cloudflarestorage.com
-KOHAKU_HUB_S3_PUBLIC_ENDPOINT: https://account.r2.cloudflarestorage.com  # the same address
-KOHAKU_HUB_S3_REGION: auto
-KOHAKU_HUB_S3_SIGNATURE_VERSION: s3v4
+CHEESE_CAVE_S3_ENDPOINT: https://account.r2.cloudflarestorage.com
+CHEESE_CAVE_S3_PUBLIC_ENDPOINT: https://account.r2.cloudflarestorage.com  # the same address
+CHEESE_CAVE_S3_REGION: auto
+CHEESE_CAVE_S3_SIGNATURE_VERSION: s3v4
 ```
-Clients upload and download through presigned URLs, which are signed for `KOHAKU_HUB_S3_PUBLIC_ENDPOINT` (SigV4 signs the host). Cloudflare documents R2 presigned URLs for its S3 API domain, `<account>.r2.cloudflarestorage.com`, and says they cannot be used with custom domains; a `*.r2.dev` public-bucket URL is a development path (rate-limited). So the public endpoint is the endpoint itself.
+Clients upload and download through presigned URLs, which are signed for `CHEESE_CAVE_S3_PUBLIC_ENDPOINT` (SigV4 signs the host). Cloudflare documents R2 presigned URLs for its S3 API domain, `<account>.r2.cloudflarestorage.com`, and says they cannot be used with custom domains; a `*.r2.dev` public-bucket URL is a development path (rate-limited). So the public endpoint is the endpoint itself.
 
 **MinIO behind your own proxy (compose or not):** the endpoint is what the API reaches MinIO at (`http://minio:9000`), the public endpoint what clients reach it at (`https://s3.yourdomain.com`). The proxy must pass the `Host` header through unchanged (`proxy_set_header Host $http_host;` in nginx; its default sends the upstream's `minio:9000` instead, and the signature then no longer matches), must not buffer or limit uploads (`proxy_request_buffering off; client_max_body_size 0;`), and may mount MinIO under a path only if it removes that path again before the request reaches MinIO (the path is not part of the signature).
 
-**An R2 bucket that holds other data too, or an API token scoped to one bucket:** put the bucket in the endpoint's path. `KOHAKU_HUB_S3_BUCKET` then names a key prefix inside it, and LakeFS must use the same endpoint:
+**An R2 bucket that holds other data too, or an API token scoped to one bucket:** put the bucket in the endpoint's path. `CHEESE_CAVE_S3_BUCKET` then names a key prefix inside it, and LakeFS must use the same endpoint:
 ```yaml
-KOHAKU_HUB_S3_ENDPOINT: https://account.r2.cloudflarestorage.com/my-bucket
-KOHAKU_HUB_S3_PUBLIC_ENDPOINT: https://account.r2.cloudflarestorage.com/my-bucket  # same bucket
-KOHAKU_HUB_S3_BUCKET: hub-storage            # objects live under my-bucket/hub-storage/
+CHEESE_CAVE_S3_ENDPOINT: https://account.r2.cloudflarestorage.com/my-bucket
+CHEESE_CAVE_S3_PUBLIC_ENDPOINT: https://account.r2.cloudflarestorage.com/my-bucket  # same bucket
+CHEESE_CAVE_S3_BUCKET: hub-storage            # objects live under my-bucket/hub-storage/
 LAKEFS_BLOCKSTORE_S3_ENDPOINT: https://account.r2.cloudflarestorage.com/my-bucket
 LAKEFS_BLOCKSTORE_S3_DISCOVER_BUCKET_REGION: "false"  # its region probe of hub-storage can only fail
 ```
@@ -83,9 +83,9 @@ KohakuHub reaches the bucket at the endpoint's root, so copies, listings and bul
 
 **AWS S3:**
 ```yaml
-KOHAKU_HUB_S3_ENDPOINT: https://s3.amazonaws.com
-KOHAKU_HUB_S3_REGION: us-east-1
-KOHAKU_HUB_S3_FORCE_PATH_STYLE: false
+CHEESE_CAVE_S3_ENDPOINT: https://s3.amazonaws.com
+CHEESE_CAVE_S3_REGION: us-east-1
+CHEESE_CAVE_S3_FORCE_PATH_STYLE: false
 ```
 
 ## Security

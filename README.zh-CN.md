@@ -99,8 +99,9 @@ docker compose up -d --no-deps hub-web
 Admin 同理。网关会重新解析替换后容器的地址。更新后端时应同时更新 `hub-api` 和
 `khub-worker`，并核对数据库迁移及后台任务兼容性；回滚步骤见部署文档。
 
-项目与发行名称改为 CheeseCave，Python 导入仍为 `kohakuhub`。`KOHAKU_HUB_*` 配置、
-协议身份、数据库迁移、存储标识和既有客户端路径继续保留。默认展示名为 CheeseCave，
+项目与发行名称改为 CheeseCave，Python 导入仍为 `kohakuhub`。配置项使用
+`CHEESE_CAVE_<NAME>` 环境变量；既有的 `KOHAKU_HUB_<NAME>` 名称仍作为回退读取，
+两者同时设置时以新名称为准。协议身份、数据库迁移、存储标识和既有客户端路径继续保留。默认展示名为 CheeseCave，
 管理员已配置的品牌优先。新前端能力需要相应后端 API 支持；破坏兼容的变更应明确记录。
 
 ## 来源与许可证

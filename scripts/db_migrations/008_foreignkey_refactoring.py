@@ -44,9 +44,15 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 from kohakuhub.db import db
 from kohakuhub.config import cfg
+from kohakuhub.envnames import read_env
 from _migration_utils import should_skip_due_to_future_migrations
 
 MIGRATION_NUMBER = 8
+
+
+def auto_confirm_enabled() -> bool:
+    """CHEESE_CAVE_AUTO_MIGRATE (or the older KOHAKU_HUB_AUTO_MIGRATE): skip the prompt (Docker, CI)."""
+    return (read_env("AUTO_MIGRATE") or "").lower() in ("true", "1", "yes")
 
 
 def is_applied(db, cfg):
@@ -413,13 +419,9 @@ def migrate_postgres():
     print("")
 
     # Allow auto-confirmation via environment variable (for Docker/CI)
-    auto_confirm = os.environ.get("KOHAKU_HUB_AUTO_MIGRATE", "").lower() in (
-        "true",
-        "1",
-        "yes",
-    )
+    auto_confirm = auto_confirm_enabled()
     if auto_confirm:
-        print("  Auto-confirmation enabled (KOHAKU_HUB_AUTO_MIGRATE=true)")
+        print("  Auto-confirmation enabled (CHEESE_CAVE_AUTO_MIGRATE=true)")
         response = "yes"
     else:
         response = input("Type 'yes' to continue: ")

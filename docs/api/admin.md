@@ -23,7 +23,7 @@ X-Admin-Token: your_admin_secret_token
 
 **Configuration:**
 ```bash
-KOHAKU_HUB_ADMIN_TOKEN=your_secret_token
+CHEESE_CAVE_ADMIN_TOKEN=your_secret_token
 ```
 
 **Example:**

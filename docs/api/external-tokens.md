@@ -726,10 +726,10 @@ masked = mask_token("hf_abc123xyz789...", show_chars=4)
 
 ```bash
 # Generate secure encryption key
-export KOHAKU_HUB_DATABASE_KEY="$(openssl rand -hex 32)"
+export CHEESE_CAVE_DATABASE_KEY="$(openssl rand -hex 32)"
 
 # Optional: Require authentication for fallback access
-export KOHAKU_HUB_FALLBACK_REQUIRE_AUTH=false
+export CHEESE_CAVE_FALLBACK_REQUIRE_AUTH=false
 ```
 
 ---

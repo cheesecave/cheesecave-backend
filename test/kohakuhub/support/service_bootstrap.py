@@ -6,6 +6,8 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+from kohakuhub.envnames import env_or
+
 from test.kohakuhub.support.bootstrap import (
     ADMIN_TOKEN,
     DEFAULT_PASSWORD,
@@ -45,35 +47,22 @@ def ensure_service_paths() -> None:
 def get_service_test_config() -> ServiceTestConfig:
     """Return the effective config for the service-backed test profile."""
     return ServiceTestConfig(
-        database_url=os.environ.get(
-            "KOHAKU_HUB_DATABASE_URL",
+        database_url=env_or(
+            "DATABASE_URL",
             "postgresql://hub_dev:hub_dev_password@127.0.0.1:25432/kohakuhub_test",
         ),
-        s3_endpoint=os.environ.get(
-            "KOHAKU_HUB_S3_ENDPOINT",
-            "http://127.0.0.1:29001",
+        s3_endpoint=env_or("S3_ENDPOINT", "http://127.0.0.1:29001"),
+        s3_public_endpoint=env_or(
+            "S3_PUBLIC_ENDPOINT", env_or("S3_ENDPOINT", "http://127.0.0.1:29001")
         ),
-        s3_public_endpoint=os.environ.get(
-            "KOHAKU_HUB_S3_PUBLIC_ENDPOINT",
-            os.environ.get("KOHAKU_HUB_S3_ENDPOINT", "http://127.0.0.1:29001"),
-        ),
-        s3_access_key=os.environ.get("KOHAKU_HUB_S3_ACCESS_KEY", "minioadmin"),
-        s3_secret_key=os.environ.get("KOHAKU_HUB_S3_SECRET_KEY", "minioadmin"),
-        s3_bucket=os.environ.get("KOHAKU_HUB_S3_BUCKET", "hub-storage"),
-        s3_region=os.environ.get("KOHAKU_HUB_S3_REGION", "us-east-1"),
-        lakefs_endpoint=os.environ.get(
-            "KOHAKU_HUB_LAKEFS_ENDPOINT",
-            "http://127.0.0.1:28000",
-        ),
-        lakefs_repo_namespace=os.environ.get(
-            "KOHAKU_HUB_LAKEFS_REPO_NAMESPACE",
-            "hf",
-        ),
+        s3_access_key=env_or("S3_ACCESS_KEY", "minioadmin"),
+        s3_secret_key=env_or("S3_SECRET_KEY", "minioadmin"),
+        s3_bucket=env_or("S3_BUCKET", "hub-storage"),
+        s3_region=env_or("S3_REGION", "us-east-1"),
+        lakefs_endpoint=env_or("LAKEFS_ENDPOINT", "http://127.0.0.1:28000"),
+        lakefs_repo_namespace=env_or("LAKEFS_REPO_NAMESPACE", "hf"),
         lakefs_credentials_file=Path(
-            os.environ.get(
-                "KOHAKU_HUB_LAKEFS_CREDENTIALS_FILE",
-                str(LAKEFS_CREDENTIALS_FILE),
-            )
+            env_or("LAKEFS_CREDENTIALS_FILE", str(LAKEFS_CREDENTIALS_FILE))
         ),
     )
 

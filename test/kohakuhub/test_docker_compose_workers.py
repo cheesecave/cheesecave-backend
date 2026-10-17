@@ -9,7 +9,8 @@ import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
-REPLICAS = "${KOHAKU_HUB_WORKER_REPLICAS:-1}"
+# The new key first; the old one is the fallback an existing .env still uses.
+REPLICAS = "${CHEESE_CAVE_WORKER_REPLICAS:-${KOHAKU_HUB_WORKER_REPLICAS:-1}}"
 
 
 @pytest.mark.parametrize("source", ["compose.yml", "docker-compose.example.yml"])
@@ -118,3 +119,24 @@ def test_generated_config_precreates_user_owned_data_dirs(tmp_path):
     assert f"\nUID={os.getuid()}\n" in generated and f"\nGID={os.getgid()}\n" in generated
     for name in ("lakefs-data", "lakefs-cache", "valkey-data"):
         assert (tmp_path / "hub-meta" / name).stat().st_uid == os.getuid()
+
+
+def test_generated_secrets_use_the_new_prefix_and_fill_every_placeholder(tmp_path):
+    output = tmp_path / ".env"
+    command = [
+        sys.executable,
+        str(ROOT / "scripts/generate_docker_compose.py"),
+        "--generate-config",
+        "--output",
+        str(output),
+    ]
+    assert subprocess.run(command, capture_output=True).returncode == 0
+    lines = dict(
+        line.split("=", 1)
+        for line in output.read_text(encoding="utf-8").splitlines()
+        if "=" in line and not line.startswith("#")
+    )
+    for name in ("SESSION_SECRET", "ADMIN_SECRET_TOKEN", "DATABASE_KEY"):
+        assert len(lines[f"CHEESE_CAVE_{name}"]) == 64
+        assert f"KOHAKU_HUB_{name}" not in lines
+    assert not [key for key in lines if key.startswith("KOHAKU_HUB_")]

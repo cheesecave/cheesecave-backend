@@ -86,13 +86,19 @@ def read_existing_docker_compose(filepath: Path) -> dict:
                     # New section started
                     in_environment = False
                     in_hub_api = False
-                elif stripped.startswith("- KOHAKU_HUB_"):
+                elif stripped.startswith(("- CHEESE_CAVE_", "- KOHAKU_HUB_")):
                     # Parse environment variable
-                    # Format: - KOHAKU_HUB_KEY=value
-                    match = re.match(r"- (KOHAKU_HUB_\w+)=(.+?)(?:\s+#.*)?$", stripped)
+                    # Format: - CHEESE_CAVE_KEY=value (or the older - KOHAKU_HUB_KEY=value)
+                    match = re.match(
+                        r"- (CHEESE_CAVE|KOHAKU_HUB)_(\w+)=(.+?)(?:\s+#.*)?$", stripped
+                    )
                     if match:
-                        key, value = match.groups()
-                        env_vars[key] = value.strip()
+                        prefix, name, value = match.groups()
+                        # Keys are kept under the current prefix; when a file sets both,
+                        # the new prefix wins, as it does in the application.
+                        key = f"CHEESE_CAVE_{name}"
+                        if prefix == "CHEESE_CAVE" or key not in env_vars:
+                            env_vars[key] = value.strip()
 
         print(f"✓ Loaded {len(env_vars)} environment variables from {filepath}")
         return env_vars
@@ -191,7 +197,7 @@ def migrate_docker_compose(existing_env: dict, auto_mode: bool = False) -> dict:
     """Migrate docker-compose environment variables.
 
     Args:
-        existing_env: Dict of existing KOHAKU_HUB_* variables
+        existing_env: Dict of existing settings, keyed CHEESE_CAVE_<NAME>
         auto_mode: If True, use defaults for new fields without prompting
 
     Returns:
@@ -205,7 +211,7 @@ def migrate_docker_compose(existing_env: dict, auto_mode: bool = False) -> dict:
 
     # New fields to check and add if missing
     new_fields = {
-        "KOHAKU_HUB_DATABASE_KEY": {
+        "CHEESE_CAVE_DATABASE_KEY": {
             "prompt": "Database encryption key (for external tokens)",
             "default": generate_secret(32),  # 43 chars
             "comment": "For encrypting external fallback tokens (generate with: openssl rand -hex 32)",
@@ -215,7 +221,7 @@ def migrate_docker_compose(existing_env: dict, auto_mode: bool = False) -> dict:
             "default": "hub-storage",
             "comment": "S3 bucket for LakeFS blockstore",
         },
-        "KOHAKU_HUB_FALLBACK_REQUIRE_AUTH": {
+        "CHEESE_CAVE_FALLBACK_REQUIRE_AUTH": {
             "prompt": "Require authentication for fallback access? (true/false)",
             "default": "false",
             "comment": "Set true to require authentication for fallback access",
@@ -329,16 +335,18 @@ def write_docker_compose(
     for line in lines:
         stripped = line.strip()
 
-        # Replace known variables
-        if stripped.startswith("- KOHAKU_HUB_") or stripped.startswith(
-            "- LAKEFS_BLOCKSTORE_"
-        ):
+        # Replace known variables. The base is usually the operator's existing file, whose lines may
+        # still carry the old prefix; the migrated values are keyed CHEESE_CAVE_<NAME>, and the line
+        # is written back under that name.
+        if stripped.startswith(("- CHEESE_CAVE_", "- KOHAKU_HUB_", "- LAKEFS_BLOCKSTORE_")):
             match = re.match(
-                r"(\s*)- ((?:KOHAKU_HUB|LAKEFS_BLOCKSTORE)_\w+)=(.+?)(?:\s+#.*)?$",
+                r"(\s*)- ((?:CHEESE_CAVE|KOHAKU_HUB|LAKEFS_BLOCKSTORE)_\w+)=(.+?)(?:\s+#.*)?$",
                 line,
             )
             if match:
                 indent, key, old_value = match.groups()
+                if key.startswith("KOHAKU_HUB_"):
+                    key = "CHEESE_CAVE_" + key[len("KOHAKU_HUB_") :]
                 if key in env_vars:
                     # Keep comment from original line
                     comment_match = re.search(r"(#.+)$", line)

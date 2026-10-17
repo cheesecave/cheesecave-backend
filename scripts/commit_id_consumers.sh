@@ -7,7 +7,7 @@
 # A: who sends a 64 hex id in a URL (an id they stored); B: on which routes;
 # C: who reads commit ids from responses (they see 40 hex where they saw 64: see docs/api/commits.md);
 # D: the callers that are neither a browser nor huggingface_hub (the ones to look at, and to tell).
-# If D is not empty and it compares what a response says with ids it stored, set KOHAKU_HUB_COMMIT_ID_FORMAT=full
+# If D is not empty and it compares what a response says with ids it stored, set CHEESE_CAVE_COMMIT_ID_FORMAT=full
 # for a while. The gateway container is the one whose name has gateway or nginx in it.
 GW=$(docker ps --format '{{.Names}}' < /dev/null | grep -i -E 'gateway|nginx' | head -1)
 echo "gateway container: $GW"

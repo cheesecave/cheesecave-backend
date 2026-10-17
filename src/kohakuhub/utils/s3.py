@@ -223,7 +223,7 @@ def get_s3_client(pool: int | None = None):
     - None: Use default (s3v2 for MinIO compatibility)
     - "s3v4": AWS S3, Cloudflare R2 (required for these services)
 
-    Set via KOHAKU_HUB_S3_SIGNATURE_VERSION environment variable. An endpoint
+    Set via CHEESE_CAVE_S3_SIGNATURE_VERSION environment variable. An endpoint
     with a path names the real bucket (``bucket_in_endpoint``): the client then
     talks to the root endpoint and keeps ``cfg.s3.bucket`` as a key prefix.
 

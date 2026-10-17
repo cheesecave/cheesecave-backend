@@ -11,7 +11,7 @@ Control who can register and auto-add to organizations.
 ## Enable Invitation-Only Mode
 
 ```yaml
-KOHAKU_HUB_INVITATION_ONLY: true
+CHEESE_CAVE_INVITATION_ONLY: true
 ```
 
 ## Create Invitations

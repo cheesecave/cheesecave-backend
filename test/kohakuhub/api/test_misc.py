@@ -344,6 +344,32 @@ def test_build_identity_comes_from_the_image_then_the_checkout(monkeypatch, tmp_
     assert misc.build_identity(tmp_path.parent / "no-checkout")["git_sha"] is None
 
 
+def test_build_identity_reads_either_prefix_and_skips_an_empty_one(monkeypatch, tmp_path):
+    """An image build declares both names; the one it was not given is empty, not absent."""
+    import importlib
+
+    misc = importlib.import_module("kohakuhub.api.misc")
+    names = ("CHEESE_CAVE_GIT_SHA", "CHEESE_CAVE_BUILD_TIME", "KOHAKU_HUB_GIT_SHA", "KOHAKU_HUB_BUILD_TIME")
+    for name in names:
+        monkeypatch.delenv(name, raising=False)
+    nowhere = tmp_path / "no-checkout"
+
+    monkeypatch.setenv("CHEESE_CAVE_GIT_SHA", "newsha")
+    monkeypatch.setenv("CHEESE_CAVE_BUILD_TIME", "2026-10-17T00:00:00Z")
+    assert misc.build_identity(nowhere) == {"git_sha": "newsha", "build_time": "2026-10-17T00:00:00Z"}
+
+    # Only the old build arguments were passed: the new names exist but are empty.
+    monkeypatch.setenv("CHEESE_CAVE_GIT_SHA", "")
+    monkeypatch.setenv("CHEESE_CAVE_BUILD_TIME", "")
+    monkeypatch.setenv("KOHAKU_HUB_GIT_SHA", "oldsha")
+    monkeypatch.setenv("KOHAKU_HUB_BUILD_TIME", "2026-10-01T00:00:00Z")
+    assert misc.build_identity(nowhere) == {"git_sha": "oldsha", "build_time": "2026-10-01T00:00:00Z"}
+
+    # Both given: the new one wins.
+    monkeypatch.setenv("CHEESE_CAVE_GIT_SHA", "newsha")
+    assert misc.build_identity(nowhere)["git_sha"] == "newsha"
+
+
 async def test_version_reports_the_build(client):
     response = await client.get("/api/version")
 

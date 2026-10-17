@@ -56,7 +56,7 @@ frontends together. Follow the upgrade procedure below before starting API or
 worker processes.
 
 Until an administrator saves a site name, the backend uses `app.site_name`
-(`KOHAKU_HUB_SITE_NAME`). The default footer introduction is
+(`CHEESE_CAVE_SITE_NAME`). The default footer introduction is
 “Self-hosted HuggingFace Hub alternative”. Restoring an image does not change
 the other image or either text field.
 
@@ -120,7 +120,7 @@ infrastructure, so run the host migration command for that environment.
    ```
 
    Use a unique archive filename for each upgrade. Confirm that `POSTGRES_DB`
-   is the application database from `KOHAKU_HUB_DATABASE_URL`; for an external
+   is the application database from `CHEESE_CAVE_DATABASE_URL`; for an external
    PostgreSQL service, use its normal backup tooling and credentials. For
    SQLite, use SQLite's `.backup` command against the configured database file
    after stopping all writers, rather than copying a live file in WAL mode:
@@ -141,7 +141,7 @@ infrastructure, so run the host migration command for that environment.
 
    For a host installation, run from the new release's project directory in
    its Python environment with the existing `HUB_CONFIG` and/or
-   `KOHAKU_HUB_DB_BACKEND` / `KOHAKU_HUB_DATABASE_URL` settings:
+   `CHEESE_CAVE_DB_BACKEND` / `CHEESE_CAVE_DATABASE_URL` settings:
 
    ```bash
    python scripts/run_migrations.py
