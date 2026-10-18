@@ -1,5 +1,6 @@
 """Main FastAPI application for Kohaku Hub."""
 
+import os
 import uuid
 from contextlib import asynccontextmanager
 
@@ -251,6 +252,17 @@ app.include_router(ssh_keys.router, tags=["ssh-keys"])
 app.include_router(validation.router, tags=["validation"])
 app.include_router(xet_token.router, prefix=cfg.app.api_base, tags=["xet"])
 app.include_router(xet_cas.router, tags=["xet-cas"])
+
+# PROTOTYPE (branch proto/data-explorer, not for merge as is): the data explorer's routes, and the prototype's
+# static pages when CHEESE_CAVE_PROTO_STATIC names a directory.
+from kohakuhub.api.viewer import router as viewer_router  # noqa: E402
+
+app.include_router(viewer_router.router, prefix=cfg.app.api_base, tags=["viewer"])
+app.include_router(viewer_router.compat, prefix=cfg.app.api_base, tags=["viewer-compat"])
+if os.environ.get("CHEESE_CAVE_PROTO_STATIC"):
+    from fastapi.staticfiles import StaticFiles  # noqa: E402
+
+    app.mount("/proto", StaticFiles(directory=os.environ["CHEESE_CAVE_PROTO_STATIC"], html=True), name="proto")
 
 # Registered last so catch-all 501 routes for won't-support features
 # (discussions, space runtime, collections, webhooks) never shadow the
