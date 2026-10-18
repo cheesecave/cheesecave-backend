@@ -376,3 +376,14 @@ Rollback facts and the command are in
 - Nothing is backfilled. `CREATE TABLE IF NOT EXISTS`; two containers starting together take turns on an advisory lock.
 - The site's default style needs no migration: it is a field of the `theme` section of `site_appearance` that is filled in from the
   code when a stored theme lacks it.
+
+## Password reset links: 038
+
+- **038** (`038_password_reset_tokens.py`) creates `password_reset_token`: one row per one-time reset link an administrator made
+  (`token_hash`, the hash of the token and never the token; `expires_at`; `used_at`, set when the link is used and kept as
+  history; `created_by`), gone with the account.
+- **A table of its own on purpose**, as for 035 and 037: an older release does not know it and ignores it, so rolling back is
+  leaving it.
+- Nothing is backfilled. `CREATE TABLE IF NOT EXISTS` and two indexes; two containers starting together take turns on an
+  advisory lock.
+

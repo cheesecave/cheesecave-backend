@@ -1,5 +1,7 @@
 """User management endpoints for admin API."""
 
+from typing import Literal
+
 import bcrypt
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -9,6 +11,17 @@ from kohakuhub.db_operations import create_user, delete_user
 from kohakuhub.logger import get_logger
 from kohakuhub.usage import namespace_usage
 from kohakuhub.api.admin.utils import verify_admin_token
+from kohakuhub.config import cfg
+from kohakuhub.password_policy import Password
+from kohakuhub.password_reset import (
+    DEFAULT_TTL,
+    TTL_CHOICES,
+    TTL_KEYS,
+    active_link,
+    iso,
+    issue_link,
+    revoke_links,
+)
 
 logger = get_logger("ADMIN")
 router = APIRouter()
@@ -38,11 +51,17 @@ class CreateUserRequest(BaseModel):
 
     username: str
     email: str
-    password: str
+    password: Password
     email_verified: bool = False
     is_active: bool = True
     private_quota_bytes: int | None = None
     public_quota_bytes: int | None = None
+
+
+class PasswordResetLinkRequest(BaseModel):
+    """Which of the fixed lifetimes the link gets (15 minutes to 7 days); nothing else is accepted."""
+
+    ttl: Literal[TTL_KEYS] = DEFAULT_TTL
 
 
 # ===== Endpoints =====
@@ -361,3 +380,75 @@ async def update_user_quota(
         "private_used_bytes": used["private"],
         "public_used_bytes": used["public"],
     }
+
+
+# ===== Password reset links =====
+
+
+def _get_user_for_link(username: str) -> User:
+    user = User.get_or_none(User.username == username)
+    if user is None:
+        raise HTTPException(404, detail={"error": f"User not found: {username}"})
+    return user
+
+
+@router.post("/users/{username}/password-reset-link")
+async def create_password_reset_link(
+    username: str,
+    request: PasswordResetLinkRequest | None = None,
+    _admin: bool = Depends(verify_admin_token),
+):
+    """Make a one-time link with which the account's owner sets a new password (admin only).
+
+    The link is returned once and cannot be read again; a new link replaces the unused one. The token sits in the URL
+    fragment, so it reaches neither a server log nor a Referer header. Nothing is sent: the administrator hands it over.
+    """
+
+    user = _get_user_for_link(username)
+    if user.is_org:
+        raise HTTPException(400, detail={"error": "Organizations have no password"})
+    if not user.is_active:
+        raise HTTPException(400, detail={"error": "Account is disabled"})
+
+    ttl = request.ttl if request else DEFAULT_TTL
+    raw, row = issue_link(user, ttl)
+    # who, for how long: never the token
+    logger.info(f"Admin made a password reset link for {user.username} (valid {ttl})")
+
+    return {
+        "username": user.username,
+        "url": f"{cfg.app.base_url.rstrip('/')}/reset-password#token={raw}",
+        "ttl": ttl,
+        "created_at": iso(row.created_at),
+        "expires_at": iso(row.expires_at),
+    }
+
+
+@router.get("/users/{username}/password-reset-link")
+async def get_password_reset_link_status(
+    username: str,
+    _admin: bool = Depends(verify_admin_token),
+):
+    """Whether a link is waiting for the account, until when, and the lifetimes that can be chosen (admin only)."""
+
+    row = active_link(_get_user_for_link(username))
+    return {
+        "active": row is not None,
+        "created_at": iso(row.created_at) if row else None,
+        "expires_at": iso(row.expires_at) if row else None,
+        "default": DEFAULT_TTL,
+        "choices": [{"key": key, "seconds": seconds, "label": label} for key, seconds, label in TTL_CHOICES],
+    }
+
+
+@router.delete("/users/{username}/password-reset-link")
+async def revoke_password_reset_link(
+    username: str,
+    _admin: bool = Depends(verify_admin_token),
+):
+    """Withdraw the link that is waiting for the account (admin only)."""
+
+    user = _get_user_for_link(username)
+    revoked = revoke_links(user)
+    logger.info(f"Admin withdrew the password reset link of {user.username} ({revoked})")
+    return {"revoked": revoked}

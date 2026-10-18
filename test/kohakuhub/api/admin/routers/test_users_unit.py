@@ -70,13 +70,13 @@ async def test_create_user_rejects_taken_username_and_email_and_stores_hash():
 
     with pytest.raises(HTTPException) as username_conflict:
         await admin_users.create_user_admin(
-            admin_users.CreateUserRequest(username="taken", email="new@example.com", password="secret")
+            admin_users.CreateUserRequest(username="taken", email="new@example.com", password="secret-pass-1")
         )
     assert username_conflict.value.status_code == 400
 
     with pytest.raises(HTTPException) as email_conflict:
         await admin_users.create_user_admin(
-            admin_users.CreateUserRequest(username="bob", email="taken@example.com", password="secret")
+            admin_users.CreateUserRequest(username="bob", email="taken@example.com", password="secret-pass-1")
         )
     assert email_conflict.value.status_code == 400
     assert User.select().where(User.username == "bob").count() == 0
@@ -85,7 +85,7 @@ async def test_create_user_rejects_taken_username_and_email_and_stores_hash():
         admin_users.CreateUserRequest(
             username="bob",
             email="bob@example.com",
-            password="secret",
+            password="secret-pass-1",
             email_verified=True,
             private_quota_bytes=123,
             public_quota_bytes=456,
@@ -96,7 +96,7 @@ async def test_create_user_rejects_taken_username_and_email_and_stores_hash():
     stored = User.get(User.username == "bob")
     assert stored.email_verified is True
     assert stored.password_hash.startswith("$2")
-    assert stored.password_hash != "secret"
+    assert stored.password_hash != "secret-pass-1"
 
 
 @pytest.mark.asyncio
