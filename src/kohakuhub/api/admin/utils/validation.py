@@ -3,6 +3,36 @@
 import re
 
 
+# Tables and columns that hold credentials. A query that names one is refused; the values of columns with these names
+# are also masked in results (``SELECT *`` names none of them). Defence in depth: the viewer is for looking at data, and
+# an administrator can do a great deal through other endpoints.
+CREDENTIAL_NAMES = frozenset(
+    {
+        "password_hash",
+        "secret",
+        "session_id",
+        "token_hash",
+        "encrypted_token",
+        "lease_token",
+        "token",
+        "session",
+        "userexternaltoken",
+        "emailverification",
+    }
+)
+
+_STRING_LITERAL = re.compile(r"'(?:[^']|'')*'")
+_IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
+def find_credential_reference(sql: str) -> str | None:
+    """The first credential table or column the query names (literals and case ignored), else None."""
+    for name in _IDENTIFIER.findall(_STRING_LITERAL.sub("''", sql)):
+        if name.lower() in CREDENTIAL_NAMES:
+            return name.lower()
+    return None
+
+
 def validate_readonly_sql(sql: str) -> tuple[bool, str | None]:
     """Validate that SQL query is read-only SELECT query.
 
@@ -65,6 +95,13 @@ def validate_readonly_sql(sql: str) -> tuple[bool, str | None]:
     for func in dangerous_functions:
         if func in sql_upper:
             return False, f"Function '{func}' is not allowed"
+
+    credential = find_credential_reference(sql)
+    if credential:
+        return (
+            False,
+            f"'{credential}' is not available in the viewer (it holds credentials)",
+        )
 
     return True, None
 

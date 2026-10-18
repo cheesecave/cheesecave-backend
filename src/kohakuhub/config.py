@@ -69,6 +69,22 @@ class AdminConfig(BaseModel):
 
     enabled: bool = True
     secret_token: str = "change-me-in-production"
+    # A token shorter than this (or the default) disables the admin API, unless the development override is set.
+    min_token_length: int = 32
+    allow_weak_token: bool = False
+    # Brute-force throttle of the token check, counted per client address: a few free failures, then a wait that
+    # doubles from the base wait up to the longest wait. A client's count starts again after reset_seconds of calm.
+    auth_throttle_enabled: bool = True
+    auth_free_failures: int = 5
+    auth_base_wait_seconds: int = 1
+    auth_max_wait_seconds: int = 900
+    auth_reset_seconds: int = 1800
+    # Log one warning a minute when more than this many failures arrive in that minute (0 turns the alert off).
+    auth_alert_per_minute: int = 50
+    # How many proxies of ours stand in front of the API: 0 ignores X-Forwarded-For, N takes the N-th address from the right.
+    auth_trusted_proxy_hops: int = 0
+    # Addresses or networks that are never counted or delayed.
+    auth_allowlist: list[str] = []
 
 
 class QuotaConfig(BaseModel):
@@ -419,6 +435,29 @@ def load_config(path: str = None) -> Config:
         admin_env["enabled"] = read_env("ADMIN_ENABLED").lower() == "true"
     if read_env("ADMIN_SECRET_TOKEN") is not None:
         admin_env["secret_token"] = read_env("ADMIN_SECRET_TOKEN")
+    for field, name in (
+        ("min_token_length", "ADMIN_MIN_TOKEN_LENGTH"),
+        ("auth_free_failures", "ADMIN_AUTH_FREE_FAILURES"),
+        ("auth_base_wait_seconds", "ADMIN_AUTH_BASE_WAIT_SECONDS"),
+        ("auth_max_wait_seconds", "ADMIN_AUTH_MAX_WAIT_SECONDS"),
+        ("auth_reset_seconds", "ADMIN_AUTH_RESET_SECONDS"),
+        ("auth_alert_per_minute", "ADMIN_AUTH_ALERT_PER_MINUTE"),
+        ("auth_trusted_proxy_hops", "ADMIN_AUTH_TRUSTED_PROXY_HOPS"),
+    ):
+        if read_env(name) is not None:
+            admin_env[field] = int(read_env(name))
+    for field, name in (
+        ("allow_weak_token", "ADMIN_ALLOW_WEAK_TOKEN"),
+        ("auth_throttle_enabled", "ADMIN_AUTH_THROTTLE_ENABLED"),
+    ):
+        if read_env(name) is not None:
+            admin_env[field] = read_env(name).lower() == "true"
+    if read_env("ADMIN_AUTH_ALLOWLIST") is not None:
+        admin_env["auth_allowlist"] = [
+            entry.strip()
+            for entry in read_env("ADMIN_AUTH_ALLOWLIST").split(",")
+            if entry.strip()
+        ]
     if admin_env:
         config_from_env["admin"] = admin_env
 

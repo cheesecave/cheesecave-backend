@@ -19,6 +19,7 @@ from kohakuhub.logger import get_logger
 from kohakuhub.api.admin.utils import verify_admin_token
 from kohakuhub.api.admin.utils.validation import (
     get_query_templates,
+    CREDENTIAL_NAMES,
     validate_readonly_sql,
 )
 
@@ -154,6 +155,9 @@ async def execute_database_query(
             row_dict = {}
             for idx, col_name in enumerate(columns):
                 value = row[idx]
+                if value is not None and col_name.lower() in CREDENTIAL_NAMES:
+                    row_dict[col_name] = "[redacted]"
+                    continue
                 # Convert datetime/date to string for JSON serialization
                 if hasattr(value, "isoformat"):
                     value = value.isoformat()

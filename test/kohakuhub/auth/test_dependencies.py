@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 from fastapi import HTTPException
 
+import kohakuhub.auth.admin_token as admin_token
 import kohakuhub.auth.dependencies as auth_deps
 from kohakuhub.auth.utils import hash_token
 from kohakuhub.db import Token
@@ -85,8 +86,9 @@ def test_get_optional_user_and_get_external_tokens_cover_fallback_state(monkeypa
 
 
 def test_get_current_user_or_admin_covers_admin_user_and_failure_paths(monkeypatch):
-    monkeypatch.setattr(auth_deps.cfg.admin, "enabled", True)
-    monkeypatch.setattr(auth_deps.cfg.admin, "secret_token", "expected-secret")
+    monkeypatch.setattr(admin_token.cfg.admin, "enabled", True)
+    monkeypatch.setattr(admin_token.cfg.admin, "secret_token", "expected-secret")
+    monkeypatch.setattr(admin_token.cfg.admin, "allow_weak_token", True)
 
     admin_request = SimpleNamespace(state=SimpleNamespace())
     assert auth_deps.get_current_user_or_admin(admin_request, x_admin_token="expected-secret") == (None, True)
@@ -108,3 +110,72 @@ def test_get_current_user_or_admin_covers_admin_user_and_failure_paths(monkeypat
             SimpleNamespace(state=SimpleNamespace()), x_admin_token=None
         )
     assert exc.value.status_code == 401
+
+
+class _Headers:
+    def getlist(self, name):
+        return []
+
+
+def _admin_request(peer="198.51.100.20"):
+    return SimpleNamespace(
+        state=SimpleNamespace(), client=SimpleNamespace(host=peer), headers=_Headers()
+    )
+
+
+@pytest.fixture
+def admin_enabled(monkeypatch):
+    long_token = "k" * 40
+    monkeypatch.setattr(admin_token.cfg.admin, "enabled", True)
+    monkeypatch.setattr(admin_token.cfg.admin, "secret_token", long_token)
+    monkeypatch.setattr(admin_token.cfg.admin, "allow_weak_token", False)
+    monkeypatch.setattr(admin_token.cfg.admin, "auth_throttle_enabled", True)
+    monkeypatch.setattr(admin_token.cfg.admin, "auth_free_failures", 2)
+    monkeypatch.setattr(admin_token.cfg.admin, "auth_trusted_proxy_hops", 0)
+    monkeypatch.setattr(admin_token.cfg.admin, "auth_allowlist", [])
+    admin_token.throttle.reset()
+    yield long_token
+    admin_token.throttle.reset()
+
+
+def test_a_wrong_admin_token_still_lets_a_logged_in_user_through(monkeypatch, admin_enabled):
+    user = SimpleNamespace(username="alice")
+    monkeypatch.setattr(auth_deps, "get_current_user", lambda *a, **k: user)
+    request = _admin_request()
+    assert auth_deps.get_current_user_or_admin(request, x_admin_token="wrong") == (user, False)
+    assert admin_token.throttle.failures("198.51.100.20") == 1  # but the wrong token was counted
+
+
+def test_a_weak_token_is_not_accepted_here_either_but_users_still_work(monkeypatch, admin_enabled):
+    monkeypatch.setattr(admin_token.cfg.admin, "secret_token", "short")
+    user = SimpleNamespace(username="alice")
+    monkeypatch.setattr(auth_deps, "get_current_user", lambda *a, **k: user)
+    assert auth_deps.get_current_user_or_admin(_admin_request(), x_admin_token="short") == (user, False)
+
+
+def test_a_client_that_keeps_failing_waits_and_is_answered_429_even_as_a_user(monkeypatch, admin_enabled):
+    user = SimpleNamespace(username="alice")
+    monkeypatch.setattr(auth_deps, "get_current_user", lambda *a, **k: user)
+    request = _admin_request()
+    for _ in range(3):  # two free failures, the third starts a wait
+        auth_deps.get_current_user_or_admin(request, x_admin_token="wrong")
+    with pytest.raises(HTTPException) as waiting:
+        auth_deps.get_current_user_or_admin(request, x_admin_token=admin_enabled)
+    assert waiting.value.status_code == 429
+    assert waiting.value.headers["Retry-After"] == "1"
+
+
+def test_both_doors_share_one_count(monkeypatch, admin_enabled):
+    import asyncio
+
+    user = SimpleNamespace(username="alice")
+    monkeypatch.setattr(auth_deps, "get_current_user", lambda *a, **k: user)
+    request = _admin_request()
+    auth_deps.get_current_user_or_admin(request, x_admin_token="wrong")
+    auth_deps.get_current_user_or_admin(request, x_admin_token="wrong")
+    with pytest.raises(HTTPException):  # the third failure comes through the admin routes' door
+        asyncio.run(admin_token.verify_admin_token(request, "wrong"))
+    with pytest.raises(HTTPException) as waiting:
+        auth_deps.get_current_user_or_admin(request, x_admin_token=admin_enabled)
+    assert waiting.value.status_code == 429
+

@@ -98,6 +98,16 @@ def test_load_config_merges_file_and_environment(monkeypatch):
     monkeypatch.setenv("KOHAKU_HUB_TOKEN_EXPIRE_DAYS", "30")
     monkeypatch.setenv("KOHAKU_HUB_ADMIN_ENABLED", "false")
     monkeypatch.setenv("KOHAKU_HUB_ADMIN_SECRET_TOKEN", "admin-secret")
+    monkeypatch.setenv("KOHAKU_HUB_ADMIN_MIN_TOKEN_LENGTH", "40")
+    monkeypatch.setenv("KOHAKU_HUB_ADMIN_ALLOW_WEAK_TOKEN", "true")
+    monkeypatch.setenv("KOHAKU_HUB_ADMIN_AUTH_THROTTLE_ENABLED", "false")
+    monkeypatch.setenv("KOHAKU_HUB_ADMIN_AUTH_FREE_FAILURES", "7")
+    monkeypatch.setenv("KOHAKU_HUB_ADMIN_AUTH_BASE_WAIT_SECONDS", "2")
+    monkeypatch.setenv("KOHAKU_HUB_ADMIN_AUTH_MAX_WAIT_SECONDS", "600")
+    monkeypatch.setenv("KOHAKU_HUB_ADMIN_AUTH_RESET_SECONDS", "900")
+    monkeypatch.setenv("KOHAKU_HUB_ADMIN_AUTH_ALERT_PER_MINUTE", "0")
+    monkeypatch.setenv("KOHAKU_HUB_ADMIN_AUTH_TRUSTED_PROXY_HOPS", "2")
+    monkeypatch.setenv("KOHAKU_HUB_ADMIN_AUTH_ALLOWLIST", " 203.0.113.0/24 , 2001:db8::/32,,")
     monkeypatch.setenv("KOHAKU_HUB_DEFAULT_USER_PRIVATE_QUOTA_BYTES", "100")
     monkeypatch.setenv("KOHAKU_HUB_DEFAULT_USER_PUBLIC_QUOTA_BYTES", "unlimited")
     monkeypatch.setenv("KOHAKU_HUB_DEFAULT_ORG_PRIVATE_QUOTA_BYTES", "200")
@@ -155,6 +165,16 @@ def test_load_config_merges_file_and_environment(monkeypatch):
     assert cfg.auth.session_absolute_days == 90
     assert cfg.admin.enabled is False
     assert cfg.admin.secret_token == "admin-secret"
+    assert cfg.admin.min_token_length == 40
+    assert cfg.admin.allow_weak_token is True
+    assert cfg.admin.auth_throttle_enabled is False
+    assert cfg.admin.auth_free_failures == 7
+    assert cfg.admin.auth_base_wait_seconds == 2
+    assert cfg.admin.auth_max_wait_seconds == 600
+    assert cfg.admin.auth_reset_seconds == 900
+    assert cfg.admin.auth_alert_per_minute == 0
+    assert cfg.admin.auth_trusted_proxy_hops == 2
+    assert cfg.admin.auth_allowlist == ["203.0.113.0/24", "2001:db8::/32"]
     assert cfg.quota.default_user_private_quota_bytes == 100
     assert cfg.quota.default_user_public_quota_bytes is None
     assert cfg.quota.default_org_private_quota_bytes == 200
@@ -206,6 +226,15 @@ def test_load_config_uses_defaults_when_file_is_missing(monkeypatch):
     assert cfg.app.repository_revert_enabled is True
     assert cfg.app.repository_reset_enabled is True
     assert cfg.app.repository_squash_enabled is True
+    # The admin token's defaults: a gentle throttle, no trusted proxies, no weak-token override.
+    assert cfg.admin.allow_weak_token is False
+    assert cfg.admin.min_token_length == 32
+    assert cfg.admin.auth_throttle_enabled is True
+    assert (cfg.admin.auth_free_failures, cfg.admin.auth_base_wait_seconds) == (5, 1)
+    assert (cfg.admin.auth_max_wait_seconds, cfg.admin.auth_reset_seconds) == (900, 1800)
+    assert cfg.admin.auth_alert_per_minute == 50
+    assert cfg.admin.auth_trusted_proxy_hops == 0
+    assert cfg.admin.auth_allowlist == []
     hub_config.load_config.cache_clear()
 
 

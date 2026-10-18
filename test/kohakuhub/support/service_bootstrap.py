@@ -113,6 +113,8 @@ def apply_service_test_env() -> None:
         "KOHAKU_HUB_INVITATION_ONLY": "false",
         "KOHAKU_HUB_ADMIN_ENABLED": "true",
         "KOHAKU_HUB_ADMIN_SECRET_TOKEN": ADMIN_TOKEN,
+        # The tests' token is short on purpose; the weak-token guard has its own tests.
+        "KOHAKU_HUB_ADMIN_ALLOW_WEAK_TOKEN": "true",
         "KOHAKU_HUB_FALLBACK_ENABLED": "false",
         "KOHAKU_HUB_LOG_LEVEL": "ERROR",
         "KOHAKU_HUB_LOG_FORMAT": "terminal",

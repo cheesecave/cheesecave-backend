@@ -43,6 +43,8 @@ services:
       ## ===== CRITICAL: Security Configuration (MUST CHANGE) =====
       - CHEESE_CAVE_SESSION_SECRET=${CHEESE_CAVE_SESSION_SECRET:-${KOHAKU_HUB_SESSION_SECRET:-}}
       - CHEESE_CAVE_ADMIN_SECRET_TOKEN=${CHEESE_CAVE_ADMIN_SECRET_TOKEN:-${KOHAKU_HUB_ADMIN_SECRET_TOKEN:-}}
+      # Wrong admin tokens make a client wait (see docs/reference/config.md). With the shipped nginx in front, 1 proxy:
+      - CHEESE_CAVE_ADMIN_AUTH_TRUSTED_PROXY_HOPS=${CHEESE_CAVE_ADMIN_AUTH_TRUSTED_PROXY_HOPS:-${KOHAKU_HUB_ADMIN_AUTH_TRUSTED_PROXY_HOPS:-1}}
       - CHEESE_CAVE_DATABASE_KEY=${CHEESE_CAVE_DATABASE_KEY:-${KOHAKU_HUB_DATABASE_KEY:-}} # For external tokens (generate with: openssl rand -hex 32)
 
       ## ===== Performance Configuration =====  

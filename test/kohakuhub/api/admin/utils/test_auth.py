@@ -1,35 +1,12 @@
-"""Unit tests for admin auth helpers."""
+"""The admin routes' dependency is the shared token check (its behaviour is tested in test/kohakuhub/auth/test_admin_token.py)."""
 
 from __future__ import annotations
 
-import pytest
-from fastapi import HTTPException
-
+import kohakuhub.api.admin.utils as admin_utils
 import kohakuhub.api.admin.utils.auth as admin_auth
+import kohakuhub.auth.admin_token as admin_token
 
 
-@pytest.mark.asyncio
-async def test_verify_admin_token_rejects_disabled_missing_and_invalid_tokens(monkeypatch):
-    monkeypatch.setattr(admin_auth.cfg.admin, "enabled", False)
-    with pytest.raises(HTTPException) as disabled_exc:
-        await admin_auth.verify_admin_token("secret")
-    assert disabled_exc.value.status_code == 503
-
-    monkeypatch.setattr(admin_auth.cfg.admin, "enabled", True)
-    monkeypatch.setattr(admin_auth.cfg.admin, "secret_token", "expected")
-
-    with pytest.raises(HTTPException) as missing_exc:
-        await admin_auth.verify_admin_token(None)
-    assert missing_exc.value.status_code == 401
-
-    with pytest.raises(HTTPException) as invalid_exc:
-        await admin_auth.verify_admin_token("wrong")
-    assert invalid_exc.value.status_code == 403
-
-
-@pytest.mark.asyncio
-async def test_verify_admin_token_accepts_matching_secret(monkeypatch):
-    monkeypatch.setattr(admin_auth.cfg.admin, "enabled", True)
-    monkeypatch.setattr(admin_auth.cfg.admin, "secret_token", "expected")
-
-    assert await admin_auth.verify_admin_token("expected") is True
+def test_the_admin_routes_use_the_shared_token_check():
+    assert admin_auth.verify_admin_token is admin_token.verify_admin_token
+    assert admin_utils.verify_admin_token is admin_token.verify_admin_token

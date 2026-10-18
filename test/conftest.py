@@ -44,6 +44,21 @@ def pytest_collection_finish(session):
 
 
 @pytest.fixture(autouse=True)
+def _forget_admin_throttle():
+    """Wrong admin tokens are counted per client; tests must not inherit each other's count."""
+    import sys
+
+    def reset():
+        module = sys.modules.get("kohakuhub.auth.admin_token")
+        if module is not None:
+            module.throttle.reset()
+
+    reset()
+    yield
+    reset()
+
+
+@pytest.fixture(autouse=True)
 def _standalone_modules(request):
     """A test without the backend fixtures runs on the kohakuhub modules the
     test files imported. The backend fixtures reload every one of them; code

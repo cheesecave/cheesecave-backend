@@ -51,7 +51,7 @@ def test_the_application_receives_its_settings_under_the_new_prefix(compose_file
 def test_an_old_env_key_is_only_ever_the_fallback_of_its_new_key(compose_file):
     text = (ROOT / compose_file).read_text(encoding="utf-8")
     for match in OLD_INTERPOLATION.finditer(text):
-        context = text[max(0, match.start() - 40) : match.end() + 2]
+        context = text[max(0, match.start() - 80) : match.end() + 2]  # room for the longest setting names
         assert f"${{CHEESE_CAVE_{match.group(1)}:-${{KOHAKU_HUB_{match.group(1)}" in context, context
     assert NESTED_OLD.search(text), "no interpolation takes an old key at all"
 
