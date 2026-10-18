@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CheeseCave Data Explorer lab</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<header>
+  <strong>CheeseCave Data Explorer</strong> <span class="muted">prototype lab · synthetic data only</span>
+  <div class="bar">
+    <label>repo <select id="repo" data-testid="repo"></select></label>
+    <label>revision <input id="revision" data-testid="revision" value="main" size="12"></label>
+    <label>token <input id="token" data-testid="token" type="password" size="10" placeholder="private repos"></label>
+  </div>
+  <nav id="nav"></nav>
+</header>
+<main id="main" data-testid="main"></main>
+<details id="wirebox" open>
+  <summary>Wire log <span id="wiretotal" data-testid="wiretotal"></span> <button id="wireclear" type="button">clear</button></summary>
+  <table id="wire" data-testid="wire"></table>
+</details>
+<script type="module" src="app.js"></script>
+</body>
+</html>
