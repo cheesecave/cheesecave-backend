@@ -1047,6 +1047,82 @@ before deleting anything.
 
 ---
 
+### Overview
+
+**Pattern:** `GET /admin/api/overview?sections=health,counts&range=7d`
+
+One call for the admin Overview page: is everything running, what needs attention, what is happening. Read-only; same
+`X-Admin-Token` as every admin route; the response carries `Cache-Control: no-store`.
+
+**Query Parameters:**
+- `sections` (optional): comma-separated names from `health`, `workers`, `queue`, `build`, `attention`, `counts`, `recent`,
+  `activity`, `top`. Omitted means all of them; unknown names are ignored, so a newer client can ask for a section an older
+  server lacks.
+- `range` (default `7d`): `24h`, `7d` or `30d`. It sets the window of `counts.*.delta`/`series` and of `activity` (24 hourly
+  buckets for `24h`, 7 or 30 daily buckets otherwise, always UTC). Any other value is a 422.
+
+**Response:**
+```json
+{
+  "schema": 1,
+  "generated_at": "2026-10-19T14:30:02Z",
+  "range": "7d",
+  "sections": {
+    "health": {
+      "generated_at": "2026-10-19T14:29:50Z", "cache": {"hit": true, "age_s": 12},
+      "status": "ok", "checked_at_ms": 1792420190000,
+      "dependencies": [{"name": "postgres", "status": "ok", "latency_ms": 12, "detail": null}]
+    },
+    "workers": {"online": 3, "draining": 0, "lost": 1},
+    "queue": {"queued": 5, "running": 1, "succeeded_24h": 425, "failed_24h": 2, "oldest_queued_age_s": 9,
+              "hourly": [{"ok": 7, "failed": 0}]},
+    "build": {"backend": "3fd3765"},
+    "attention": {"items": [{
+      "id": "tasks", "severity": "warning", "title": "2 tasks failed in the last 24 hours", "count": 2,
+      "hint": "repo.recalc, lfs.gc",
+      "link": {"path": "/tasks", "query": {"status": "failed", "window": "24h"}, "label": "Failed tasks"}
+    }]},
+    "counts": {
+      "users": {"total": 25, "delta": 1, "series": [0, 0, 1, 0, 0, 0, 0]}, "orgs": 9,
+      "repos": {"total": 502, "private": 71, "delta": 9, "series": []},
+      "commits": {"total": 78701, "delta": 1420, "series": []},
+      "storage": {"total": 48000000000000, "private": 6100000000000, "public": 41900000000000},
+      "lfs": {"objects": 1130994, "size": 48700000000000}
+    },
+    "activity": {"range": "7d", "bucket": "day", "labels": ["10-13"], "commits": [], "repos": [], "users": []},
+    "recent": {"items": [{"id": "commit:56", "kind": "commit", "actor": "alice",
+                          "text": "committed “Fix tokenizer” to alice/clip", "at": "2026-10-19T14:25:00Z", "link": "/commits"}]},
+    "top": {"by_commits": [{"repo_type": "dataset", "repo_full_id": "o/n", "commits": 5120}],
+            "by_size": [{"repo_type": "dataset", "repo_full_id": "o/n", "size_bytes": 18200000000000}]}
+  }
+}
+```
+
+**Sections are independent.** Each carries its own `generated_at` and `cache` (`hit`, and `age_s` since it was computed).
+One that fails is returned as `{"generated_at": "...", "error": {"code": "section_failed", "message": "..."}}` and the rest
+are still returned with HTTP 200, so one failing probe never blanks the page. `schema` is an integer (currently 1); a client
+that sees a larger one than it knows should fall back to the older endpoints.
+
+**Notes:**
+- `counts.*.total` are the same numbers as `/stats/detailed`. `delta` is the number of rows *created* within the range and
+  `series` the number created per bucket, oldest first and zero-filled (not cumulative). Storage has no delta: nothing records
+  past usage.
+- `queue.hourly` is 24 consecutive hours ending now, built from the Tasks page's own 24 hour statistics, so "failed" and
+  "backing up" mean the same thing in both places.
+- `attention.items` are ordered by severity (`danger`, `warning`, `info`) and then by `id`; `link` is a page of the admin
+  panel with its query parameters. The ids and their rules: `dependency` (a dependency is down), `worker` (a worker lost its
+  heartbeat), `tasks` (tasks failed in 24 hours; `danger` once the failure rate reaches the Tasks page's critical threshold,
+  else `warning`), `backlog` (the oldest due task has waited past the Tasks page's warn or critical threshold), `quota` (users
+  or repositories over 100% of a quota), `lfs_drift` (the last LFS reconciliation task failed). Items are derived from data
+  that is already cached or stored; nothing scans storage. Orphan LakeFS repositories are not an item: the scan is a manual
+  action whose result is not kept.
+- Computed values are cached in each server process (`health` 15 s, `workers`/`queue`/`attention` 5 s, `counts`/`recent` 30 s,
+  `activity`/`top` 5 min, `build` for the life of the process) and concurrent requests for one value share one computation, so
+  many open tabs do not multiply the dependency probes.
+- `/stats`, `/stats/detailed`, `/stats/timeseries` and `/stats/top-repos` are unchanged.
+
+---
+
 ## Fallback Sources
 
 ### List Fallback Sources

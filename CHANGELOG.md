@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **One call for the admin Overview** ([cheesecave-admin#20](https://github.com/cheesecave/cheesecave-admin/issues/20)).
+  `GET /admin/api/overview?sections=&range=24h|7d|30d` returns status (dependency probes, workers, queue), a prioritised
+  "needs attention" list, counts with their change and trend over the range, activity per hour or day, recent events and the
+  top repositories, in sections that are cached for their own time, fail on their own and say how fresh they are. Activity is
+  grouped in SQL. The old `/stats*` endpoints are unchanged and pinned by tests; no migration.
 - **Change a password, and reset one with a one-time link** ([#119](https://github.com/cheesecave/cheesecave-backend/issues/119), phase 1: no email needed).
   The hub had no way to change or reset a password; an administrator could not help either. `POST /api/auth/change-password`
   (current password required; the other sessions end; access tokens keep working) and, for a forgotten password, a link the

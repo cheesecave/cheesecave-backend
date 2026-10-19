@@ -610,6 +610,16 @@ PROBES = (
 )
 
 
+def overall_status(dependencies: list[dict[str, Any]]) -> str:
+    """``degraded`` if any dependency is down, ``disabled`` if every probe is disabled, else ``ok``."""
+    statuses = {dep["status"] for dep in dependencies}
+    if "down" in statuses:
+        return "degraded"
+    if statuses == {"disabled"}:
+        return "disabled"
+    return "ok"
+
+
 async def run_all_probes(
     timeout: float = DEFAULT_PROBE_TIMEOUT_SECONDS,
 ) -> list[dict[str, Any]]:

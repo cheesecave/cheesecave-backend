@@ -8,6 +8,7 @@ from kohakuhub.api.admin.routers.database import router as database_router
 from kohakuhub.api.admin.routers.fallback import router as fallback_router
 from kohakuhub.api.admin.routers.health import router as health_router
 from kohakuhub.api.admin.routers.invitations import router as invitations_router
+from kohakuhub.api.admin.routers.overview import router as overview_router
 from kohakuhub.api.admin.routers.quota import router as quota_router
 from kohakuhub.api.admin.routers.repositories import router as repositories_router
 from kohakuhub.api.admin.routers.search import router as search_router
@@ -28,6 +29,7 @@ __all__ = [
     "fallback_router",
     "health_router",
     "invitations_router",
+    "overview_router",
     "quota_router",
     "repositories_router",
     "search_router",
