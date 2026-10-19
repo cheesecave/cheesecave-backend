@@ -1,6 +1,6 @@
 """Admin management of site name, footer introduction, and independent logo assets."""
 
-from fastapi import APIRouter, Depends, File, Form, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator
 
 from kohakuhub.api.admin.utils.auth import verify_admin_token
@@ -47,15 +47,24 @@ def edit_site_branding(body: BrandingPatch):
     return update_branding(body.model_dump(exclude_unset=True))
 
 
+FORM_BOOLEANS = {"true": True, "1": True, "yes": True, "on": True, "false": False, "0": False, "no": False, "off": False}
+
+
 @router.post("/assets/{kind}")
 async def upload_branding_asset(
-    kind: AssetKind, file: UploadFile = File(...), loop: bool = Form(True)
+    kind: AssetKind, file: UploadFile = File(...), loop: str = Form("true")
 ):
+    # Not ``loop: bool = Form(True)``: FastAPI 0.147 reads a boolean form field that is absent from the
+    # request as False, whatever its default, so an upload that says nothing stopped looping.
+    try:
+        repeat = FORM_BOOLEANS[loop.strip().lower()]
+    except KeyError:
+        raise HTTPException(422, detail={"error": "loop must be true or false"}) from None
     try:
         contents = await file.read(MAX_UPLOAD_BYTES + 1)
     finally:
         await file.close()
-    return update_branding({kind: normalize_asset(contents, kind, loop)})
+    return update_branding({kind: normalize_asset(contents, kind, repeat)})
 
 
 class AnimationPatch(BaseModel):
