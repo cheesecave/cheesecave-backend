@@ -377,12 +377,22 @@ Rollback facts and the command are in
 - The site's default style needs no migration: it is a field of the `theme` section of `site_appearance` that is filled in from the
   code when a stored theme lacks it.
 
-## Password reset links: 038
+## Admin token throttle (#115): 038
 
-- **038** (`038_password_reset_tokens.py`) creates `password_reset_token`: one row per one-time reset link an administrator made
+- **038** (`038_admin_auth_client.py`) creates `admin_auth_client`: one row per client address (an IPv4 address or an IPv6 /64) that sent a
+  wrong admin token lately (`failures`, `last_failure`, `wait_until`). Every worker process and replica shares the rows, so the wait does not
+  depend on which worker answers. No secret is stored (no token, no hash). The code removes the rows of clients that have been quiet for twice
+  the reset time.
+- **A table of its own on purpose**, as for 035 and 037: an older release does not know it and ignores it (its throttle counts in process
+  memory), so rolling back is leaving it. Nothing is backfilled. `CREATE TABLE IF NOT EXISTS`; two containers starting together take turns on an
+  advisory lock. If the table cannot be read or written, the throttle falls back to the memory of the process and says so in the log.
+
+## Password reset links: 039
+
+- **039** (`039_password_reset_tokens.py`) creates `password_reset_token`: one row per one-time reset link an administrator made
   (`token_hash`, the hash of the token and never the token; `expires_at`; `used_at`, set when the link is used and kept as
   history; `created_by`), gone with the account.
-- **A table of its own on purpose**, as for 035 and 037: an older release does not know it and ignores it, so rolling back is
+- **A table of its own on purpose**, as for 035, 037 and 038: an older release does not know it and ignores it, so rolling back is
   leaving it.
 - Nothing is backfilled. `CREATE TABLE IF NOT EXISTS` and two indexes; two containers starting together take turns on an
   advisory lock.

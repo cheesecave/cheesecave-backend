@@ -87,7 +87,25 @@ In Compose, the shipped files read `CHEESE_CAVE_<NAME>` from `.env` first and `K
 | Variable | Description | Default |
 | --- | --- | --- |
 | `CHEESE_CAVE_ADMIN_ENABLED` | If `true`, enables the admin API. | `true` |
-| `CHEESE_CAVE_ADMIN_SECRET_TOKEN` | The secret token for accessing the admin API. **CHANGE IN PRODUCTION!** | `change-me-in-production` |
+| `CHEESE_CAVE_ADMIN_SECRET_TOKEN` | The secret token for accessing the admin API. **CHANGE IN PRODUCTION!** With the default value, or fewer than `CHEESE_CAVE_ADMIN_MIN_TOKEN_LENGTH` characters, the admin API is closed (`503`). `scripts/generate_secret.py` makes a good one. | `change-me-in-production` |
+| `CHEESE_CAVE_ADMIN_MIN_TOKEN_LENGTH` | The shortest admin token the admin API accepts to run with. | `32` |
+| `CHEESE_CAVE_ADMIN_ALLOW_WEAK_TOKEN` | If `true`, a short or default admin token is allowed. For development and tests only. | `false` |
+| `CHEESE_CAVE_ADMIN_AUTH_THROTTLE_ENABLED` | If `true` (`1`, `yes`, `on` also count), a client that keeps sending wrong admin tokens has to wait (see below). | `true` |
+| `CHEESE_CAVE_ADMIN_AUTH_FREE_FAILURES` | Consecutive wrong tokens per client that cost nothing. | `5` |
+| `CHEESE_CAVE_ADMIN_AUTH_BASE_WAIT_SECONDS` | From the next failure on, the client has to wait this long; each further failure doubles the wait. | `1` |
+| `CHEESE_CAVE_ADMIN_AUTH_MAX_WAIT_SECONDS` | The longest wait. | `900` |
+| `CHEESE_CAVE_ADMIN_AUTH_RESET_SECONDS` | A client's count starts again after this long without a failure. A correct token resets it at once. | `1800` |
+| `CHEESE_CAVE_ADMIN_AUTH_ALERT_PER_MINUTE` | Log one warning a minute when more than this many wrong tokens arrive in that minute, from any clients. `0` turns it off. | `50` |
+| `CHEESE_CAVE_ADMIN_AUTH_TRUSTED_PROXY_HOPS` | How many proxies of yours stand in front of the API. `0` ignores `X-Forwarded-For`; `N` takes the N-th address from the right. | `0` |
+| `CHEESE_CAVE_ADMIN_AUTH_ALLOWLIST` | Comma-separated addresses or networks that are never counted or made to wait. | empty |
+
+### Wrong admin tokens
+
+Every setting below has a default and none is required. A value that is empty, not a number, not a yes or no, or out of range is ignored (the default stays) and named in the warnings at start-up; it never stops the service from starting.
+
+Wrong tokens are counted per client address. The first few cost nothing; after that every further failure starts a wait of 1 s, 2 s, 4 s ... up to 15 minutes, during which the client gets `429` with a `Retry-After` header (the token is not even compared, and asking again does not extend the wait). A correct token, or 30 minutes without a failure, resets the client. There is no global lock: another client is never affected.
+
+Behind a reverse proxy the API sees the proxy's address, so set `CHEESE_CAVE_ADMIN_AUTH_TRUSTED_PROXY_HOPS` to the number of proxies in front of it (1 for the shipped nginx). With `0` and an `X-Forwarded-For` header present, clients cannot be told apart and nobody is made to wait; a warning in the log says so. `GET /admin/api/auth/client` (with a valid token) shows the client address the server computed, so you can compare it with your own. The counts are kept in the `admin_auth_client` table (migration 038), so every worker and every replica meets the same wait; a client that is waiting costs no query for the length of the wait. If the table cannot be read or written, the check counts in the memory of each process instead and says so in the log (about once a minute).
 
 ## Storage Quota Settings
 

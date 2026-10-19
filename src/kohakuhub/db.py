@@ -18,6 +18,7 @@ from peewee import (
     Check,
     DateField,
     DateTimeField as PeeweeDateTimeField,
+    DoubleField,
     ForeignKeyField,
     IntegerField,
     Model,
@@ -932,6 +933,24 @@ class BranchCommitLock(BaseModel):
         indexes = ((("repository", "branch"), True),)
 
 
+class AdminAuthClient(BaseModel):
+    """What the admin token check remembers about one client address (#115).
+
+    Every worker process, and every replica, shares these rows, so a client that keeps sending wrong tokens
+    meets the same wait whichever worker answers. ``client_key`` is the key the check computes (an IPv4 address
+    or an IPv6 /64); ``failures`` counts consecutive wrong tokens; ``wait_until`` is epoch seconds. Nothing
+    here is a secret: no token, no hash. Rows of clients that have been quiet for a while are removed.
+    """
+
+    client_key = CharField(primary_key=True, max_length=64)
+    failures = IntegerField(default=0)
+    last_failure = DoubleField(default=0)
+    wait_until = DoubleField(default=0)
+
+    class Meta:
+        table_name = "admin_auth_client"
+
+
 class BackgroundWorker(BaseModel):
     """A worker process, registered at startup and kept fresh by heartbeats.
 
@@ -1014,6 +1033,7 @@ def init_db():
             LfsGcState,
             RepositoryWrite,
             BranchCommitLock,
+            AdminAuthClient,
         ],
         safe=True,
     )

@@ -69,6 +69,22 @@ class AdminConfig(BaseModel):
 
     enabled: bool = True
     secret_token: str = "change-me-in-production"
+    # A token shorter than this (or the default) disables the admin API, unless the development override is set.
+    min_token_length: int = 32
+    allow_weak_token: bool = False
+    # Brute-force throttle of the token check, counted per client address: a few free failures, then a wait that
+    # doubles from the base wait up to the longest wait. A client's count starts again after reset_seconds of calm.
+    auth_throttle_enabled: bool = True
+    auth_free_failures: int = 5
+    auth_base_wait_seconds: int = 1
+    auth_max_wait_seconds: int = 900
+    auth_reset_seconds: int = 1800
+    # Log one warning a minute when more than this many failures arrive in that minute (0 turns the alert off).
+    auth_alert_per_minute: int = 50
+    # How many proxies of ours stand in front of the API: 0 ignores X-Forwarded-For, N takes the N-th address from the right.
+    auth_trusted_proxy_hops: int = 0
+    # Addresses or networks that are never counted or delayed.
+    auth_allowlist: list[str] = []
 
 
 class QuotaConfig(BaseModel):
@@ -252,7 +268,7 @@ class Config(BaseModel):
         Returns:
             List of warning messages for unsafe defaults
         """
-        warnings = []
+        warnings = list(IGNORED_SETTINGS)
 
         # S3 credentials
         if self.s3.access_key == "test-access-key":
@@ -323,6 +339,47 @@ def _parse_fallback_sources(value: str | None) -> list[dict]:
         return sources
     except json.JSONDecodeError:
         return []
+
+
+# Settings that were set but could not be used; Config.validate_production_safety() reports them at start-up.
+IGNORED_SETTINGS: list[str] = []
+
+_TRUE_WORDS = {"true", "1", "yes", "on"}
+_FALSE_WORDS = {"false", "0", "no", "off"}
+
+
+def _ignore(name: str, raw: str, why: str) -> None:
+    IGNORED_SETTINGS.append(f"Setting {name}={raw!r} is ignored ({why}); the default is used")
+
+
+def _lenient_int(name: str, lowest: int, highest: int) -> int | None:
+    """The integer in setting ``name``, or None (use the default) when it is unset, empty, not a number or out of range."""
+    raw = read_env(name)
+    if raw is None:
+        return None
+    try:
+        value = int(raw.strip())
+    except ValueError:
+        _ignore(name, raw, "not a whole number")
+        return None
+    if not lowest <= value <= highest:
+        _ignore(name, raw, f"must be between {lowest} and {highest}")
+        return None
+    return value
+
+
+def _lenient_bool(name: str) -> bool | None:
+    """True or False for true/false, yes/no, on/off, 1/0 (any case), else None (use the default)."""
+    raw = read_env(name)
+    if raw is None:
+        return None
+    word = raw.strip().lower()
+    if word in _TRUE_WORDS:
+        return True
+    if word in _FALSE_WORDS:
+        return False
+    _ignore(name, raw, "expected true or false")
+    return None
 
 
 @lru_cache(maxsize=1)
@@ -419,6 +476,33 @@ def load_config(path: str = None) -> Config:
         admin_env["enabled"] = read_env("ADMIN_ENABLED").lower() == "true"
     if read_env("ADMIN_SECRET_TOKEN") is not None:
         admin_env["secret_token"] = read_env("ADMIN_SECRET_TOKEN")
+    # The admin throttle settings never stop the service from starting: a value that is empty, not a number,
+    # not a yes or no, or out of range is ignored (the default stays) and named in the start-up warnings.
+    for field, name, lowest, highest in (
+        ("min_token_length", "ADMIN_MIN_TOKEN_LENGTH", 1, 4096),
+        ("auth_free_failures", "ADMIN_AUTH_FREE_FAILURES", 0, 1000),
+        ("auth_base_wait_seconds", "ADMIN_AUTH_BASE_WAIT_SECONDS", 1, 86400),
+        ("auth_max_wait_seconds", "ADMIN_AUTH_MAX_WAIT_SECONDS", 1, 604800),
+        ("auth_reset_seconds", "ADMIN_AUTH_RESET_SECONDS", 1, 604800),
+        ("auth_alert_per_minute", "ADMIN_AUTH_ALERT_PER_MINUTE", 0, 1000000),
+        ("auth_trusted_proxy_hops", "ADMIN_AUTH_TRUSTED_PROXY_HOPS", 0, 10),
+    ):
+        value = _lenient_int(name, lowest, highest)
+        if value is not None:
+            admin_env[field] = value
+    for field, name in (
+        ("allow_weak_token", "ADMIN_ALLOW_WEAK_TOKEN"),
+        ("auth_throttle_enabled", "ADMIN_AUTH_THROTTLE_ENABLED"),
+    ):
+        value = _lenient_bool(name)
+        if value is not None:
+            admin_env[field] = value
+    if read_env("ADMIN_AUTH_ALLOWLIST") is not None:
+        admin_env["auth_allowlist"] = [
+            entry.strip()
+            for entry in read_env("ADMIN_AUTH_ALLOWLIST").split(",")
+            if entry.strip()
+        ]
     if admin_env:
         config_from_env["admin"] = admin_env
 

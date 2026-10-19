@@ -98,6 +98,16 @@ def test_load_config_merges_file_and_environment(monkeypatch):
     monkeypatch.setenv("KOHAKU_HUB_TOKEN_EXPIRE_DAYS", "30")
     monkeypatch.setenv("KOHAKU_HUB_ADMIN_ENABLED", "false")
     monkeypatch.setenv("KOHAKU_HUB_ADMIN_SECRET_TOKEN", "admin-secret")
+    monkeypatch.setenv("KOHAKU_HUB_ADMIN_MIN_TOKEN_LENGTH", "40")
+    monkeypatch.setenv("KOHAKU_HUB_ADMIN_ALLOW_WEAK_TOKEN", "true")
+    monkeypatch.setenv("KOHAKU_HUB_ADMIN_AUTH_THROTTLE_ENABLED", "false")
+    monkeypatch.setenv("KOHAKU_HUB_ADMIN_AUTH_FREE_FAILURES", "7")
+    monkeypatch.setenv("KOHAKU_HUB_ADMIN_AUTH_BASE_WAIT_SECONDS", "2")
+    monkeypatch.setenv("KOHAKU_HUB_ADMIN_AUTH_MAX_WAIT_SECONDS", "600")
+    monkeypatch.setenv("KOHAKU_HUB_ADMIN_AUTH_RESET_SECONDS", "900")
+    monkeypatch.setenv("KOHAKU_HUB_ADMIN_AUTH_ALERT_PER_MINUTE", "0")
+    monkeypatch.setenv("KOHAKU_HUB_ADMIN_AUTH_TRUSTED_PROXY_HOPS", "2")
+    monkeypatch.setenv("KOHAKU_HUB_ADMIN_AUTH_ALLOWLIST", " 203.0.113.0/24 , 2001:db8::/32,,")
     monkeypatch.setenv("KOHAKU_HUB_DEFAULT_USER_PRIVATE_QUOTA_BYTES", "100")
     monkeypatch.setenv("KOHAKU_HUB_DEFAULT_USER_PUBLIC_QUOTA_BYTES", "unlimited")
     monkeypatch.setenv("KOHAKU_HUB_DEFAULT_ORG_PRIVATE_QUOTA_BYTES", "200")
@@ -155,6 +165,16 @@ def test_load_config_merges_file_and_environment(monkeypatch):
     assert cfg.auth.session_absolute_days == 90
     assert cfg.admin.enabled is False
     assert cfg.admin.secret_token == "admin-secret"
+    assert cfg.admin.min_token_length == 40
+    assert cfg.admin.allow_weak_token is True
+    assert cfg.admin.auth_throttle_enabled is False
+    assert cfg.admin.auth_free_failures == 7
+    assert cfg.admin.auth_base_wait_seconds == 2
+    assert cfg.admin.auth_max_wait_seconds == 600
+    assert cfg.admin.auth_reset_seconds == 900
+    assert cfg.admin.auth_alert_per_minute == 0
+    assert cfg.admin.auth_trusted_proxy_hops == 2
+    assert cfg.admin.auth_allowlist == ["203.0.113.0/24", "2001:db8::/32"]
     assert cfg.quota.default_user_private_quota_bytes == 100
     assert cfg.quota.default_user_public_quota_bytes is None
     assert cfg.quota.default_org_private_quota_bytes == 200
@@ -206,6 +226,15 @@ def test_load_config_uses_defaults_when_file_is_missing(monkeypatch):
     assert cfg.app.repository_revert_enabled is True
     assert cfg.app.repository_reset_enabled is True
     assert cfg.app.repository_squash_enabled is True
+    # The admin token's defaults: a gentle throttle, no trusted proxies, no weak-token override.
+    assert cfg.admin.allow_weak_token is False
+    assert cfg.admin.min_token_length == 32
+    assert cfg.admin.auth_throttle_enabled is True
+    assert (cfg.admin.auth_free_failures, cfg.admin.auth_base_wait_seconds) == (5, 1)
+    assert (cfg.admin.auth_max_wait_seconds, cfg.admin.auth_reset_seconds) == (900, 1800)
+    assert cfg.admin.auth_alert_per_minute == 50
+    assert cfg.admin.auth_trusted_proxy_hops == 0
+    assert cfg.admin.auth_allowlist == []
     hub_config.load_config.cache_clear()
 
 
@@ -339,3 +368,94 @@ def test_commit_id_format_is_the_hubs_unless_the_site_says_otherwise(monkeypatch
     monkeypatch.setenv("CHEESE_CAVE_COMMIT_ID_FORMAT", "git")
     with pytest.raises(ValueError, match="commit_id_format"):
         load()
+
+
+@pytest.mark.parametrize(
+    "name, value, field, default",
+    [
+        ("ADMIN_AUTH_FREE_FAILURES", "", "auth_free_failures", 5),
+        ("ADMIN_AUTH_FREE_FAILURES", "abc", "auth_free_failures", 5),
+        ("ADMIN_AUTH_FREE_FAILURES", "-3", "auth_free_failures", 5),
+        ("ADMIN_AUTH_BASE_WAIT_SECONDS", "0", "auth_base_wait_seconds", 1),
+        ("ADMIN_AUTH_MAX_WAIT_SECONDS", "0", "auth_max_wait_seconds", 900),
+        ("ADMIN_AUTH_RESET_SECONDS", "0", "auth_reset_seconds", 1800),
+        ("ADMIN_AUTH_ALERT_PER_MINUTE", "-1", "auth_alert_per_minute", 50),
+        ("ADMIN_AUTH_TRUSTED_PROXY_HOPS", "", "auth_trusted_proxy_hops", 0),
+        ("ADMIN_AUTH_TRUSTED_PROXY_HOPS", "-1", "auth_trusted_proxy_hops", 0),
+        ("ADMIN_AUTH_TRUSTED_PROXY_HOPS", "99", "auth_trusted_proxy_hops", 0),
+        ("ADMIN_MIN_TOKEN_LENGTH", "0", "min_token_length", 32),
+        ("ADMIN_MIN_TOKEN_LENGTH", "many", "min_token_length", 32),
+    ],
+)
+def test_a_bad_admin_number_falls_back_to_its_default_and_says_so(monkeypatch, name, value, field, default):
+    hub_config.load_config.cache_clear()
+    hub_config.IGNORED_SETTINGS.clear()
+    monkeypatch.setattr(hub_config.os.path, "exists", lambda path: False)
+    monkeypatch.setenv(f"CHEESE_CAVE_{name}", value)
+
+    cfg = hub_config.load_config(path="/tmp/missing.toml")
+
+    assert getattr(cfg.admin, field) == default  # the service still starts
+    warnings = cfg.validate_production_safety()
+    assert any(name in line and "ignored" in line for line in warnings), warnings
+    hub_config.load_config.cache_clear()
+
+
+@pytest.mark.parametrize(
+    "name, value, field, expected",
+    [
+        ("ADMIN_AUTH_THROTTLE_ENABLED", "1", "auth_throttle_enabled", True),
+        ("ADMIN_AUTH_THROTTLE_ENABLED", "yes", "auth_throttle_enabled", True),
+        ("ADMIN_AUTH_THROTTLE_ENABLED", "On", "auth_throttle_enabled", True),
+        ("ADMIN_AUTH_THROTTLE_ENABLED", "0", "auth_throttle_enabled", False),
+        ("ADMIN_AUTH_THROTTLE_ENABLED", "No", "auth_throttle_enabled", False),
+        ("ADMIN_AUTH_THROTTLE_ENABLED", "off", "auth_throttle_enabled", False),
+        ("ADMIN_ALLOW_WEAK_TOKEN", "TRUE", "allow_weak_token", True),
+        ("ADMIN_ALLOW_WEAK_TOKEN", "1", "allow_weak_token", True),
+        ("ADMIN_ALLOW_WEAK_TOKEN", "false", "allow_weak_token", False),
+    ],
+)
+def test_the_usual_spellings_of_a_yes_or_no_are_understood(monkeypatch, name, value, field, expected):
+    hub_config.load_config.cache_clear()
+    hub_config.IGNORED_SETTINGS.clear()
+    monkeypatch.setattr(hub_config.os.path, "exists", lambda path: False)
+    monkeypatch.setenv(f"CHEESE_CAVE_{name}", value)
+
+    cfg = hub_config.load_config(path="/tmp/missing.toml")
+
+    assert getattr(cfg.admin, field) is expected
+    assert not [line for line in cfg.validate_production_safety() if name in line]
+    hub_config.load_config.cache_clear()
+
+
+@pytest.mark.parametrize("value", ["", "maybe", "2"])
+def test_an_unclear_admin_yes_or_no_keeps_the_default_and_says_so(monkeypatch, value):
+    hub_config.load_config.cache_clear()
+    hub_config.IGNORED_SETTINGS.clear()
+    monkeypatch.setattr(hub_config.os.path, "exists", lambda path: False)
+    monkeypatch.setenv("CHEESE_CAVE_ADMIN_AUTH_THROTTLE_ENABLED", value)
+    monkeypatch.setenv("CHEESE_CAVE_ADMIN_ALLOW_WEAK_TOKEN", value)
+
+    cfg = hub_config.load_config(path="/tmp/missing.toml")
+
+    assert cfg.admin.auth_throttle_enabled is True  # the safe defaults stay
+    assert cfg.admin.allow_weak_token is False
+    warnings = cfg.validate_production_safety()
+    assert any("ADMIN_AUTH_THROTTLE_ENABLED" in line and "ignored" in line for line in warnings)
+    assert any("ADMIN_ALLOW_WEAK_TOKEN" in line and "ignored" in line for line in warnings)
+    hub_config.load_config.cache_clear()
+
+
+def test_a_clean_environment_adds_no_setting_warnings(monkeypatch):
+    hub_config.load_config.cache_clear()
+    hub_config.IGNORED_SETTINGS.clear()
+    monkeypatch.setattr(hub_config.os.path, "exists", lambda path: False)
+    for key in list(hub_config.os.environ):
+        if key.startswith(("KOHAKU_HUB_", "CHEESE_CAVE_")):
+            monkeypatch.delenv(key, raising=False)
+
+    cfg = hub_config.load_config(path="/tmp/missing.toml")
+
+    assert not [line for line in cfg.validate_production_safety() if "ignored" in line]
+    hub_config.load_config.cache_clear()
+

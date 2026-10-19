@@ -17,6 +17,7 @@ Organized router structure:
 from fastapi import APIRouter
 
 from kohakuhub.api.admin.routers import (
+    auth_router,
     cache_router,
     commits_router,
     credentials_router,
@@ -40,6 +41,7 @@ from kohakuhub.api.admin.routers import (
 router = APIRouter()
 
 # Include all sub-routers
+router.include_router(auth_router, tags=["admin-auth"])
 router.include_router(users_router, tags=["admin-users"])
 router.include_router(repositories_router, tags=["admin-repositories"])
 router.include_router(quota_router, tags=["admin-quota"])

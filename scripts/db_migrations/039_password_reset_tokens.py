@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-Migration 038: one-time password reset links.
+Migration 039: one-time password reset links.
 
 Changes:
 - password_reset_token: one row per link an administrator made (``token_hash``, the hash of the token, never the token;
   ``expires_at``; ``used_at``, set when the link is used and kept as history; ``created_by``), gone with the account.
 
-A table of its own on purpose, as for 035 and 037: a release from before it keeps running on the same database and
+A table of its own on purpose, as for 035, 037 and 038: a release from before it keeps running on the same database and
 ignores the table. Nothing is backfilled. Plain SQL, not the models: this must keep meaning what it means today.
 """
 
@@ -24,16 +24,16 @@ from kohakuhub.config import cfg
 from kohakuhub.db import db
 from _migration_utils import check_table_exists, should_skip_due_to_future_migrations
 
-MIGRATION_NUMBER = 38
+MIGRATION_NUMBER = 39
 TABLE = "password_reset_token"
 # Two containers starting together would both CREATE TABLE IF NOT EXISTS, which PostgreSQL does not make safe
 # (a unique violation on its catalog), so the runners take turns on this advisory lock
-LOCK_KEY = 20261019038
+LOCK_KEY = 20261019039
 
 
 def _predecessor_applied(database, config) -> bool:
     spec = importlib.util.spec_from_file_location(
-        "_password_reset_predecessor", Path(__file__).with_name("037_user_preferences.py")
+        "_password_reset_predecessor", Path(__file__).with_name("038_admin_auth_client.py")
     )
     predecessor = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(predecessor)
@@ -72,7 +72,7 @@ def _migrate():
 
 
 def run():
-    """Run migration 038.
+    """Run migration 039.
 
     Returns:
         True if successful or already applied, False otherwise

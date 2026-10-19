@@ -17,7 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it can be looked up (`GET`) and withdrawn (`DELETE`), and only a hash of its token is stored. The person opens it (token in
   the URL fragment), sets a new password through `POST /api/auth/password-reset/check` and `/api/auth/password-reset`, every
   session of the account ends and nobody is signed in by it. An unknown, expired, used or withdrawn link gets one and the same
-  answer. Migration 038 adds the table `password_reset_token`.
+  answer. Migration 039 adds the table `password_reset_token`.
 - **A password policy on the server**: at least 8 characters and at most 72 bytes (what bcrypt reads), applied when a password
   is set (registration, admin create-user, change, reset) and not when logging in, so existing passwords keep working. Until now
   any string was accepted, an empty one included.

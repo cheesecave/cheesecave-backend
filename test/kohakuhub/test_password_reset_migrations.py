@@ -1,7 +1,7 @@
-"""Migration 038 builds the ``password_reset_token`` table, the way the model declares it.
+"""Migration 039 builds the ``password_reset_token`` table, the way the model declares it.
 
 A table of its own, not columns of ``user``: a release from before it keeps running on the same database and
-ignores the table. Each test starts from ``db_dual`` (SQLite and PostgreSQL) holding the schema 037 leaves.
+ignores the table. Each test starts from ``db_dual`` (SQLite and PostgreSQL) holding the schema 038 leaves.
 """
 
 import importlib.util
@@ -14,7 +14,7 @@ from peewee import IntegrityError, SqliteDatabase
 
 from kohakuhub.db import PasswordResetToken, User
 
-MIGRATION = Path(__file__).resolve().parents[2] / "scripts/db_migrations/038_password_reset_tokens.py"
+MIGRATION = Path(__file__).resolve().parents[2] / "scripts/db_migrations/039_password_reset_tokens.py"
 
 
 @pytest.fixture
@@ -25,7 +25,7 @@ def migration(db_dual, monkeypatch):
     backend = "sqlite" if isinstance(db_dual, SqliteDatabase) else "postgres"
     monkeypatch.setattr(module, "db", db_dual)
     monkeypatch.setattr(module, "cfg", SimpleNamespace(app=SimpleNamespace(db_backend=backend)))
-    db_dual.drop_tables([PasswordResetToken], safe=True)  # the schema before 038
+    db_dual.drop_tables([PasswordResetToken], safe=True)  # the schema before 039
     return module
 
 
