@@ -5,6 +5,7 @@ Organized router structure:
 - repositories: Repository management and file browsing
 - quota: Quota management and recalculation
 - stats: System statistics and analytics
+- overview: One call for the admin Overview (status, attention, counts, activity)
 - storage: S3 bucket and object browsing
 - commits: Commit history
 - invitations: Invitation management
@@ -25,6 +26,7 @@ from kohakuhub.api.admin.routers import (
     fallback_router,
     health_router,
     invitations_router,
+    overview_router,
     quota_router,
     repositories_router,
     search_router,
@@ -46,6 +48,7 @@ router.include_router(users_router, tags=["admin-users"])
 router.include_router(repositories_router, tags=["admin-repositories"])
 router.include_router(quota_router, tags=["admin-quota"])
 router.include_router(stats_router, tags=["admin-stats"])
+router.include_router(overview_router, tags=["admin-overview"])
 router.include_router(storage_router, tags=["admin-storage"])
 router.include_router(commits_router, tags=["admin-commits"])
 router.include_router(invitations_router, tags=["admin-invitations"])

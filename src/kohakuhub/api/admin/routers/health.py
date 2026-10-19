@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, Query
 from kohakuhub.api.admin.utils import verify_admin_token
 from kohakuhub.api.admin.utils.health import (
     DEFAULT_PROBE_TIMEOUT_SECONDS,
+    overall_status,
     run_all_probes,
 )
 from kohakuhub.logger import get_logger
@@ -35,13 +36,7 @@ async def get_dependency_health(
     start = time.perf_counter()
     dependencies = await run_all_probes(timeout=timeout_seconds)
 
-    statuses = {dep["status"] for dep in dependencies}
-    if "down" in statuses:
-        overall = "degraded"
-    elif statuses == {"disabled"}:
-        overall = "disabled"
-    else:
-        overall = "ok"
+    overall = overall_status(dependencies)
 
     return {
         "overall_status": overall,

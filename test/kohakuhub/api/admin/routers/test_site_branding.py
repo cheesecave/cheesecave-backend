@@ -408,6 +408,33 @@ def test_gif_frames_timing_resize_and_upload_playback(branding_client, loop):
     assert session.get(PUBLIC_URL).json()[kind] == asset
 
 
+@pytest.mark.parametrize("value, loops", [("1", True), ("YES", True), (" on ", True), ("0", False), ("No", False), ("off", False)])
+def test_the_loop_field_takes_the_usual_boolean_spellings(branding_client, value, loops):
+    session, _ = branding_client
+    response = session.post(
+        f"{ADMIN_URL}/assets/header_logo",
+        headers=HEADERS,
+        files={"file": ("logo.gif", animated_gif_bytes(), "image/gif")},
+        data={"loop": value},
+    )
+    assert response.status_code == 200, response.text
+    with Image.open(BytesIO(base64.b64decode(response.json()["header_logo"].split(",", 1)[1]))) as gif:
+        assert gif.info.get("loop") == (0 if loops else None)
+
+
+def test_a_loop_field_that_is_not_a_boolean_is_refused(branding_client):
+    session, _ = branding_client
+    response = session.post(
+        f"{ADMIN_URL}/assets/header_logo",
+        headers=HEADERS,
+        files={"file": ("logo.gif", animated_gif_bytes(), "image/gif")},
+        data={"loop": "maybe"},
+    )
+    assert response.status_code == 422
+    assert response.json()["detail"] == {"error": "loop must be true or false"}
+    assert session.get(PUBLIC_URL).json()["header_logo"] is None
+
+
 def test_gif_default_repeat_and_lossless_playback_patch(branding_client):
     kind = "header_logo"
     session, _ = branding_client
