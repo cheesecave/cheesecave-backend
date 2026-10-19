@@ -1,0 +1,740 @@
+diff -ruN -x node_modules -x '*.d.ts' -x '.eslintrc*' web-base/src/components/repo/explorer/DataExplorerPanel.vue web/src/components/repo/explorer/DataExplorerPanel.vue
+--- a/src/components/repo/explorer/DataExplorerPanel.vue	1970-01-01 08:00:00.000000000 +0800
++++ b/src/components/repo/explorer/DataExplorerPanel.vue	2026-10-19 11:22:33.716616144 +0800
+@@ -0,0 +1,438 @@
++<!-- Data Explorer: the "Data" tab of a dataset page (prototype). -->
++<template>
++  <div class="space-y-4" data-testid="explorer">
++    <!-- view switcher -->
++    <div class="card p-3 flex flex-wrap items-center gap-2">
++      <button
++        v-for="v in views"
++        :key="v.id"
++        :data-testid="`view-${v.id}`"
++        :disabled="!hasTable && (v.id === 'rows' || v.id === 'sql')"
++        :class="[
++          'px-3 py-1.5 rounded-md text-sm font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed',
++          view === v.id
++            ? 'bg-amber-700 text-white'
++            : 'text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800',
++        ]"
++        @click="error = ''; view = v.id"
++      >
++        <span :class="v.icon" class="mr-1 align-[-2px]" />{{ v.label }}
++      </button>
++      <span class="flex-1" />
++      <span v-if="resolution" class="text-xs text-gray-500 dark:text-gray-400" data-testid="commit">
++        pinned to commit <code>{{ resolution.commit.slice(0, 8) }}</code>
++      </span>
++    </div>
++
++    <el-alert v-if="error" :title="error" type="error" show-icon :closable="false" data-testid="error" />
++
++    <!-- ===================================================== ROWS -->
++    <div v-if="view === 'rows' && resolution" class="space-y-4">
++      <div class="space-y-3 min-w-0">
++        <div class="card p-3 flex flex-wrap items-center gap-2">
++          <el-select v-model="config" size="small" style="width: 130px" data-testid="config" @change="changeSplit">
++            <el-option v-for="c in resolution.configs" :key="c.config" :label="c.config" :value="c.config" />
++          </el-select>
++          <el-select v-model="split" size="small" style="width: 130px" data-testid="split" @change="changeSplit">
++            <el-option v-for="s in splitsOfConfig" :key="s.split" :label="s.split" :value="s.split" />
++          </el-select>
++          <el-tag size="small" type="info" data-testid="format">{{ currentSplit?.format }}</el-tag>
++          <el-tag size="small" :type="resolution.source === 'yaml' ? 'success' : 'info'" data-testid="source">
++            {{ resolution.source === "yaml" ? "from README configs" : "from file names" }}
++          </el-tag>
++          <span class="flex-1" />
++          <el-radio-group v-model="mode" size="small" data-testid="mode" @change="term = ''; offset = 0; load()">
++            <el-radio-button label="rows">Browse</el-radio-button>
++            <el-radio-button label="filter">Filter</el-radio-button>
++            <el-radio-button label="search">Search</el-radio-button>
++          </el-radio-group>
++        </div>
++
++        <div v-if="mode !== 'rows'" class="card p-3 flex gap-2">
++          <el-input
++            v-model="term"
++            size="small"
++            data-testid="term"
++            :placeholder="mode === 'filter' ? '&quot;score&quot; > 3.5 AND &quot;label&quot; = 4' : 'text to search for (case-insensitive)'"
++            @keyup.enter="offset = 0; load()"
++          />
++          <el-button size="small" type="primary" data-testid="go" @click="offset = 0; load()">{{ mode === "filter" ? "Filter" : "Search" }}</el-button>
++        </div>
++
++        <div class="card overflow-hidden">
++          <div class="px-4 py-2 flex flex-wrap items-center gap-2 border-b border-gray-200 dark:border-gray-700 text-sm">
++            <el-tag v-if="page" size="small" :type="page.partial ? 'warning' : 'success'" data-testid="total">
++              {{ page.num_rows_total != null ? `${page.num_rows_total.toLocaleString()} rows` : `≥ ${offset + page.rows.length} rows` }}
++            </el-tag>
++            <el-tag v-if="page?.partial" size="small" type="warning" data-testid="partial">partial scan: total unknown</el-tag>
++            <span class="flex-1" />
++            <span class="text-gray-500" data-testid="range">rows {{ page?.rows[0]?.row_idx ?? "–" }}–{{ page?.rows.at(-1)?.row_idx ?? "–" }}</span>
++            <el-button size="small" :disabled="offset === 0" data-testid="prev" @click="offset = Math.max(0, offset - LENGTH); load()">‹ Prev</el-button>
++            <el-button size="small" :disabled="!canNext" data-testid="next" @click="offset += LENGTH; load()">Next ›</el-button>
++          </div>
++          <div v-if="page" class="overflow-x-auto max-h-[560px]">
++            <table class="w-full text-sm" data-testid="rows">
++              <thead class="sticky top-0 bg-gray-50 dark:bg-gray-800">
++                <tr>
++                  <th class="text-left px-3 py-2 font-semibold text-gray-500 w-14">#</th>
++                  <th v-for="f in page.features" :key="f.name" class="text-left px-3 py-2 font-semibold">
++                    {{ f.name }}
++                    <span class="font-normal text-xs text-gray-400">{{ typeLabel(f) }}</span>
++                  </th>
++                </tr>
++              </thead>
++              <tbody>
++                <tr v-for="r in page.rows" :key="r.row_idx" class="border-t border-gray-100 dark:border-gray-800 align-top">
++                  <td class="px-3 py-2 text-gray-400">{{ r.row_idx }}</td>
++                  <td v-for="f in page.features" :key="f.name" class="px-3 py-2 max-w-[420px] min-w-[110px]" :class="f.type.dtype === 'string' ? 'min-w-[260px]' : ''">
++                    <template v-if="r.row[f.name] && r.row[f.name]._type === 'binary-struct'">
++                      <img v-if="thumbs[r.row_idx]" :src="thumbs[r.row_idx]" class="w-16 h-16 object-cover rounded" data-testid="thumb" :alt="r.row[f.name].path" />
++                      <div v-else class="w-16 h-16 rounded bg-gray-100 dark:bg-gray-800" />
++                    </template>
++                    <span v-else-if="r.row[f.name] == null" class="italic text-gray-400">null</span>
++                    <span v-else-if="typeof r.row[f.name] === 'object'" class="font-mono text-xs">{{ JSON.stringify(r.row[f.name]) }}</span>
++                    <span v-else>{{ labelOf(f, r.row[f.name]) }}</span>
++                  </td>
++                </tr>
++              </tbody>
++            </table>
++          </div>
++          <div v-else class="p-8 text-center text-gray-500">loading…</div>
++          <div v-if="page" class="px-4 py-2 text-xs text-gray-500 border-t border-gray-200 dark:border-gray-700" data-testid="cost">
++            {{ page.cost.range_requests }} range request{{ page.cost.range_requests === 1 ? "" : "s" }} to storage ·
++            {{ fmtBytes(page.cost.bytes_read) }} read · {{ pageMs }} ms
++          </div>
++        </div>
++      </div>
++
++      <!-- statistics -->
++      <aside class="grid gap-3 sm:grid-cols-2 items-start" data-testid="stats">
++        <div class="card p-4 sm:col-span-2">
++          <h3 class="font-semibold mb-1">Statistics</h3>
++          <p v-if="stats" class="text-xs text-gray-500">
++            {{ stats.num_examples.toLocaleString() }} examples · histograms from {{ stats.sampled_rows.toLocaleString() }} sampled rows
++          </p>
++          <p v-else class="text-xs text-gray-500">computing…</p>
++        </div>
++        <div v-for="c in stats?.statistics || []" :key="c.column_name" class="card p-3" :data-testid="`stat-${c.column_name}`">
++          <div class="flex items-center gap-2 mb-1">
++            <b class="text-sm">{{ c.column_name }}</b>
++            <el-tag size="small" type="info">{{ c.column_type }}</el-tag>
++            <el-tag v-if="c.column_statistics.exact_from_footer" size="small" type="success">exact · footer</el-tag>
++            <el-tag v-else size="small" type="warning">sample</el-tag>
++          </div>
++          <p class="text-xs text-gray-500 break-words">{{ scalars(c.column_statistics) }}</p>
++          <div v-for="b in bars(c.column_statistics)" :key="b[0]" class="flex items-center gap-2 text-xs">
++            <span class="w-20 truncate text-gray-500">{{ b[0] }}</span>
++            <i class="block h-2 rounded bg-amber-600" :style="{ width: b[2] + 'px' }" />
++            <span>{{ b[1] }}</span>
++          </div>
++        </div>
++      </aside>
++    </div>
++
++    <!-- ===================================================== SQL -->
++    <div v-if="view === 'sql' && resolution" class="card p-4 space-y-3" data-testid="sql-view">
++      <p class="text-sm text-gray-500">
++        Tables:
++        <code v-for="s in splitsOfConfig" :key="s.split" class="mr-2">"{{ s.split }}"</code>
++        (config <code>{{ config }}</code>). DuckDB runs <b>in your browser</b> over bytes read from storage with Range requests; the server never executes your SQL.
++      </p>
++      <textarea v-model="sql" class="w-full font-mono text-sm p-3 rounded border border-gray-300 dark:border-gray-600 bg-transparent min-h-[110px]" data-testid="sql" />
++      <div class="flex items-center gap-3">
++        <el-button type="primary" :loading="sqlBusy" data-testid="run" @click="runQuery">Run</el-button>
++        <label class="text-sm text-gray-500">browser budget (MiB)
++          <el-input-number v-model="budgetMiB" :min="0.1" :step="8" size="small" data-testid="budget" />
++        </label>
++      </div>
++      <div v-if="sqlOut" data-testid="sqlresult" class="space-y-2">
++        <div class="flex flex-wrap gap-2">
++          <el-tag v-if="sqlOut.footer" type="success" data-testid="footer">answered from parquet footers: exact, no data bytes</el-tag>
++          <el-tag v-else-if="sqlOut.approximate" type="warning" data-testid="approx">approximate: not every file fit the budget</el-tag>
++          <el-tag v-else type="success" data-testid="exact">exact: every file of the split was read</el-tag>
++          <el-tag v-for="(i, s) in sqlOut.infos" :key="s" type="info">{{ s }}: {{ i.loadedFiles }}/{{ i.totalFiles }} files · {{ fmtBytes(i.bytes) }}</el-tag>
++        </div>
++        <div class="overflow-x-auto">
++          <table class="text-sm w-full" data-testid="sqltable">
++            <thead class="bg-gray-50 dark:bg-gray-800"><tr><th v-for="c in sqlOut.columns" :key="c" class="text-left px-3 py-2">{{ c }}</th></tr></thead>
++            <tbody><tr v-for="(r, i) in sqlOut.rows.slice(0, 200)" :key="i" class="border-t border-gray-100 dark:border-gray-800"><td v-for="(v, j) in r" :key="j" class="px-3 py-1.5">{{ v }}</td></tr></tbody>
++          </table>
++        </div>
++        <p class="text-xs text-gray-500">{{ sqlOut.note }}</p>
++      </div>
++    </div>
++
++    <!-- ===================================================== ARCHIVES -->
++    <div v-if="view === 'archive'" class="card p-4 space-y-3" data-testid="archive-view">
++      <div v-if="!tarFiles.length" class="text-gray-500 text-sm">No .tar file in this repository.</div>
++      <template v-else>
++        <div class="flex items-center gap-2">
++          <el-select v-model="tarPath" size="small" style="width: 320px" data-testid="tarpick" @change="loadTar">
++            <el-option v-for="f in tarFiles" :key="f.path" :value="f.path" :label="`${f.path} (${fmtBytes(f.size)})`" />
++          </el-select>
++          <el-tag v-if="tar" type="success" data-testid="nsamples">{{ tar.num_samples }} samples</el-tag>
++          <el-tag v-if="tar" type="info">{{ tar.members }} members</el-tag>
++          <span v-if="tar" class="text-xs text-gray-500" data-testid="cost">
++            {{ tar.cost.range_requests }} range requests · {{ fmtBytes(tar.cost.bytes_read) }} read of {{ fmtBytes(tar.file_size) }}
++          </span>
++        </div>
++        <div class="grid gap-3 grid-cols-2 md:grid-cols-4 lg:grid-cols-6" data-testid="samples">
++          <div v-for="s in tar?.samples || []" :key="s.key" class="border border-gray-200 dark:border-gray-700 rounded-lg p-2" data-testid="sample">
++            <img v-if="memberThumb[s.key]" :src="memberThumb[s.key]" class="w-full h-28 object-cover rounded" />
++            <div v-else class="w-full h-28 rounded bg-gray-100 dark:bg-gray-800" />
++            <div class="mt-1 text-sm font-semibold">{{ s.key }}</div>
++            <div class="text-xs text-gray-500 break-words min-h-[2.5rem]">{{ memberText[s.key] }}</div>
++            <div class="flex flex-wrap gap-1 mt-1"><el-tag v-for="m in s.members" :key="m.name" size="small" type="info">{{ m.ext }} {{ fmtBytes(m.size) }}</el-tag></div>
++          </div>
++        </div>
++      </template>
++    </div>
++
++    <!-- ===================================================== COMPARE -->
++    <div v-if="view === 'compare'" class="card p-4 space-y-3" data-testid="compare-view">
++      <div class="flex flex-wrap items-center gap-2 text-sm">
++        <el-select v-model="diffPath" size="small" style="width: 220px" data-testid="diffpath">
++          <el-option v-for="f in parquetFiles" :key="f.path" :value="f.path" :label="f.path" />
++        </el-select>
++        old <el-select v-model="oldRev" size="small" style="width: 260px" data-testid="old"><el-option v-for="c in commitList" :key="c.id" :value="c.id" :label="`${c.id.slice(0, 8)}  ${c.title}`" /></el-select>
++        new <el-select v-model="newRev" size="small" style="width: 260px" data-testid="new"><el-option v-for="c in commitList" :key="c.id" :value="c.id" :label="`${c.id.slice(0, 8)}  ${c.title}`" /></el-select>
++        key <el-input v-model="diffKey" size="small" style="width: 80px" data-testid="key" />
++        <el-button size="small" type="primary" data-testid="diffgo" @click="runDiff">Compare</el-button>
++      </div>
++      <div v-if="diff" data-testid="diffresult" class="space-y-3">
++        <el-tag v-if="diff.identical_content" type="success" data-testid="identical">identical objects: nothing was read</el-tag>
++        <div class="grid gap-3 grid-cols-2 md:grid-cols-5">
++          <div class="border border-gray-200 dark:border-gray-700 rounded-lg p-3" data-testid="rows"><div class="text-xs text-gray-500">rows old → new</div><div class="text-xl font-semibold">{{ diff.rows.old }} → {{ diff.rows.new }}</div></div>
++          <div class="border border-gray-200 dark:border-gray-700 rounded-lg p-3"><div class="text-xs text-gray-500">delta</div><div class="text-xl font-semibold">{{ diff.rows.delta > 0 ? "+" : "" }}{{ diff.rows.delta }}</div></div>
++          <template v-if="diff.keyed">
++            <div class="border border-green-300 rounded-lg p-3" data-testid="added"><div class="text-xs text-gray-500">added</div><div class="text-xl font-semibold text-green-700">{{ diff.added }}</div></div>
++            <div class="border border-red-300 rounded-lg p-3" data-testid="removed"><div class="text-xs text-gray-500">removed</div><div class="text-xl font-semibold text-red-700">{{ diff.removed }}</div></div>
++            <div class="border border-amber-300 rounded-lg p-3" data-testid="changed"><div class="text-xs text-gray-500">changed</div><div class="text-xl font-semibold text-amber-700">{{ diff.changed }}</div></div>
++          </template>
++        </div>
++        <div class="flex flex-wrap items-center gap-2 text-sm">
++          schema:
++          <el-tag v-for="c in diff.schema.added" :key="c" type="success">+ {{ c }}</el-tag>
++          <el-tag v-for="c in diff.schema.removed" :key="c" type="danger">− {{ c }}</el-tag>
++          <el-tag v-if="!diff.schema.added.length && !diff.schema.removed.length" type="info">unchanged</el-tag>
++          <template v-if="Object.keys(diff.changed_columns || {}).length">· changed columns:
++            <el-tag v-for="(n, c) in diff.changed_columns" :key="c" type="warning">{{ c }} ×{{ n }}</el-tag>
++          </template>
++        </div>
++        <table v-if="diff.examples?.changed?.length" class="text-sm" data-testid="examples">
++          <thead class="bg-gray-50 dark:bg-gray-800"><tr><th class="px-3 py-1 text-left">{{ diff.key }}</th><th class="px-3 py-1 text-left">column</th><th class="px-3 py-1 text-left">old</th><th class="px-3 py-1 text-left">new</th></tr></thead>
++          <tbody>
++            <template v-for="e in diff.examples.changed" :key="e[diff.key]">
++              <tr v-for="(v, c) in changedCols(e)" :key="c" class="border-t border-gray-100 dark:border-gray-800"><td class="px-3 py-1">{{ e[diff.key] }}</td><td class="px-3 py-1">{{ c }}</td><td class="px-3 py-1 text-red-700">{{ v.old }}</td><td class="px-3 py-1 text-green-700">{{ v.new }}</td></tr>
++            </template>
++          </tbody>
++        </table>
++      </div>
++    </div>
++
++    <!-- ===================================================== how this page got its data -->
++    <details class="card p-3" data-testid="flow" open>
++      <summary class="cursor-pointer font-semibold text-sm">
++        How this page got its data
++        <span class="font-normal text-gray-500">· {{ flow.steps.length }} requests · {{ fmtBytes(totalBytes) }}</span>
++      </summary>
++      <table class="w-full text-xs mt-2">
++        <thead class="text-gray-500"><tr><th class="text-left w-8">#</th><th class="text-left w-20">from</th><th class="text-left">what</th><th class="text-left">request</th><th class="text-right w-16">status</th><th class="text-right w-20">size</th><th class="text-right w-16">time</th></tr></thead>
++        <tbody>
++          <tr v-for="(s, i) in flow.steps.slice(-40)" :key="i" class="border-t border-gray-100 dark:border-gray-800">
++            <td class="py-0.5 text-gray-400">{{ i + 1 }}</td>
++            <td><el-tag size="small" :type="s.who === 'hub' ? 'warning' : 'info'">{{ s.who }}</el-tag></td>
++            <td>{{ s.label }}</td>
++            <td class="font-mono text-gray-500 truncate max-w-[340px]">{{ s.range || s.url }}</td>
++            <td class="text-right">{{ s.status || "…" }}</td>
++            <td class="text-right">{{ fmtBytes(s.bytes) }}</td>
++            <td class="text-right">{{ s.ms }} ms</td>
++          </tr>
++        </tbody>
++      </table>
++    </details>
++  </div>
++</template>
++
++<script setup>
++import { computed, onMounted, reactive, ref, watch } from "vue";
++import { clearFlow, commits, duckdb as _duck, ExplorerError, fileOfRow, flow, fmtBytes, footerCountTarget, readParquetRows, readRange, runSql, treeFiles, viewer } from "@/utils/explorer";
++
++const props = defineProps({
++  repoType: { type: String, default: "dataset" },
++  namespace: { type: String, required: true },
++  name: { type: String, required: true },
++  branch: { type: String, default: "main" },
++  initialView: { type: String, default: "rows" },
++});
++
++const repo = computed(() => ({ type: props.repoType, ns: props.namespace, name: props.name, revision: props.branch || "main" }));
++const LENGTH = 25;
++
++const view = ref(props.initialView);
++const error = ref("");
++const resolution = ref(null);
++const config = ref("default");
++const split = ref("");
++const mode = ref("rows");
++const term = ref("");
++const offset = ref(0);
++const page = ref(null);
++const pageMs = ref(0);
++const stats = ref(null);
++const thumbs = reactive({});
++const files = ref([]);
++const hasTable = ref(true);
++
++const views = [
++  { id: "rows", label: "Rows", icon: "i-carbon-table" },
++  { id: "sql", label: "SQL", icon: "i-carbon-terminal" },
++  { id: "archive", label: "Archives", icon: "i-carbon-archive" },
++  { id: "compare", label: "Compare revisions", icon: "i-carbon-compare" },
++];
++
++const splitsOfConfig = computed(() => resolution.value?.configs.find((c) => c.config === config.value)?.splits || []);
++const currentSplit = computed(() => splitsOfConfig.value.find((s) => s.split === split.value));
++const canNext = computed(() => page.value && page.value.rows.length === LENGTH && (page.value.num_rows_total == null || offset.value + LENGTH < page.value.num_rows_total));
++const totalBytes = computed(() => flow.steps.reduce((a, s) => a + s.bytes, 0));
++const tarFiles = computed(() => files.value.filter((f) => f.path.toLowerCase().endsWith(".tar")));
++const parquetFiles = computed(() => files.value.filter((f) => f.path.endsWith(".parquet")));
++
++const typeLabel = (f) => (f.type._type === "ClassLabel" ? "class" : f.type._type === "Value" ? f.type.dtype : f.type._type.toLowerCase());
++const labelOf = (f, v) => (f.type._type === "ClassLabel" && Number.isInteger(v) ? f.type.names[v] ?? v : v);
++const scalars = (cs) => Object.entries(cs).filter(([k, v]) => typeof v !== "object" && v !== null && k !== "exact_from_footer").map(([k, v]) => `${k}=${typeof v === "number" ? +v.toFixed(3) : v}`).join(" · ");
++const bars = (cs) => {
++  const raw = cs.frequencies ? Object.entries(cs.frequencies) : cs.histogram ? cs.histogram.hist.map((n, i) => [String(cs.histogram.bin_edges?.[i] ?? i), n]) : [];
++  const max = Math.max(1, ...raw.map(([, n]) => n));
++  return raw.map(([k, n]) => [k, n, Math.round((n / max) * 150)]);
++};
++const changedCols = (e) => Object.fromEntries(Object.entries(e).filter(([k]) => k !== diff.value.key));
++
++const guard = async (fn) => {
++  error.value = "";
++  try { return await fn(); } catch (e) { error.value = e instanceof ExplorerError ? `${e.status} ${e.code}: ${e.message}` : String(e.message || e); return null; }
++};
++
++async function init() {
++  clearFlow();
++  const res = await guard(() => viewer(repo.value, "splits"));
++  if (!res) return;
++  resolution.value = res;
++  config.value = res.configs.find((c) => c.default)?.config || res.configs[0].config;
++  split.value = splitsOfConfig.value[0]?.split;
++  files.value = await treeFiles(repo.value).catch(() => []);
++  // A dataset made only of archives (WebDataset) has no table: open the archive grid and never ask for rows.
++  hasTable.value = res.configs.some((c) => c.splits.some((s) => ["parquet", "csv", "jsonl"].includes(s.format)));
++  if (!hasTable.value) {
++    view.value = "archive";
++    return;
++  }
++  load();
++  loadStats();
++}
++
++function changeSplit() {
++  if (!splitsOfConfig.value.find((s) => s.split === split.value)) split.value = splitsOfConfig.value[0].split;
++  offset.value = 0;
++  load();
++  loadStats();
++}
++
++async function load() {
++  const route = mode.value === "rows" ? "rows" : mode.value;
++  const params = { config: config.value, split: split.value, offset: offset.value, length: LENGTH };
++  if (mode.value === "filter") params.where = term.value;
++  if (mode.value === "search") params.query = term.value;
++  const t0 = performance.now();
++  const j = await guard(() => viewer(repo.value, route, params, { rows: "rows page", filter: "filter scan", search: "search scan" }[route]));
++  if (!j) return;
++  page.value = j;
++  pageMs.value = Math.round(performance.now() - t0);
++  Object.keys(thumbs).forEach((k) => delete thumbs[k]);
++  fillThumbs(j);
++}
++
++async function loadStats() {
++  stats.value = null;
++  stats.value = await guard(() => viewer(repo.value, "statistics", { config: config.value, split: split.value }, "statistics"));
++}
++
++// Image cells are descriptors; the bytes come from storage with Range reads, not through the hub.
++async function fillThumbs(j) {
++  const col = j.features.find((f) => j.rows[0]?.row[f.name]?._type === "binary-struct")?.name;
++  if (!col || !currentSplit.value) return;
++  const { file, local } = await fileOfRow(repo.value, currentSplit.value.files, j.rows[0].row_idx);
++  const { rows } = await readParquetRows(repo.value, file, local, local + j.rows.length, [col], { utf8: false, label: "image column (visible rows)" });
++  rows.forEach((r, i) => { const b = r[col]?.bytes; if (b) thumbs[j.rows[i].row_idx] = URL.createObjectURL(new Blob([b])); });
++}
++
++// ---- SQL
++const sql = ref("");
++const budgetMiB = ref(64);
++const sqlBusy = ref(false);
++const sqlOut = ref(null);
++watch(split, (s) => { if (s && !sql.value) sql.value = `SELECT label, count(*) AS n, round(avg(score), 3) AS avg_score\nFROM ${s}\nGROUP BY label ORDER BY label`; }, { immediate: true });
++
++async function runQuery() {
++  sqlBusy.value = true;
++  sqlOut.value = null;
++  await guard(async () => {
++    const target = footerCountTarget(sql.value);
++    if (target) {
++      const size = await viewer(repo.value, "size", { config: config.value }, "exact row count from footers");
++      sqlOut.value = { footer: true, columns: ["count_star()"], rows: [[size.splits.find((s) => s.split === target).num_rows]], infos: {}, note: "No SQL engine was loaded and no data bytes were read." };
++      return;
++    }
++    const r = await runSql(repo.value, resolution.value, config.value, sql.value, budgetMiB.value * 1048576);
++    sqlOut.value = { ...r, approximate: Object.values(r.infos).some((i) => i.approximate), note: `${r.rows.length} row(s) · query ${r.ms} ms` };
++  });
++  sqlBusy.value = false;
++}
++
++// ---- Archives
++const tarPath = ref("");
++const tar = ref(null);
++const memberThumb = reactive({});
++const memberText = reactive({});
++// The file list arrives after the splits, so both the view and the list can be what completes the condition.
++watch([view, tarFiles], ([v]) => {
++  if (v === "archive" && !tar.value && tarFiles.value.length) {
++    tarPath.value = (tarFiles.value.find((f) => f.path.includes("shard-")) || tarFiles.value[0]).path;
++    loadTar();
++  }
++});
++watch([view, files], ([v]) => { if (v === "compare") initCompare(); });
++async function loadTar() {
++  tar.value = null;
++  const j = await guard(() => viewer(repo.value, "tar-index", { path: tarPath.value, limit: 12 }, "tar header walk"));
++  if (!j) return;
++  tar.value = j;
++  for (const s of j.samples) {
++    const img = s.members.find((m) => /^(jpe?g|png|webp)$/.test(m.ext));
++    const txt = s.members.find((m) => m.ext === "txt" || m.ext === "json");
++    if (img) readRange(repo.value, tarPath.value, img.offset, img.offset + img.size, "member image").then((b) => { memberThumb[s.key] = URL.createObjectURL(new Blob([b])); });
++    if (txt) readRange(repo.value, tarPath.value, txt.offset, txt.offset + txt.size, "member caption").then((b) => { memberText[s.key] = new TextDecoder().decode(b).slice(0, 110); });
++  }
++}
++
++// ---- Compare
++const commitList = ref([]);
++const diffPath = ref("");
++const oldRev = ref("");
++const newRev = ref("");
++const diffKey = ref("id");
++const diff = ref(null);
++async function initCompare() {
++  if (commitList.value.length || !files.value.length) return;
++  commitList.value = (await guard(() => commits(repo.value))) || [];
++  newRev.value = commitList.value[0]?.id || "";
++  oldRev.value = commitList.value.at(-2)?.id || commitList.value.at(-1)?.id || "";
++  diffPath.value = parquetFiles.value[0]?.path || "";
++}
++async function runDiff() {
++  diff.value = await guard(() => viewer(repo.value, "diff", { path: diffPath.value, old: oldRev.value, new: newRev.value, ...(diffKey.value ? { key: diffKey.value } : {}) }, "diff two commits"));
++}
++
++onMounted(init);
++watch(() => [props.namespace, props.name, props.branch], init);
++</script>
+diff -ruN -x node_modules -x '*.d.ts' -x '.eslintrc*' web-base/src/components/repo/explorer/DatasetPreviewCard.vue web/src/components/repo/explorer/DatasetPreviewCard.vue
+--- a/src/components/repo/explorer/DatasetPreviewCard.vue	1970-01-01 08:00:00.000000000 +0800
++++ b/src/components/repo/explorer/DatasetPreviewCard.vue	2026-10-19 11:03:16.228753847 +0800
+@@ -0,0 +1,51 @@
++<!-- First rows of the default split, shown on the dataset card. One API call; links to the Data tab. -->
++<template>
++  <div v-if="page" class="card p-4 mb-4" data-testid="preview-card">
++    <div class="flex items-center gap-2 mb-2">
++      <span class="i-carbon-table text-amber-700" />
++      <h3 class="font-semibold">Dataset preview</h3>
++      <el-tag size="small" type="info">{{ splitName }} · {{ page.num_rows_total?.toLocaleString() ?? "?" }} rows</el-tag>
++      <span class="flex-1" />
++      <a class="text-sm text-blue-600 dark:text-blue-400 cursor-pointer" data-testid="viewall" @click="$emit('open-data')">View all rows →</a>
++    </div>
++    <div class="overflow-x-auto">
++      <table class="w-full text-sm">
++        <thead class="bg-gray-50 dark:bg-gray-800">
++          <tr><th v-for="f in page.features" :key="f.name" class="text-left px-3 py-1.5 font-semibold">{{ f.name }}</th></tr>
++        </thead>
++        <tbody>
++          <tr v-for="r in page.rows" :key="r.row_idx" class="border-t border-gray-100 dark:border-gray-800">
++            <td v-for="f in page.features" :key="f.name" class="px-3 py-1.5 max-w-[320px] truncate">
++              <span v-if="r.row[f.name] && r.row[f.name]._type === 'binary-struct'" class="text-gray-400">image</span>
++              <span v-else-if="r.row[f.name] == null" class="italic text-gray-400">null</span>
++              <span v-else-if="typeof r.row[f.name] === 'object'" class="font-mono text-xs">{{ JSON.stringify(r.row[f.name]) }}</span>
++              <span v-else>{{ f.type._type === "ClassLabel" ? f.type.names[r.row[f.name]] : r.row[f.name] }}</span>
++            </td>
++          </tr>
++        </tbody>
++      </table>
++    </div>
++  </div>
++</template>
++
++<script setup>
++import { onMounted, ref } from "vue";
++import { viewer } from "@/utils/explorer";
++
++const props = defineProps({ repoType: String, namespace: String, name: String, branch: { type: String, default: "main" } });
++defineEmits(["open-data"]);
++const page = ref(null);
++const splitName = ref("");
++
++onMounted(async () => {
++  const repo = { type: props.repoType, ns: props.namespace, name: props.name, revision: props.branch || "main" };
++  try {
++    const res = await viewer(repo, "splits");
++    const cfg = res.configs.find((c) => c.default) || res.configs[0];
++    splitName.value = cfg.splits[0].split;
++    page.value = await viewer(repo, "rows", { config: cfg.config, split: splitName.value, offset: 0, length: 4 });
++  } catch {
++    page.value = null; // no tabular data in this dataset: show nothing
++  }
++});
++</script>
+diff -ruN -x node_modules -x '*.d.ts' -x '.eslintrc*' web-base/src/components/repo/RepoViewer.vue web/src/components/repo/RepoViewer.vue
+--- a/src/components/repo/RepoViewer.vue	2026-10-19 10:59:51.658363124 +0800
++++ b/src/components/repo/RepoViewer.vue	2026-10-19 11:03:36.529594067 +0800
+@@ -235,6 +235,19 @@
+               Files
+             </button>
+             <button
++              v-if="repoType === 'dataset'"
++              data-testid="tab-data"
++              :class="[
++                'px-4 py-2 font-medium transition-colors',
++                activeTab === 'data'
++                  ? 'border-b-2 border-blue-500 text-blue-600 dark:text-blue-400'
++                  : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200',
++              ]"
++              @click="navigateToTab('data')"
++            >
++              Data
++            </button>
++            <button
+               :class="[
+                 'px-4 py-2 font-medium transition-colors',
+                 activeTab === 'commits'
+@@ -267,6 +280,22 @@
+         </div>
+ 
+         <!-- Tab Content -->
++        <DatasetPreviewCard
++          v-if="activeTab === 'card' && repoType === 'dataset'"
++          :repo-type="repoType"
++          :namespace="namespace"
++          :name="name"
++          :branch="currentBranch"
++          @open-data="navigateToTab('data')"
++        />
++        <DataExplorerPanel
++          v-if="activeTab === 'data' && repoType === 'dataset'"
++          :repo-type="repoType"
++          :namespace="namespace"
++          :name="name"
++          :branch="currentBranch"
++          :initial-view="String($route.query.view || 'rows')"
++        />
+         <div v-if="activeTab === 'card'" class="card overflow-hidden">
+           <div class="max-w-full overflow-x-auto">
+             <div v-if="readmeLoading" class="text-center py-12">
+@@ -957,6 +986,8 @@
+ </template>
+ 
+ <script setup>
++import DataExplorerPanel from "@/components/repo/explorer/DataExplorerPanel.vue";
++import DatasetPreviewCard from "@/components/repo/explorer/DatasetPreviewCard.vue";
+ import { ElMessage, ElMessageBox } from "element-plus";
+ import axios from "axios";
+ import { formatRelativeTime, formatUnixRelativeTime } from "@/utils/datetime";
+@@ -1376,6 +1407,12 @@
+         query: { tab: "metadata" },
+       });
+       break;
++    case "data":
++      router.push({
++        path: `/${props.repoType}s/${props.namespace}/${props.name}`,
++        query: { tab: "data" },
++      });
++      break;
+     default:
+       router.push(`/${props.repoType}s/${props.namespace}/${props.name}`);
+   }
+diff -ruN -x node_modules -x '*.d.ts' -x '.eslintrc*' web-base/src/utils/explorer.js web/src/utils/explorer.js
+--- a/src/utils/explorer.js	1970-01-01 08:00:00.000000000 +0800
++++ b/src/utils/explorer.js	2026-10-19 11:01:54.315398409 +0800
+@@ -0,0 +1,159 @@
++// src/utils/explorer.js
++// Data Explorer client: the viewer API (L2) plus the browser readers (L1) and browser SQL (L4).
++// Every call is recorded in `flow` so the UI can show what happened and what it cost.
++import { reactive } from "vue";
++import { parquetMetadataAsync, parquetReadObjects } from "hyparquet";
++import api from "@/utils/api";
++
++export const flow = reactive({ steps: [] });
++const note = (step) => {
++  flow.steps.push(step);
++  return step;
++};
++export const clearFlow = () => flow.steps.splice(0);
++
++const authHeaders = () => {
++  const token = localStorage.getItem("hf_token");
++  return token ? { Authorization: `Bearer ${token}` } : {};
++};
++
++export class ExplorerError extends Error {
++  constructor(status, code, detail) {
++    super(detail);
++    Object.assign(this, { status, code });
++  }
++}
++
++// ---- L2: the bounded server API --------------------------------------------------------------------------------
++export async function viewer(repo, route, params = {}, label = route) {
++  const step = note({ who: "hub", label, url: `viewer/${route}`, status: 0, ms: 0, bytes: 0 });
++  const t0 = performance.now();
++  try {
++    const r = await api.get(`/api/${repo.type}s/${repo.ns}/${repo.name}/viewer/${route}`, {
++      params: { revision: repo.revision, ...params },
++      transformResponse: (d) => d,
++    });
++    step.status = r.status;
++    step.bytes = new Blob([r.data]).size;
++    return JSON.parse(r.data);
++  } catch (e) {
++    step.status = e.response?.status || 0;
++    const body = (() => { try { return JSON.parse(e.response?.data); } catch { return {}; } })();
++    throw new ExplorerError(step.status, e.response?.headers?.["x-error-code"] || "", body.detail?.error || body.error || e.message);
++  } finally {
++    step.ms = Math.round(performance.now() - t0);
++  }
++}
++
++export async function treeFiles(repo) {
++  const step = note({ who: "hub", label: "list files", url: "tree", status: 0, ms: 0, bytes: 0 });
++  const t0 = performance.now();
++  const r = await api.get(`/api/${repo.type}s/${repo.ns}/${repo.name}/tree/${repo.revision}`, { params: { recursive: true } });
++  step.status = r.status;
++  step.ms = Math.round(performance.now() - t0);
++  return r.data.filter((e) => e.type === "file");
++}
++
++export async function commits(repo) {
++  const r = await api.get(`/api/${repo.type}s/${repo.ns}/${repo.name}/commits/${repo.revision}`);
++  return r.data.map((c) => ({ id: c.id, title: c.title }));
++}
++
++// ---- L1: Range reads straight from storage ---------------------------------------------------------------------
++export const resolveUrl = (repo, path, rev = repo.revision) => `/${repo.type}s/${repo.ns}/${repo.name}/resolve/${rev}/${path}`;
++
++export async function readRange(repo, path, start, endExclusive, label = "range read") {
++  const step = note({ who: "storage", label, url: path, range: `bytes=${start}-${endExclusive - 1}`, status: 0, ms: 0, bytes: 0 });
++  const t0 = performance.now();
++  try {
++    const r = await fetch(resolveUrl(repo, path), { headers: { Range: `bytes=${start}-${endExclusive - 1}`, ...authHeaders() } });
++    step.status = r.status;
++    const buf = await r.arrayBuffer();
++    step.bytes = buf.byteLength;
++    return r.status === 200 ? buf.slice(start, endExclusive) : buf;
++  } finally {
++    step.ms = Math.round(performance.now() - t0);
++  }
++}
++
++const asyncBuffer = (repo, file, label) => ({ byteLength: file.size, slice: (a, b = file.size) => readRange(repo, file.path, a, Math.min(b, file.size), label) });
++
++let compressorsPromise;
++const compressors = () => (compressorsPromise ||= import(/* @vite-ignore */ "https://esm.sh/hyparquet-compressors@1.1.2").then((m) => m.compressors).catch(() => undefined));
++
++const metaCache = new Map();
++export async function parquetMeta(repo, file, label = "parquet footer") {
++  const key = `${repo.ns}/${repo.name}@${repo.revision}/${file.path}`;
++  if (!metaCache.has(key)) metaCache.set(key, await parquetMetadataAsync(asyncBuffer(repo, file, label)));
++  return metaCache.get(key);
++}
++
++export async function readParquetRows(repo, file, rowStart, rowEnd, columns, { utf8 = true, label = "parquet" } = {}) {
++  const metadata = await parquetMeta(repo, file);
++  return { metadata, rows: await parquetReadObjects({ file: asyncBuffer(repo, file, label), metadata, rowStart, rowEnd, columns, utf8, compressors: await compressors() }) };
++}
++
++export async function fileOfRow(repo, files, index) {
++  let before = 0;
++  for (const f of files) {
++    const n = Number((await parquetMeta(repo, f)).num_rows);
++    if (index < before + n) return { file: f, local: index - before };
++    before += n;
++  }
++  throw new Error("row is past the end of the split");
++}
++
++// ---- L4: browser SQL -------------------------------------------------------------------------------------------
++let duckPromise;
++export function duckdb() {
++  duckPromise ||= (async () => {
++    const lib = await import(/* @vite-ignore */ "https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.32.0/+esm");
++    const bundle = await lib.selectBundle(lib.getJsDelivrBundles());
++    const worker = new Worker(URL.createObjectURL(new Blob([`importScripts("${bundle.mainWorker}");`], { type: "text/javascript" })));
++    const db = new lib.AsyncDuckDB(new lib.ConsoleLogger(lib.LogLevel.WARNING), worker);
++    await db.instantiate(bundle.mainModule, bundle.pthreadWorker);
++    return db;
++  })();
++  return duckPromise;
++}
++
++// "select count(*) from <split>" is answered from the footers: exact, zero data bytes, no engine.
++export const footerCountTarget = (sql) => sql.match(/^\s*select\s+count\(\*\)\s+(?:as\s+\w+\s+)?from\s+"?([\w-]+)"?\s*;?\s*$/i)?.[1] ?? null;
++
++const loaded = new Map();
++export async function runSql(repo, resolution, config, sql, budgetBytes) {
++  const db = await duckdb();
++  const conn = await db.connect();
++  try {
++    const infos = {};
++    for (const s of resolution.configs.find((c) => c.config === config).splits) {
++      if (!new RegExp(`\\b${s.split}\\b`).test(sql)) continue;
++      const key = `${repo.ns}/${repo.name}@${repo.revision}/${config}/${s.split}`;
++      if (!loaded.has(key)) {
++        let used = 0;
++        const names = [];
++        for (const [i, f] of s.files.entries()) {
++          if (used + f.size > budgetBytes && names.length) break;
++          if (used + f.size > budgetBytes) throw new Error(`${s.split}: the first file alone is ${f.size} bytes, over the browser budget of ${budgetBytes}`);
++          const name = `${s.split}-${i}.${s.format === "jsonl" ? "json" : s.format}`;
++          await db.registerFileBuffer(name, new Uint8Array(await readRange(repo, f.path, 0, f.size, `load ${s.split} into SQL`)));
++          names.push(name);
++          used += f.size;
++        }
++        const reader = { parquet: "read_parquet", csv: "read_csv_auto", jsonl: "read_json_auto" }[s.format];
++        await conn.query(`CREATE OR REPLACE VIEW "${s.split}" AS SELECT * FROM ${reader}([${names.map((n) => `'${n}'`).join(",")}])`);
++        loaded.set(key, { approximate: names.length < s.files.length, loadedFiles: names.length, totalFiles: s.files.length, bytes: used });
++      }
++      infos[s.split] = loaded.get(key);
++    }
++    const t0 = performance.now();
++    const result = await conn.query(sql);
++    const columns = result.schema.fields.map((f) => f.name);
++    const rows = result.toArray().map((r) => columns.map((c) => (typeof r[c] === "bigint" ? Number(r[c]) : r[c])));
++    return { columns, rows, infos, ms: Math.round(performance.now() - t0) };
++  } finally {
++    await conn.close();
++  }
++}
++
++export const fmtBytes = (n) => (n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(1)} KiB` : `${(n / 1048576).toFixed(1)} MiB`);
+diff -ruN -x node_modules -x '*.d.ts' -x '.eslintrc*' web-base/src/utils/repo-view-routes.js web/src/utils/repo-view-routes.js
+--- a/src/utils/repo-view-routes.js	2026-10-19 10:59:51.659363116 +0800
++++ b/src/utils/repo-view-routes.js	2026-10-19 11:07:27.998771285 +0800
+@@ -6,7 +6,7 @@
+   ["/[type]s/[namespace]/[name]/tree/[branch]/[...path]", "files"],
+   ["/[type]s/[namespace]/[name]/commits/[branch]/", "commits"],
+ ]);
+-const ROOT_TABS = new Set(["card", "metadata"]);
++const ROOT_TABS = new Set(["card", "metadata", "data"]);
+ const loadRepoViewer = () => import("../components/repo/RepoViewer.vue");
+ 
+ /** A tuple preserves repository boundaries even when both names contain hyphens. */

@@ -390,7 +390,11 @@ def scan(refs: list[FileRef], predicate, offset: int, length: int, budget: int =
     for ref in refs:
         s = parquet_summary(ref)
         f = RangeFile(ref.url, ref.size, budget=max(0, budget - nbytes))
-        pf = pq.ParquetFile(f)
+        try:
+            pf = pq.ParquetFile(f)       # opening reads the footer, which the budget can already forbid
+        except BudgetExceeded:
+            partial = True
+            break
         row0 = base
         for i, g in enumerate(s["row_groups"]):
             try:
