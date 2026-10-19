@@ -8,6 +8,7 @@ import pytest
 from fastapi import HTTPException
 
 import kohakuhub.auth.admin_token as admin_token
+from kohakuhub.auth.admin_throttle import AdminAuthThrottle
 import kohakuhub.auth.dependencies as auth_deps
 from kohakuhub.auth.utils import hash_token
 from kohakuhub.db import Token
@@ -133,9 +134,8 @@ def admin_enabled(monkeypatch):
     monkeypatch.setattr(admin_token.cfg.admin, "auth_free_failures", 2)
     monkeypatch.setattr(admin_token.cfg.admin, "auth_trusted_proxy_hops", 0)
     monkeypatch.setattr(admin_token.cfg.admin, "auth_allowlist", [])
-    admin_token.throttle.reset()
+    monkeypatch.setattr(admin_token, "throttle", AdminAuthThrottle())  # in memory: no database in these tests
     yield long_token
-    admin_token.throttle.reset()
 
 
 def test_a_wrong_admin_token_still_lets_a_logged_in_user_through(monkeypatch, admin_enabled):

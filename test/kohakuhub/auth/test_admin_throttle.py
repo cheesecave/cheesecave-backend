@@ -123,3 +123,20 @@ def test_reset_forgets_everything(throttle, clock):
     fail(throttle, clock, times=8, wait_it_out=False)
     throttle.reset()
     assert throttle.size() == 0 and throttle.check("a") == 0
+
+
+def test_what_the_shared_table_said_is_remembered_and_the_memory_stays_bounded(clock):
+    throttle = AdminAuthThrottle(clock=clock, max_clients=2)
+
+    throttle.set_state("a", failures=7, last_failure=clock.now, wait_until=clock.now + 8)
+    throttle.set_state("b", failures=1, last_failure=clock.now, wait_until=0)
+    assert throttle.has("a") and throttle.check("a") == 8
+    assert throttle.failures("a") == 7
+
+    throttle.set_state("c", failures=1, last_failure=clock.now, wait_until=0)  # evicts the least recently used: "a"... or "b"
+    assert throttle.size() == 2 and throttle.has("c")
+
+    throttle.forget("c")
+    assert not throttle.has("c")
+    throttle.forget("never-seen")  # harmless
+

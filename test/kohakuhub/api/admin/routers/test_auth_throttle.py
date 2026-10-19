@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+import time
 
 import httpx
 import pytest
@@ -26,6 +27,7 @@ def live(monkeypatch):
     }.items():
         monkeypatch.setattr(config, name, value)
     module = sys.modules["kohakuhub.auth.admin_token"]
+    module.throttle.set_clock(time.time)  # a test may have moved it
     module.throttle.reset()
     return module
 
@@ -50,7 +52,7 @@ async def test_a_waiting_client_gets_429_even_with_the_right_token_then_recovers
         await wrong(client)
     right = {"X-Admin-Token": admin_client.headers["X-Admin-Token"]}
     assert (await client.get(TEMPLATES, headers=right)).status_code == 429
-    live.throttle._clock = lambda base=live.throttle._clock(): base + 5  # the wait is over
+    live.throttle.set_clock(lambda: time.time() + 5)  # the wait is over
     assert (await client.get(TEMPLATES, headers=right)).status_code == 200
 
 
@@ -103,3 +105,26 @@ async def test_the_repository_routes_that_accept_the_token_are_throttled_too(cli
         await client.request("DELETE", "/api/repos/delete", json=body, headers={"X-Admin-Token": "nope"})
     blocked = await client.request("DELETE", "/api/repos/delete", json=body, headers={"X-Admin-Token": "nope"})
     assert blocked.status_code == 429
+
+
+async def test_the_wait_is_in_the_database_so_another_worker_sees_it(client, live):
+    from kohakuhub.auth.admin_throttle import SharedAdminAuthThrottle
+
+    for _ in range(4):
+        await wrong(client)  # on this worker: three free failures, the fourth starts a wait
+
+    other_worker = SharedAdminAuthThrottle()  # another process: empty memory, same table
+    assert other_worker.check("127.0.0.1") == 1
+    assert other_worker.check("203.0.113.9") == 0
+
+
+async def test_the_throttle_still_works_when_the_table_is_gone(client, live, monkeypatch):
+    models = sys.modules["kohakuhub.db"]
+    monkeypatch.setattr(models.AdminAuthClient, "get_or_none", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no table")))
+    monkeypatch.setattr(models.AdminAuthClient, "select", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no table")))
+
+    statuses = [(await wrong(client)).status_code for _ in range(6)]
+
+    assert statuses[:4] == [403, 403, 403, 403]  # never a 500 because the table is down
+    assert statuses[4:] == [429, 429]  # and the wait is kept in memory
+

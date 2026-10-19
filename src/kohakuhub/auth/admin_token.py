@@ -12,12 +12,13 @@ from __future__ import annotations
 
 import hashlib
 import secrets
+import threading
 from typing import NamedTuple
 
 from fastapi import Header, HTTPException, Request
 
 from kohakuhub.auth.admin_client import in_allowlist, resolve_client
-from kohakuhub.auth.admin_throttle import AdminAuthThrottle, ThrottleParams
+from kohakuhub.auth.admin_throttle import SharedAdminAuthThrottle, ThrottleParams
 from kohakuhub.config import cfg
 from kohakuhub.logger import get_logger
 
@@ -25,7 +26,13 @@ logger = get_logger("ADMIN-AUTH")
 
 DEFAULT_TOKEN = "change-me-in-production"
 
-throttle = AdminAuthThrottle()
+# What the check remembers about clients that sent a wrong token: shared by every worker through the database.
+throttle = SharedAdminAuthThrottle()
+
+# The look at the client's wait, the comparison and the record of a failure are one decision. Without this, threads
+# (the repository routes run in a thread pool) that arrive together would all find "no wait yet" and each get a guess.
+# Other workers decide at the same time, so a few more guesses than the free ones are possible, never a flood.
+_decision_lock = threading.Lock()
 
 _weak_reported = False
 _warned_shared_client = False
@@ -48,7 +55,7 @@ def _params() -> ThrottleParams:
     return ThrottleParams(
         free=admin.auth_free_failures,
         base_wait=admin.auth_base_wait_seconds,
-        max_wait=admin.auth_max_wait_seconds,
+        max_wait=max(admin.auth_max_wait_seconds, admin.auth_base_wait_seconds),
         reset_after=admin.auth_reset_seconds,
     )
 
@@ -96,6 +103,12 @@ def check_admin_token(request, token: str | None) -> AdminTokenCheck:
                 "proxies in front of the API (GET /admin/api/auth/client shows what the server computed)."
             )
 
+    with _decision_lock:
+        return _decide(request, token, identity, counting)
+
+
+def _decide(request, token: str, identity, counting: bool) -> AdminTokenCheck:
+    admin = cfg.admin
     if counting:
         wait = throttle.check(identity.key)
         if wait:

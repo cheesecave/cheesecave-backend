@@ -8,6 +8,7 @@ import pytest
 from fastapi import HTTPException
 
 import kohakuhub.auth.admin_token as admin_token
+from kohakuhub.auth.admin_throttle import AdminAuthThrottle
 
 TOKEN = "t" * 40
 
@@ -24,8 +25,13 @@ def request(peer="198.51.100.20", **forwarded):
     return SimpleNamespace(client=SimpleNamespace(host=peer), headers=Headers(**forwarded), state=SimpleNamespace())
 
 
+NOW = {"t": 5000.0}
+
+
 @pytest.fixture(autouse=True)
 def admin_settings(monkeypatch):
+    """The settings, and a throttle that counts in memory (what the shared table does is tested apart)."""
+    NOW["t"] = 5000.0
     admin = admin_token.cfg.admin
     for name, value in {
         "enabled": True,
@@ -42,16 +48,13 @@ def admin_settings(monkeypatch):
         "auth_allowlist": [],
     }.items():
         monkeypatch.setattr(admin, name, value)
-    admin_token.throttle.reset()
+    monkeypatch.setattr(admin_token, "throttle", AdminAuthThrottle(clock=lambda: NOW["t"]))
     yield
-    admin_token.throttle.reset()
 
 
 @pytest.fixture
-def clock(monkeypatch):
-    now = {"t": 5000.0}
-    monkeypatch.setattr(admin_token.throttle, "_clock", lambda: now["t"])
-    return now
+def clock():
+    return NOW
 
 
 def outcome(req, token):
@@ -232,3 +235,42 @@ def test_verify_admin_token_maps_every_outcome_to_http(monkeypatch, clock):
     with pytest.raises(HTTPException) as disabled:
         call(request(), TOKEN)
     assert disabled.value.status_code == 503 and "disabled" in disabled.value.detail["error"]
+
+
+def test_threads_arriving_together_get_no_more_guesses_than_one_at_a_time(monkeypatch, clock):
+    """The look at the wait, the comparison and the record are one decision, so a burst cannot all slip in."""
+    import threading
+    import time
+
+    compared = []
+    real = admin_token._matches
+
+    def slow_compare(token):
+        compared.append(token)
+        time.sleep(0.02)  # long enough for every thread to have arrived
+        return real(token)
+
+    monkeypatch.setattr(admin_token, "_matches", slow_compare)
+    results = []
+
+    def guess(index):
+        results.append(outcome(request(), f"wrong-{index}"))
+
+    threads = [threading.Thread(target=guess, args=(i,)) for i in range(25)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert len(compared) == 6  # five free guesses and the sixth, which starts the wait
+    assert results.count("invalid") == 6 and results.count("blocked") == 19
+
+
+def test_the_wait_between_the_limits_is_never_shorter_than_its_start(monkeypatch, clock):
+    monkeypatch.setattr(admin_token.cfg.admin, "auth_base_wait_seconds", 30)
+    monkeypatch.setattr(admin_token.cfg.admin, "auth_max_wait_seconds", 10)  # set the wrong way round
+
+    params = admin_token._params()
+
+    assert params.base_wait == 30 and params.max_wait == 30
+
