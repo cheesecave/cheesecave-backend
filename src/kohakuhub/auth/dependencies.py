@@ -1,13 +1,11 @@
 """FastAPI dependencies for authentication."""
 
-import hashlib
-import secrets
 from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import Cookie, Header, HTTPException, Request
 
-from kohakuhub.config import cfg
+from kohakuhub.auth.admin_token import check_admin_token, raise_for
 from kohakuhub.db import Session, Token, User
 from kohakuhub.logger import get_logger
 from kohakuhub.auth.session import renew_session
@@ -145,20 +143,17 @@ def get_current_user_or_admin(
 
     This allows endpoints to accept both user auth AND admin auth.
     """
-    # Try admin token first
+    # Try admin token first: the same check as the admin routes (throttle, weak-token guard, client rules).
     if x_admin_token:
-        # Validate admin token (same logic as verify_admin_token)
-        if cfg.admin.enabled:
-            provided_hash = hashlib.sha3_512(x_admin_token.encode()).hexdigest()
-            expected_hash = hashlib.sha3_512(
-                cfg.admin.secret_token.encode()
-            ).hexdigest()
-
-            if secrets.compare_digest(provided_hash, expected_hash):
-                # Admin token valid - set flag in request.state
-                request.state.is_admin = True
-                logger.debug("Authenticated as admin")
-                return (None, True)
+        check = check_admin_token(request, x_admin_token)
+        if check.outcome == "ok":
+            # Admin token valid - set flag in request.state
+            request.state.is_admin = True
+            logger.debug("Authenticated as admin")
+            return (None, True)
+        if check.outcome == "blocked":
+            raise_for(check)
+        # Anything else (wrong, weak, admin API off): the token does not count, a user login still may.
 
     # Try user authentication
     try:
