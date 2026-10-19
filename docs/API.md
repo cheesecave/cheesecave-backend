@@ -525,6 +525,9 @@ erDiagram
 | `/api/auth/logout` | POST | ✓ | Logout and destroy session |
 | `/api/auth/verify-email` | GET | ✗ | Verify email with token |
 | `/api/auth/me` | GET | ✓ | Get current user info |
+| `/api/auth/change-password` | POST | ✓ | Change the password (other sessions end) |
+| `/api/auth/password-reset/check` | POST | ✗ | Whose account a reset link opens, and until when |
+| `/api/auth/password-reset` | POST | ✗ | Set a new password with a reset link |
 | `/api/auth/tokens` | GET | ✓ | List user's API tokens |
 | `/api/auth/tokens/create` | POST | ✓ | Create new API token |
 | `/api/auth/tokens/{token_id}` | DELETE | ✓ | Revoke API token |

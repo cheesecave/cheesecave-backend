@@ -236,6 +236,68 @@ Set-Cookie: session_id=abc123...; HttpOnly; SameSite=Lax; Max-Age=2592000
 
 ---
 
+## Passwords
+
+### Rules
+
+A password has to be **at least 8 characters** and **at most 72 bytes** (bcrypt looks at no more than the first 72 bytes; a password with non-ASCII characters has fewer characters than bytes). The rule applies whenever a password is set: registration, `POST /admin/api/users`, changing it and resetting it. It does not apply to logging in, so an older, shorter password keeps working until its owner changes it. A password that breaks the rule is answered `422`.
+
+### Change Password
+
+**Pattern:** `POST /auth/change-password`
+
+**Authentication:** Required (session or access token)
+
+**Request Body:**
+```json
+{
+  "current_password": "old password",
+  "new_password": "a new password of at least 8 characters"
+}
+```
+
+**Response:**
+```json
+{ "success": true, "message": "Password changed" }
+```
+
+**What happens:**
+- The current password is checked first; a wrong one is `403` and changes nothing.
+- Every **other** session of the account ends; the one the request came from stays (with an access token and no session, all of them end).
+- **Access tokens keep working**: command-line users and CI depend on them. Revoke them separately if that is wanted (`DELETE /auth/tokens/{token_id}`).
+- A reset link that was waiting for the account is withdrawn.
+
+**Status Codes:**
+- `200 OK` - Password changed
+- `401 Unauthorized` - Not signed in
+- `403 Forbidden` - Current password is wrong
+- `422 Unprocessable Entity` - The new password breaks the rules
+
+---
+
+### Reset a Password with a Link
+
+An administrator makes a one-time link ([Admin: Password Reset Link](admin.md#password-reset-link)) and hands it over out of band. The link opens the web page `/reset-password`; the token is in the URL **fragment** (`#token=...`), so it reaches neither a server log nor a `Referer` header. The page uses the two public endpoints below.
+
+**Check the link:** `POST /auth/password-reset/check`, body `{"token": "..."}`, answers whose account it opens and until when:
+```json
+{ "username": "alice", "expires_at": "2026-10-19T12:00:00Z" }
+```
+
+**Use the link:** `POST /auth/password-reset`, body `{"token": "...", "new_password": "..."}`:
+```json
+{ "success": true, "message": "Password changed", "username": "alice" }
+```
+
+**What happens:**
+- The link works **once**. It is used up before the password is set, so of two requests with the same link only one succeeds.
+- **Every session of the account ends and nobody is signed in by it**: the person logs in with the new password. No cookie is set.
+- Access tokens are left alone.
+- A new password that breaks the rules is `422` and does **not** use the link up.
+- An unknown, expired, already used or withdrawn link, and the link of a disabled account, all get the **same** answer, `400` with `"This reset link is invalid, expired or already used."`
+
+---
+
 ## Email Verification
 
 ### Verify Email

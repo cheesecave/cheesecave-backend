@@ -174,6 +174,24 @@ class User(BaseModel):
     created_at = DateTimeField(default=partial(datetime.now, tz=timezone.utc))
 
 
+class PasswordResetToken(BaseModel):
+    """A one-time link that lets somebody set a new password without knowing the old one.
+
+    Only the hash of the token is kept (the raw token exists once, in the link that was handed over). A table of its own so
+    a release from before it keeps running on the same database. ``used_at`` stays after use as history.
+    """
+
+    user = ForeignKeyField(User, backref="password_reset_tokens", on_delete="CASCADE", index=True)
+    token_hash = CharField(unique=True, index=True)
+    created_at = DateTimeField(default=partial(datetime.now, tz=timezone.utc))
+    expires_at = DateTimeField()
+    used_at = DateTimeField(null=True)
+    created_by = CharField()  # "admin" (a link an administrator made) or "self" (a later phase: asked for by email)
+
+    class Meta:
+        table_name = "password_reset_token"
+
+
 class UserPreference(BaseModel):
     """What an account chose for itself (the README style, to start with).
 
@@ -980,6 +998,7 @@ def init_db():
             SiteAppearance,
             User,
             UserPreference,
+            PasswordResetToken,
             UserFollow,
             EmailVerification,
             Session,

@@ -4,7 +4,7 @@ import asyncio
 import json
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Cookie, Depends, HTTPException, Response
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, EmailStr
 
@@ -43,6 +43,8 @@ from kohakuhub.auth.utils import (
 )
 from kohakuhub.utils.names import normalize_name
 from kohakuhub.utils.datetime_utils import safe_isoformat
+from kohakuhub.password_policy import Password
+from kohakuhub.password_reset import find_valid, claim, iso, revoke_links
 
 logger = get_logger("AUTH")
 
@@ -52,7 +54,7 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 class RegisterRequest(BaseModel):
     username: str
     email: EmailStr
-    password: str
+    password: Password
 
 
 class LoginRequest(BaseModel):
@@ -62,6 +64,25 @@ class LoginRequest(BaseModel):
 
 class CreateTokenRequest(BaseModel):
     name: str
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: Password
+
+
+class PasswordResetCheckRequest(BaseModel):
+    token: str
+
+
+class PasswordResetRequest(BaseModel):
+    token: str
+    new_password: Password
+
+
+# One answer for a link that never existed, one that expired, one that was used and one that was withdrawn, so a link
+# tells nobody anything about accounts or about what happened to it.
+INVALID_RESET_LINK = "This reset link is invalid, expired or already used."
 
 
 @router.post("/register")
@@ -324,6 +345,65 @@ async def logout(response: Response, user: User = Depends(get_current_user)):
     )
 
     return {"success": True, "message": "Logged out successfully"}
+
+
+@router.post("/change-password")
+async def change_password(
+    req: ChangePasswordRequest,
+    user: User = Depends(get_current_user),
+    session_id: str | None = Cookie(None),
+):
+    """Change the password of the signed-in account. Every other session ends; access tokens keep working."""
+
+    if not verify_password(req.current_password, user.password_hash):
+        logger.warning(f"Password change refused (wrong current password): {user.username}")
+        raise HTTPException(403, detail="Current password is incorrect")
+
+    with db.atomic():
+        update_user(user, password_hash=hash_password(req.new_password))
+        others = Session.delete().where(Session.user == user)
+        if session_id:
+            others = others.where(Session.session_id != session_id)
+        ended = others.execute()
+        # a link that was waiting was made for an account whose password has just changed
+        revoke_links(user)
+
+    logger.success(f"Password changed: {user.username} ({ended} other session(s) ended)")
+    return {"success": True, "message": "Password changed"}
+
+
+def _valid_reset_link(token: str):
+    """The row and the account a reset link opens, or the one refusal every bad link gets."""
+    row = find_valid(token)
+    user = row.user if row else None
+    if user is None or not user.is_active:
+        raise HTTPException(400, detail=INVALID_RESET_LINK)
+    return row, user
+
+
+@router.post("/password-reset/check")
+async def check_password_reset_link(req: PasswordResetCheckRequest):
+    """What the reset page asks first: whose account does this link open, and until when."""
+
+    row, user = _valid_reset_link(req.token)
+    return {"username": user.username, "expires_at": iso(row.expires_at)}
+
+
+@router.post("/password-reset")
+async def reset_password(req: PasswordResetRequest):
+    """Set a new password with a link an administrator handed over. It signs every session out and nobody in."""
+
+    row, user = _valid_reset_link(req.token)
+
+    with db.atomic():
+        # the link is used up first: of two requests with the same link only one gets past this
+        if not claim(row):
+            raise HTTPException(400, detail=INVALID_RESET_LINK)
+        update_user(user, password_hash=hash_password(req.new_password))
+        ended = Session.delete().where(Session.user == user).execute()
+
+    logger.success(f"Password reset with a link: {user.username} ({ended} session(s) ended)")
+    return {"success": True, "message": "Password changed", "username": user.username}
 
 
 @router.get("/me")

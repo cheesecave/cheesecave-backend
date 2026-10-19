@@ -49,7 +49,7 @@ async def test_register_covers_invitation_reserved_and_conflict_paths(monkeypatc
     monkeypatch.setattr(auth_routes.cfg.auth, "require_email_verification", False)
 
     def request(username="new-user", email="new@example.com"):
-        return auth_routes.RegisterRequest(username=username, email=email, password="secret")
+        return auth_routes.RegisterRequest(username=username, email=email, password="secret-pass-1")
 
     with pytest.raises(HTTPException) as missing_token:
         await auth_routes.register(request())
@@ -117,7 +117,7 @@ async def test_register_covers_invitation_processing_and_email_verification(monk
         auth_routes.RegisterRequest(
             username="fresh-user",
             email="fresh@example.com",
-            password="secret",
+            password="secret-pass-1",
         ),
         invitation_token="invite-1",
     )
@@ -141,7 +141,7 @@ async def test_register_covers_invitation_processing_and_email_verification(monk
         auth_routes.RegisterRequest(
             username="second-user",
             email="second@example.com",
-            password="secret",
+            password="secret-pass-1",
         ),
         invitation_token="invite-2",
     )

@@ -210,6 +210,57 @@ under **Background Tasks**, and both need a running `khub-worker`.
 
 ---
 
+### Password Reset Link
+
+An account's owner who has forgotten the password sets a new one with a one-time link. The administrator makes the link here and hands it over out of band (chat, a call); nothing is sent by email, and the administrator never learns the password.
+
+**Make a link:** `POST /admin/api/users/{username}/password-reset-link`
+
+**Request Body** (optional; `ttl` is one of the fixed lifetimes below, nothing else is accepted):
+```json
+{ "ttl": "1h" }
+```
+
+| `ttl` | Lifetime |
+|---|---|
+| `15m` | 15 minutes |
+| `1h` (default) | 1 hour |
+| `6h` | 6 hours |
+| `24h` | 24 hours |
+| `3d` | 3 days |
+| `7d` | 7 days |
+
+**Response:**
+```json
+{
+  "username": "alice",
+  "url": "https://hub.example.com/reset-password#token=...",
+  "ttl": "1h",
+  "created_at": "2026-10-19T11:00:00Z",
+  "expires_at": "2026-10-19T12:00:00Z"
+}
+```
+
+The link is shown **once** and cannot be read again (only a hash of the token is stored). A new link replaces the unused one. The link works once; when it is used the account's sessions end (see [Reset a Password with a Link](authentication.md#reset-a-password-with-a-link)). It cannot be made for an unknown user (`404`), an organization or a disabled account (`400`).
+
+**See whether a link is waiting:** `GET /admin/api/users/{username}/password-reset-link`
+```json
+{
+  "active": true,
+  "created_at": "2026-10-19T11:00:00Z",
+  "expires_at": "2026-10-19T12:00:00Z",
+  "default": "1h",
+  "choices": [{ "key": "15m", "seconds": 900, "label": "15 minutes" }]
+}
+```
+`choices` lists every lifetime, so a client does not have to copy the table.
+
+**Withdraw it:** `DELETE /admin/api/users/{username}/password-reset-link` answers `{"revoked": 1}` (`0` when none was waiting).
+
+**Choosing a lifetime:** short when the person is on a call with you (15 minutes, 1 hour), longer when they will read it later (6 hours, 24 hours), days only when they are away; the longer the link lives, the longer it can be misused if it is copied, so prefer the shortest that works and withdraw it if it is no longer needed. Comparable software ships similar defaults: Okta's reset link sent by an administrator lasts 1 hour, Devise's 6 hours, Auth0's password change ticket 5 days; Keycloak gives links an administrator sends a longer lifetime than the ones a user asks for.
+
+---
+
 ## Repositories
 
 ### List All Repositories
