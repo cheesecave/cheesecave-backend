@@ -456,12 +456,12 @@ def hf_range_not_satisfiable(
 
 
 # The properties the Hub accepts in a repository info ``expand``, per type
-# (its own validation message, 2026-10). ``storage`` is KohakuHub's: the
-# repository's quota usage.
+# (its own validation message, 2026-10). ``storage`` and ``createdBy`` are KohakuHub's: the
+# repository's quota usage, and the person who created it (the Hub names only ``author``).
 _EXPAND_COMMON = {
     "author", "cardData", "createdAt", "disabled", "lastModified", "likes", "private",
     "resourceGroup", "sha", "siblings", "tags", "trendingScore", "usedStorage", "xetEnabled",
-    "storage",
+    "storage", "createdBy",
 }
 EXPAND_PROPERTIES = {
     "model": frozenset(_EXPAND_COMMON | {
@@ -500,13 +500,15 @@ def repo_info_fields(
     last_modified: Optional[str],
     storage: bool,
     card: Optional[dict] = None,
+    created_by: bool = False,
 ) -> dict:
     """The repository info fields KohakuHub has values for (``siblings`` aside), per type.
 
     ``card`` is ``{"card": cleaned README front matter or None, "derived": tags, pipeline_tag,
     library_name, sdk, "info": what the files add: config}`` (see ``repository_discovery.info_card``), ``None`` when it cannot be
     known now. ``sha`` is answered as given. ``storage`` (KohakuHub's quota usage) is computed
-    only when asked: it reads the namespace's quota.
+    only when asked: it reads the namespace's quota. So is ``created_by`` (``createdBy``, the person who
+    created the repository, or ``None`` when nobody can say): it reads the creator record.
     """
     repo_id = f"{repo_row.namespace}/{repo_row.name}"
     declared = (card or {}).get("derived") or {}
@@ -545,6 +547,10 @@ def repo_info_fields(
             fields["model-index"] = card_data.get("model-index")
         elif repo_type == "dataset" and isinstance(card_data.get("paperswithcode_id"), str):
             fields["paperswithcode_id"] = card_data["paperswithcode_id"]
+    if created_by:
+        from kohakuhub.repository_creator import creator_profile
+
+        fields["createdBy"] = creator_profile(repo_row)
     if storage:
         from kohakuhub.api.quota.util import get_repo_storage_info
 

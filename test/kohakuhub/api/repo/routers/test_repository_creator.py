@@ -119,3 +119,70 @@ async def test_deleting_the_repository_deletes_its_creator_row(owner_client):
     assert deleted.status_code == 200, deleted.text
     db = _live("kohakuhub.db")
     assert db.RepositoryCreator.select().join(db.Repository).where(db.Repository.full_id == "owner/short-lived").count() == 0
+
+
+async def test_the_repository_info_names_its_creator_and_the_organization_stays_the_author(member_client):
+    created = await member_client.post(
+        "/api/repos/create", json={"type": "dataset", "name": "info-made", "organization": "acme-labs"}
+    )
+    assert created.status_code == 200, created.text
+
+    info = (await member_client.get("/api/datasets/acme-labs/info-made")).json()
+
+    assert info["author"] == "acme-labs"
+    assert info["createdBy"] == {"username": "member", "full_name": None, "is_org": False, "avatar_url": None}
+
+
+async def test_expand_created_by_answers_only_it_and_an_unknown_property_is_still_refused(member_client):
+    await member_client.post("/api/repos/create", json={"type": "model", "name": "expanded", "organization": "acme-labs"})
+
+    body = (await member_client.get("/api/models/acme-labs/expanded", params={"expand": "createdBy"})).json()
+    refused = await member_client.get("/api/models/acme-labs/expanded", params={"expand": "creator"})
+
+    assert set(body) == {"_id", "id", "createdBy"}
+    assert body["createdBy"]["username"] == "member"
+    assert refused.status_code == 400
+    assert '"createdBy"' in refused.headers["x-error-message"]
+
+
+async def test_other_expands_do_not_look_the_creator_up(owner_client):
+    await owner_client.post("/api/repos/create", json={"type": "model", "name": "no-lookup"})
+
+    body = (await owner_client.get("/api/models/owner/no-lookup", params={"expand": "likes"})).json()
+
+    assert set(body) == {"_id", "id", "likes"}
+
+
+async def test_a_repository_without_a_record_is_named_by_its_namespace_or_by_nobody(owner_client, member_client):
+    db = _live("kohakuhub.db")
+    await owner_client.post("/api/repos/create", json={"type": "model", "name": "legacy-mine"})
+    await owner_client.post("/api/repos/create", json={"type": "model", "name": "legacy-org", "organization": "acme-labs"})
+    db.RepositoryCreator.delete().execute()  # as if both were made before the creator was recorded
+
+    mine = (await owner_client.get("/api/models/owner/legacy-mine")).json()
+    org = (await owner_client.get("/api/models/acme-labs/legacy-org")).json()
+
+    assert mine["createdBy"]["username"] == "owner"
+    assert org["createdBy"] is None
+    assert org["author"] == "acme-labs"
+
+
+async def test_the_revision_info_names_the_creator_too(member_client):
+    await member_client.post("/api/repos/create", json={"type": "model", "name": "at-revision", "organization": "acme-labs"})
+
+    info = (await member_client.get("/api/models/acme-labs/at-revision/revision/main")).json()
+
+    assert info["createdBy"]["username"] == "member"
+
+
+async def test_the_real_client_reads_the_repository_info_with_the_extra_field(live_server_url, hf_api_token):
+    from huggingface_hub import HfApi
+
+    api = HfApi(endpoint=live_server_url, token=hf_api_token)
+    api.create_repo("owner/client-reads", repo_type="model")
+
+    info = api.model_info("owner/client-reads")
+
+    assert info.id == "owner/client-reads"
+    assert info.author == "owner"
+    assert getattr(info, "createdBy")["username"] == "owner"

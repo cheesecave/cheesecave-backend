@@ -412,6 +412,7 @@ async def get_revision(
         hub_oid(commit_id),
         last_modified,
         storage=bool(user) and bool(expand) and "storage" in expand,
+        created_by=not expand or "createdBy" in expand,
     )
     fields.update(
         {
