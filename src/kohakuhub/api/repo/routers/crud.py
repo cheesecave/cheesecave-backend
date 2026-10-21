@@ -16,6 +16,7 @@ from kohakuhub.db import (
     Commit,
     File,
     Repository,
+    RepositoryCreator,
     StagingUpload,
     User,
     db,
@@ -532,19 +533,23 @@ async def create_repo(
     # `lakefs_repo` records which LakeFS repository this row owns; every read
     # path resolves through it (see `resolve_lakefs_repo`).
     try:
-        _row, created = Repository.get_or_create(
-            repo_type=payload.type,
-            namespace=namespace,
-            name=payload.name,
-            full_id=full_id,
-            defaults={
-                "private": resolved_private,
-                # The account or organization the namespace names, not the
-                # creator: deleting a member must not take an org's repos
-                "owner": _namespace_owner(namespace),
-                "lakefs_repo": lakefs_repo,
-            },
-        )
+        with db.atomic():
+            _row, created = Repository.get_or_create(
+                repo_type=payload.type,
+                namespace=namespace,
+                name=payload.name,
+                full_id=full_id,
+                defaults={
+                    "private": resolved_private,
+                    # The account or organization the namespace names, not the
+                    # creator: deleting a member must not take an org's repos
+                    "owner": _namespace_owner(namespace),
+                    "lakefs_repo": lakefs_repo,
+                },
+            )
+            if created:
+                # The person who made it, which no namespace can say; with the row or not at all
+                RepositoryCreator.create(repository=_row, user=user, source="recorded")
     except Exception as e:
         # A LakeFS repository without a row is unreachable; do not leave it.
         logger.exception(f"Failed to record repository {full_id}", e)

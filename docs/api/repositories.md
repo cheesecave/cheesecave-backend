@@ -312,7 +312,9 @@ Squash is enabled by default and can be switched off; see
 
 `siblings` lists the whole repository, so it costs in proportion to the file count; the name-only list is kept per commit after the first request. A client after the repository's metadata alone should use `expand` (the web UI asks for `sha`, `lastModified`, `createdAt`, `private`, `downloads`, `likes`, `tags` and `storage`).
 
-The accepted `expand` properties are the Hub's for each repository type (for models, for example, `sha`, `lastModified`, `private`, `downloads`, `likes`, `tags`, `siblings`, `usedStorage`, `cardData`, `safetensors`...), plus KohakuHub's `storage`. Properties KohakuHub keeps no value for are returned as `null`.
+The accepted `expand` properties are the Hub's for each repository type (for models, for example, `sha`, `lastModified`, `private`, `downloads`, `likes`, `tags`, `siblings`, `usedStorage`, `cardData`, `safetensors`...), plus KohakuHub's `storage` and `createdBy`. Properties KohakuHub keeps no value for are returned as `null`.
+
+`createdBy` is the person who created the repository, as `{"username", "full_name", "is_org": false, "avatar_url"}`, where `author` is only the account or organization the namespace names. It is read from the creator record (`repository_creator`, written when a repository is created or duplicated; migration 040 filled the older ones from the author of their first `main` commit when it came within a day). A repository without a record in a personal namespace was created by its owner; one in an organization has no creator to name and answers `null`. The Hub has no such field: a client that does not know it ignores it.
 
 **Response** (no parameters):
 ```json
@@ -333,6 +335,7 @@ The accepted `expand` properties are the Hub's for each repository type (for mod
   "pipeline_tag": null,
   "library_name": null,
   "usedStorage": 5368710144,
+  "createdBy": {"username": "alice", "full_name": null, "is_org": false, "avatar_url": null},
   "spaces": [],
   "models": [],
   "datasets": [],

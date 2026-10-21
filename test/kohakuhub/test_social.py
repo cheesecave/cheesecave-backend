@@ -17,7 +17,15 @@ import pytest
 
 from kohakuhub.api import social
 from kohakuhub.auth.dependencies import get_current_user, get_optional_user
-from kohakuhub.db import Commit, Repository, RepositoryLike, User, UserFollow, UserOrganization
+from kohakuhub.db import (
+    Commit,
+    Repository,
+    RepositoryCreator,
+    RepositoryLike,
+    User,
+    UserFollow,
+    UserOrganization,
+)
 from test.kohakuhub.support.db import peer_connection
 from test.kohakuhub.support.factories import make_commit, make_org, make_repo, make_user
 
@@ -372,7 +380,7 @@ def test_cursor_boundaries_exclude_invisible_source_ids(catalog):
     RepositoryLike.create(repository=hidden, user=catalog.author)
     first = feed(catalog, scope="following", limit=1)
     state = social._decode(
-        first["next_cursor"], ["feed", catalog.viewer.id, "following", "all", "actor-v2", "all"]
+        first["next_cursor"], ["feed", catalog.viewer.id, "following", "all", "actor-v3", "all"]
     )
     assert state["caps"] == [public.id, public_commit.id, 0]
 
@@ -538,7 +546,7 @@ def test_organization_scope_requires_membership_valid_parameters_and_bound_curso
     first = feed(catalog, scope="organization", organization="org", limit=17)
     state = social._decode(
         first["next_cursor"],
-        ["feed", catalog.viewer.id, "organization", "all", "actor-v2", "all", catalog.org.id],
+        ["feed", catalog.viewer.id, "organization", "all", "actor-v3", "all", catalog.org.id],
     )
     assert state["caps"] == [repo.id, 105, 0]
     seen = list(first["items"])
@@ -645,12 +653,12 @@ def test_event_categories_are_disjoint_full_pages_and_cursor_bound(catalog):
     } == {"like"}
     repo_cursor = repo_pages[0]["next_cursor"]
     state = social._decode(
-        repo_cursor, ["feed", catalog.viewer.id, "self", "all", "actor-v2", "repository"]
+        repo_cursor, ["feed", catalog.viewer.id, "self", "all", "actor-v3", "repository"]
     )
     assert state["caps"] == [106, 106, 0]
     like_cursor = like_pages[0]["next_cursor"]
     state = social._decode(
-        like_cursor, ["feed", catalog.viewer.id, "self", "all", "actor-v2", "like"]
+        like_cursor, ["feed", catalog.viewer.id, "self", "all", "actor-v3", "like"]
     )
     assert state["caps"] == [0, 0, 106]
     for event_type, cursor in (
@@ -766,3 +774,101 @@ def test_org_following_and_membership_aggregate_other_actors_but_categories_stay
     for event_type in ("all", "repository", "like"):
         result = feed(catalog, event_type=event_type)
         assert result == {"items": [], "has_more": False, "next_cursor": None}
+
+
+def created(items, repo):
+    return next(row for row in items if row["id"] == f"repo_created:{repo.id}")
+
+
+def test_a_creation_names_the_person_who_created_it_not_the_namespace(catalog):
+    UserOrganization.create(user=catalog.viewer, organization=catalog.org, role="member")
+    by_author = repository(catalog, owner=catalog.org, name="by-author", repo_type="dataset")
+    RepositoryCreator.create(repository=by_author, user=catalog.author, source="recorded")
+    guessed = repository(catalog, owner=catalog.org, name="guessed")
+    RepositoryCreator.create(repository=guessed, user=catalog.outsider, source="inferred")
+
+    items = feed(catalog)["items"]
+
+    row = created(items, by_author)
+    assert row["actor"]["username"] == "author"
+    assert row["actor"]["full_name"] == "An author"
+    assert row["actor"]["is_org"] is False
+    assert row["namespace"] == {"username": "org", "is_org": True}  # where it lives is still the organization
+    assert created(items, guessed)["actor"]["username"] == "outsider"
+
+
+def test_a_personal_repository_without_a_record_was_created_by_its_owner(catalog):
+    own = repository(catalog, owner=catalog.viewer, name="mine")
+    elsewhere = repository(catalog, owner=catalog.author, name="theirs")
+    UserFollow.create(follower=catalog.viewer, followed=catalog.author)
+
+    items = feed(catalog)["items"]
+
+    assert created(items, own)["actor"]["username"] == "viewer"
+    assert created(items, elsewhere)["actor"]["username"] == "author"
+    assert created(items, elsewhere)["actor"]["is_org"] is False
+
+
+def test_an_organization_repository_without_a_record_has_no_creator_to_name(catalog):
+    UserOrganization.create(user=catalog.viewer, organization=catalog.org, role="member")
+    repo = repository(catalog, owner=catalog.org, name="nobody-knows")
+
+    row = created(feed(catalog)["items"], repo)
+
+    assert row["actor"] is None
+    assert row["namespace"]["username"] == "org"
+
+
+def test_a_repository_whose_creator_was_removed_is_unattributed_in_an_organization(catalog):
+    UserOrganization.create(user=catalog.viewer, organization=catalog.org, role="member")
+    repo = repository(catalog, owner=catalog.org, name="orphaned")
+    RepositoryCreator.create(repository=repo, user=catalog.author, source="recorded")
+    User.delete().where(User.id == catalog.author.id).execute()
+
+    assert created(feed(catalog)["items"], repo)["actor"] is None
+
+
+def test_what_you_created_is_yours_even_in_an_organization_that_is_not_yours(catalog):
+    mine = repository(catalog, owner=catalog.org, name="made-by-me")
+    RepositoryCreator.create(repository=mine, user=catalog.viewer, source="recorded")
+    theirs = repository(catalog, owner=catalog.org, name="made-by-author")
+    RepositoryCreator.create(repository=theirs, user=catalog.author, source="recorded")
+
+    for scope in ("self", "personal", "all"):
+        ids = {row["id"] for row in feed(catalog, scope=scope)["items"]}
+        assert f"repo_created:{mine.id}" in ids, scope
+        assert f"repo_created:{theirs.id}" not in ids, scope
+    assert feed(catalog, scope="following")["items"] == []
+
+
+def test_following_a_person_shows_the_repositories_they_created_anywhere(catalog):
+    theirs = repository(catalog, owner=catalog.org, name="made-by-author")
+    RepositoryCreator.create(repository=theirs, user=catalog.author, source="recorded")
+    other = repository(catalog, owner=catalog.org, name="made-by-outsider")
+    RepositoryCreator.create(repository=other, user=catalog.outsider, source="recorded")
+    UserFollow.create(follower=catalog.viewer, followed=catalog.author)
+
+    ids = [row["id"] for row in feed(catalog, scope="following")["items"]]
+
+    assert ids == [f"repo_created:{theirs.id}"]
+    assert feed(catalog, scope="following", repo_type="dataset")["items"] == []
+
+
+def test_paging_through_creations_keeps_each_creator(catalog):
+    repos = []
+    for number in range(3):
+        repo = repository(
+            catalog, owner=catalog.org, name=f"page-{number}", stamp=STAMP + timedelta(hours=number)
+        )
+        RepositoryCreator.create(repository=repo, user=catalog.viewer, source="recorded")
+        repos.append(repo)
+
+    seen, cursor = [], None
+    while True:
+        page = feed(catalog, scope="self", limit=1, **({"cursor": cursor} if cursor else {}))
+        seen += [(row["id"], row["actor"]["username"]) for row in page["items"]]
+        cursor = page["next_cursor"]
+        if not cursor:
+            break
+
+    assert seen == [(f"repo_created:{repo.id}", "viewer") for repo in reversed(repos)]

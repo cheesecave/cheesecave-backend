@@ -85,6 +85,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The activity feed names who created a repository** instead of "Unknown user". The creation event of every repository had
+  no actor (the repository table never recorded its creator), so the home feed read "Unknown user created a Dataset" for every
+  repository, and 97 % of production's repositories are in organizations. The request that creates (or duplicates) a repository
+  now records the person in a table of its own, `repository_creator`; migration 040 adds it and fills the repositories that
+  exist from the author of their first `main` commit when it came within a day (marked `inferred`, left unknown otherwise). The
+  feed names that person with the organization as the place, falls back to the owner for a repository in a personal namespace,
+  and counts what you created, wherever it lives, as yours (`self`, `personal`, `all`) and a followed person's creations as
+  following. Paging cursors from before this change are refused (their context changed).
+- **The repository info names its creator too**: `createdBy` (`{username, full_name, is_org, avatar_url}`, or `null` when nobody can say) next to `author`, which stays the account or organization of the namespace; also `expand=createdBy`. The web page shows it under Relationships as "Created By" and hides it when there is none.
 - **A commit on a revision that is not a branch is a 404 whatever it holds, a head that cannot be read is no commit id, and a preupload refuses a revision that is nowhere** ([#103](https://github.com/cheesecave/cheesecave-backend/issues/103)).
   A commit with no operation on a branch that is not there (or on a tag, a commit id, a full ref name) was `200` with the commit
   id `no-changes`, while the same commit with one operation was `404 RevisionNotFound`; and a LakeFS that failed while the head

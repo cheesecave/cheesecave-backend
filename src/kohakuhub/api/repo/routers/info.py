@@ -300,6 +300,7 @@ async def get_repo_info(
         last_modified,
         storage=bool(user) and (not expand or "storage" in expand),
         card=card,
+        created_by=not expand or "createdBy" in expand,
     )
     return hf_repo_info_response(fields, expand, siblings)
 
