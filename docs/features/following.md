@@ -105,8 +105,15 @@ Feed responses contain `items`, `has_more`, and `next_cursor`. Events contain:
 ```
 
 Kinds are `repo_created`, `commit`, and `like`; their IDs combine the kind with the corresponding
-source row ID. Creation events always have `actor: null`: repositories do not record their original
-creator. Commit actors come from `Commit.author`, not the owner or denormalized username. Like actors
+source row ID. A creation event's actor is the person who created the repository, read from
+`repository_creator` (the request that created the repository writes it; for repositories that
+existed before migration 040 it is the author of the first `main` commit when that came within a day
+of the repository). It is never the namespace: a repository in an organization is created by a
+member, and the event names that member with the organization as `namespace`. A repository in a
+personal namespace without a record was created by its owner, so the owner is the actor. An
+organization's repository nobody can name has `actor: null`. What you created counts as yours
+(`self`, `personal` and `all`) and creations by people you follow count as following, wherever the
+repository lives. Commit actors come from `Commit.author`, not the owner or denormalized username. Like actors
 and times come from the current `RepositoryLike` row. Commit events include only stored `main`
 branch commits; messages are plain text capped at 1,000 characters. Other events have `commit: null`.
 The namespace reflects the repository's current owner.
@@ -115,7 +122,7 @@ Repository cards show current `likes` and `downloads` counters, independent of t
 historical `created_at`. Their `lastModified` is the latest stored `main` commit time, resolved
 in one batch with the same helper used by repository listings. When no stored main commit exists,
 the feed uses repository creation time; it does not make a LakeFS request per activity card.
-These fields are read on every page within its database snapshot and need no schema migration.
+These fields are read on every page within its database snapshot. The creator needs the table of migration 040.
 
 All response times use explicit UTC `Z`. Legacy timezone-naive timestamps follow the application's
 UTC convention; SQLite values with explicit offsets are converted to UTC. Stable descending cursor

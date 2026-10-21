@@ -378,6 +378,24 @@ class RepositoryCard(BaseModel):
         table_name = "repository_card"
 
 
+class RepositoryCreator(BaseModel):
+    """Who created a repository (the person, not the namespace it lives in).
+
+    A table of its own so a release from before it keeps running on the same database. A repository
+    belongs to a user or an organization (``Repository.owner``); only the person who made it is
+    recorded here, which is what an activity feed names. ``source`` is ``recorded`` when the
+    request that created the repository wrote it and ``inferred`` when migration 040 took the author
+    of an old repository's first commit. No row, or no user, means nobody can say.
+    """
+
+    repository = ForeignKeyField(Repository, primary_key=True, on_delete="CASCADE")
+    user = ForeignKeyField(User, null=True, on_delete="SET NULL", index=True)
+    source = CharField(max_length=16)
+
+    class Meta:
+        table_name = "repository_creator"
+
+
 class File(BaseModel):
     id = AutoField()
     repository = ForeignKeyField(
@@ -1008,6 +1026,7 @@ def init_db():
             RepositoryMetadata,
             RepositoryFacet,
             RepositoryCard,
+            RepositoryCreator,
             File,
             PathCommit,
             StagingUpload,

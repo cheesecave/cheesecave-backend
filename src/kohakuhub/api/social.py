@@ -293,7 +293,7 @@ def _feed(user, scope, repo_type, limit, cursor, organization=None, event_type="
     database = _database()
     p = database.param
     # Changed actor attribution must invalidate older paging sessions as well.
-    context = ["feed", user.id, scope, repo_type, "actor-v2", event_type]
+    context = ["feed", user.id, scope, repo_type, "actor-v3", event_type]
     followed = f"SELECT followed_id FROM user_follow WHERE follower_id = {p}"
     followed_people = (
         f'SELECT f.followed_id FROM user_follow f JOIN "user" u ON u.id = f.followed_id '
@@ -334,7 +334,11 @@ def _feed(user, scope, repo_type, limit, cursor, organization=None, event_type="
         branches, params = [], []
         for rank, (table, actor, join) in enumerate(
             (
-                ("repository", "CAST(NULL AS INTEGER)", ""),
+                (
+                    "repository",
+                    "rc.user_id",  # who created it; a namespace is not a person
+                    "LEFT JOIN repository_creator rc ON rc.repository_id=r.id",
+                ),
                 ("commit", "e.author_id", "JOIN repository r ON r.id=e.repository_id"),
                 ("repositorylike", "e.user_id", "JOIN repository r ON r.id=e.repository_id"),
             )
@@ -344,12 +348,15 @@ def _feed(user, scope, repo_type, limit, cursor, organization=None, event_type="
             source = "r" if rank == 0 else "e"
             epoch = _epoch(f"{source}.created_at")
             personal = f"({own} OR {actor} = {p})"
-            self_interest = f"r.owner_id = {p}" if rank == 0 else f"{actor} = {p}"
-            self_params = [user.id]
             if rank == 0:
-                interest = f"r.owner_id IN ({followed})"
-                interest_params = [user.id]
+                # What you made counts as yours wherever it lives, as well as what your own namespace holds.
+                self_interest = f"(r.owner_id = {p} OR {actor} = {p})"
+                self_params = [user.id, user.id]
+                interest = f"(r.owner_id IN ({followed}) OR {actor} IN ({followed_people}))"
+                interest_params = [user.id, user.id]
             else:
+                self_interest = f"{actor} = {p}"
+                self_params = [user.id]
                 interest = f"({actor} IN ({followed_people}) OR r.owner_id IN ({followed_orgs}))"
                 interest_params = [user.id, user.id]
             member_orgs = f"({own} AND r.owner_id <> {p})"
@@ -438,12 +445,16 @@ def _feed(user, scope, repo_type, limit, cursor, organization=None, event_type="
         for event_id, rank, created_at, _, repo_id, actor_id, sha, message in rows:
             repo = repos[repo_id]
             namespace = profiles[repo.owner_id]
+            actor = profiles.get(actor_id)
+            if actor is None and rank == 0 and not namespace["is_org"]:
+                # Only the account itself can create in its own namespace
+                actor = namespace
             items.append(
                 {
                     "id": f"{kinds[rank]}:{event_id}",
                     "kind": kinds[rank],
                     "created_at": _utc(created_at),
-                    "actor": profiles.get(actor_id),
+                    "actor": actor,
                     "namespace": {"username": namespace["username"], "is_org": namespace["is_org"]},
                     "repository": {
                         "id": repo.full_id,

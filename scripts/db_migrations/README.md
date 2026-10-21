@@ -397,3 +397,14 @@ Rollback facts and the command are in
 - Nothing is backfilled. `CREATE TABLE IF NOT EXISTS` and two indexes; two containers starting together take turns on an
   advisory lock.
 
+## Repository creators: 040
+
+- **040** (`040_repository_creator.py`) creates `repository_creator`: one row per repository (`repository_id`, the key, gone
+  with the repository; `user_id`, the person who created it, released when their account goes; `source`, `recorded` when the
+  request that created the repository wrote it and `inferred` when this migration did).
+- **Filled once for the repositories that exist:** the creator of an old repository is the author of its first commit on `main`
+  when that commit came within a day of the repository; otherwise the repository has no row and its creator is unknown. New
+  repositories are written by the request that creates them and are never touched by the migration.
+- **A table of its own on purpose**, as for 035, 037, 038 and 039: an older release does not know it and ignores it, so rolling
+  back is leaving it. The fill adds rows only for repositories that have none, so it can run again, or after `init_db()` built
+  the empty table, without harm. `CREATE TABLE IF NOT EXISTS`; two containers starting together take turns on an advisory lock.
