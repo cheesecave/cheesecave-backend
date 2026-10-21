@@ -92,10 +92,12 @@ async def test_a_duplicate_is_created_by_whoever_asked_for_it(owner_client, memb
 async def test_a_repository_that_could_not_be_recorded_is_not_left_half_made(owner_client, monkeypatch):
     db = _live("kohakuhub.db")
 
-    def refuse(*args, **kwargs):
+    # A deliberate database failure, injected on the one insert. A real one (dropping the table for the block)
+    # holds a lock the application's other connections wait on, and the test hangs instead of failing.
+    def refuse(cls, **kwargs):
         raise RuntimeError("the database said no")
 
-    monkeypatch.setattr(db.RepositoryCreator, "create", classmethod(lambda cls, **kw: refuse()))
+    monkeypatch.setattr(db.RepositoryCreator, "create", classmethod(refuse))
 
     response = await owner_client.post("/api/repos/create", json={"type": "model", "name": "half-made"})
 
