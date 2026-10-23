@@ -42,7 +42,7 @@ def _key_of(address) -> str:
     return str(address)
 
 
-def _forwarded_for(request) -> list[str]:
+def forwarded_for(request) -> list[str]:
     lines = request.headers.getlist("x-forwarded-for") if hasattr(request, "headers") else []
     return [part.strip() for line in lines for part in line.split(",") if part.strip()]
 
@@ -52,7 +52,7 @@ def resolve_client(request, hops: int) -> ClientIdentity:
     client = getattr(request, "client", None)
     peer = _parse(getattr(client, "host", None))
     peer = _normalised(peer) if peer is not None else None
-    forwarded = _forwarded_for(request)
+    forwarded = forwarded_for(request)
 
     if hops > 0 and len(forwarded) >= hops:
         chosen = _parse(forwarded[-hops])

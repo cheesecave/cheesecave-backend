@@ -77,11 +77,26 @@ async def test_the_client_endpoint_shows_what_the_server_computed(admin_client, 
     body = response.json()
     assert body["hops"] == 0 and body["forwarded_for_seen"] is False and body["trusted"] is True
     assert body["client"] and body["address"]
+    assert body["forwarded_for"] == [] and body["peer"]  # nothing forwarded: the peer is the address
 
     monkeypatch.setattr(sys.modules["kohakuhub.config"].cfg.admin, "auth_trusted_proxy_hops", 1)
     forwarded = await admin_client.get(CLIENT_ENDPOINT, headers={"X-Forwarded-For": "forged, 203.0.113.9"})
     assert forwarded.json()["client"] == "203.0.113.9"
     assert forwarded.json()["forwarded_for_seen"] is True and forwarded.json()["hops"] == 1
+    # What the proxies wrote, left to right, so the operator can count from the right to the address that is theirs
+    assert forwarded.json()["forwarded_for"] == ["forged", "203.0.113.9"]
+    assert forwarded.json()["peer"] == body["peer"]
+
+
+async def test_the_client_endpoint_lists_every_forwarded_header_line_in_order(admin_client, live):
+    response = await admin_client.get(
+        CLIENT_ENDPOINT,
+        headers=[("X-Forwarded-For", "198.51.100.7, 203.0.113.9"), ("X-Forwarded-For", " 192.0.2.1 ,, 2001:db8::5")],
+    )
+
+    body = response.json()
+    assert body["forwarded_for"] == ["198.51.100.7", "203.0.113.9", "192.0.2.1", "2001:db8::5"]
+    assert body["forwarded_for_seen"] is True and body["trusted"] is False  # hops 0: not believed
 
 
 async def test_the_client_endpoint_needs_the_token(client, live):
