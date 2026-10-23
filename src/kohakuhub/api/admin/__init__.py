@@ -1,6 +1,8 @@
 """Admin API - Requires admin secret token authentication.
 
 Organized router structure:
+- session: Browser sessions of the admin panel (the shared token exchanged for an HttpOnly cookie)
+- repo_actions: Delete, move and squash a repository as the administrator (the panel's cookie only reaches /admin)
 - users: User management (CRUD, verification)
 - repositories: Repository management and file browsing
 - quota: Quota management and recalculation
@@ -28,8 +30,10 @@ from kohakuhub.api.admin.routers import (
     invitations_router,
     overview_router,
     quota_router,
+    repo_actions_router,
     repositories_router,
     search_router,
+    session_router,
     site_appearance_router,
     site_branding_router,
     site_homepage_router,
@@ -44,6 +48,8 @@ router = APIRouter()
 
 # Include all sub-routers
 router.include_router(auth_router, tags=["admin-auth"])
+router.include_router(session_router, tags=["admin-session"])
+router.include_router(repo_actions_router, tags=["admin-repo-actions"])
 router.include_router(users_router, tags=["admin-users"])
 router.include_router(repositories_router, tags=["admin-repositories"])
 router.include_router(quota_router, tags=["admin-quota"])

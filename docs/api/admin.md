@@ -32,6 +32,23 @@ curl -H "X-Admin-Token: secret" \
   http://localhost:28080/admin/api/users
 ```
 
+### Browser sessions (the admin panel)
+
+The panel exchanges the token once for a session cookie, so the token is not kept in the page and a reload does not sign the administrator out. Scripts keep using `X-Admin-Token`; when both are sent, the header is the one that is checked.
+
+| Request | Answer |
+|---|---|
+| `POST /admin/api/session` `{"token": "..."}` | `201 {"expires_at", "absolute_expires_at"}` and the cookie `admin_session` (`Path=/admin`, `HttpOnly`, `SameSite=Strict`, `Secure` when the public address is https). The token goes through the same throttle as the header: `403` for a wrong one, `429` with `Retry-After` while the client has to wait. |
+| `GET /admin/api/session` | `200` with the same fields when the cookie stands for a live session (the panel after a reload), `401` otherwise. |
+| `DELETE /admin/api/session` | Signs out: the session is revoked on the server and the cookie cleared. |
+| `GET /admin/api/admin-sessions` | The active sessions: `id`, `created_at`, `last_used_at`, `expires_at`, `absolute_expires_at`, `ip`, `user_agent` and `current` (the one asking). |
+| `DELETE /admin/api/admin-sessions/{id}` | Ends one session (`404` when it is not active). Ending the one in use also clears the cookie. |
+| `POST /admin/api/admin-sessions/revoke-others` | Ends every session but the one asking (all of them when called with the token header): `{"revoked": n}`. |
+
+A session ends after 30 minutes without use (each use moves that forward) and at the latest 12 hours after it was made (`CHEESE_CAVE_ADMIN_SESSION_IDLE_MINUTES`, `CHEESE_CAVE_ADMIN_SESSION_ABSOLUTE_HOURS`), when it is revoked, and when the shared admin token is changed: every session carries a keyed fingerprint of the token it was made with. A cookie request that changes something (anything but `GET`, `HEAD`, `OPTIONS`) must also send `X-Requested-With: cheesecave-admin` and an `Origin` that is the public address of the hub or one of `CHEESE_CAVE_ADMIN_SESSION_ALLOWED_ORIGINS`; a page of another site can send neither, and the answer is `403`. A weak token or a disabled admin API closes the cookie as well (`503`). `CHEESE_CAVE_ADMIN_SESSION_ENABLED=false` turns sessions off: the session routes answer `404`, which is what an older backend answers, and the panel falls back to the token.
+
+The cookie only travels under `/admin`, so the three repository actions the panel used to send to `/api/repos/*` with the token also exist as `DELETE /admin/api/repos/delete`, `POST /admin/api/repos/move` and `POST /admin/api/repos/squash`: the same bodies and the same handlers, called as the administrator.
+
 ---
 
 ## Users

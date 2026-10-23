@@ -108,6 +108,11 @@ def test_load_config_merges_file_and_environment(monkeypatch):
     monkeypatch.setenv("KOHAKU_HUB_ADMIN_AUTH_ALERT_PER_MINUTE", "0")
     monkeypatch.setenv("KOHAKU_HUB_ADMIN_AUTH_TRUSTED_PROXY_HOPS", "2")
     monkeypatch.setenv("KOHAKU_HUB_ADMIN_AUTH_ALLOWLIST", " 203.0.113.0/24 , 2001:db8::/32,,")
+    monkeypatch.setenv("KOHAKU_HUB_ADMIN_SESSION_ENABLED", "false")
+    monkeypatch.setenv("KOHAKU_HUB_ADMIN_SESSION_IDLE_MINUTES", "15")
+    monkeypatch.setenv("KOHAKU_HUB_ADMIN_SESSION_ABSOLUTE_HOURS", "8")
+    monkeypatch.setenv("KOHAKU_HUB_ADMIN_SESSION_COOKIE_SECURE", "true")
+    monkeypatch.setenv("KOHAKU_HUB_ADMIN_SESSION_ALLOWED_ORIGINS", " https://panel.example.test , ,https://b.example.test ")
     monkeypatch.setenv("KOHAKU_HUB_DEFAULT_USER_PRIVATE_QUOTA_BYTES", "100")
     monkeypatch.setenv("KOHAKU_HUB_DEFAULT_USER_PUBLIC_QUOTA_BYTES", "unlimited")
     monkeypatch.setenv("KOHAKU_HUB_DEFAULT_ORG_PRIVATE_QUOTA_BYTES", "200")
@@ -175,6 +180,10 @@ def test_load_config_merges_file_and_environment(monkeypatch):
     assert cfg.admin.auth_alert_per_minute == 0
     assert cfg.admin.auth_trusted_proxy_hops == 2
     assert cfg.admin.auth_allowlist == ["203.0.113.0/24", "2001:db8::/32"]
+    assert cfg.admin.session_enabled is False
+    assert (cfg.admin.session_idle_minutes, cfg.admin.session_absolute_hours) == (15, 8)
+    assert cfg.admin.session_cookie_secure is True
+    assert cfg.admin.session_allowed_origins == ["https://panel.example.test", "https://b.example.test"]
     assert cfg.quota.default_user_private_quota_bytes == 100
     assert cfg.quota.default_user_public_quota_bytes is None
     assert cfg.quota.default_org_private_quota_bytes == 200
@@ -235,6 +244,10 @@ def test_load_config_uses_defaults_when_file_is_missing(monkeypatch):
     assert cfg.admin.auth_alert_per_minute == 50
     assert cfg.admin.auth_trusted_proxy_hops == 0
     assert cfg.admin.auth_allowlist == []
+    # Admin sessions: on, 30 minutes idle and 12 hours at most, the cookie Secure by the public address, no extra origins.
+    assert cfg.admin.session_enabled is True
+    assert (cfg.admin.session_idle_minutes, cfg.admin.session_absolute_hours) == (30, 12)
+    assert cfg.admin.session_cookie_secure is None and cfg.admin.session_allowed_origins == []
     hub_config.load_config.cache_clear()
 
 
@@ -385,6 +398,10 @@ def test_commit_id_format_is_the_hubs_unless_the_site_says_otherwise(monkeypatch
         ("ADMIN_AUTH_TRUSTED_PROXY_HOPS", "99", "auth_trusted_proxy_hops", 0),
         ("ADMIN_MIN_TOKEN_LENGTH", "0", "min_token_length", 32),
         ("ADMIN_MIN_TOKEN_LENGTH", "many", "min_token_length", 32),
+        ("ADMIN_SESSION_IDLE_MINUTES", "0", "session_idle_minutes", 30),
+        ("ADMIN_SESSION_IDLE_MINUTES", "soon", "session_idle_minutes", 30),
+        ("ADMIN_SESSION_ABSOLUTE_HOURS", "-1", "session_absolute_hours", 12),
+        ("ADMIN_SESSION_ABSOLUTE_HOURS", "100000", "session_absolute_hours", 12),
     ],
 )
 def test_a_bad_admin_number_falls_back_to_its_default_and_says_so(monkeypatch, name, value, field, default):
@@ -413,6 +430,9 @@ def test_a_bad_admin_number_falls_back_to_its_default_and_says_so(monkeypatch, n
         ("ADMIN_ALLOW_WEAK_TOKEN", "TRUE", "allow_weak_token", True),
         ("ADMIN_ALLOW_WEAK_TOKEN", "1", "allow_weak_token", True),
         ("ADMIN_ALLOW_WEAK_TOKEN", "false", "allow_weak_token", False),
+        ("ADMIN_SESSION_ENABLED", "off", "session_enabled", False),
+        ("ADMIN_SESSION_COOKIE_SECURE", "yes", "session_cookie_secure", True),
+        ("ADMIN_SESSION_COOKIE_SECURE", "0", "session_cookie_secure", False),
     ],
 )
 def test_the_usual_spellings_of_a_yes_or_no_are_understood(monkeypatch, name, value, field, expected):

@@ -17,6 +17,7 @@ from typing import NamedTuple
 
 from fastapi import Header, HTTPException, Request
 
+from kohakuhub.auth import admin_session
 from kohakuhub.auth.admin_client import in_allowlist, resolve_client
 from kohakuhub.auth.admin_throttle import SharedAdminAuthThrottle, ThrottleParams
 from kohakuhub.config import cfg
@@ -39,8 +40,9 @@ _warned_shared_client = False
 
 
 class AdminTokenCheck(NamedTuple):
-    outcome: str  # disabled | weak | missing | blocked | invalid | ok
+    outcome: str  # disabled | weak | missing | blocked | invalid | session | csrf | ok
     retry_after: int = 0
+    detail: str = ""
 
 
 def token_is_weak() -> bool:
@@ -73,8 +75,9 @@ def _user_agent(request) -> str:
     return (lines[0] if lines else "-")[:80]
 
 
-def check_admin_token(request, token: str | None) -> AdminTokenCheck:
-    global _weak_reported, _warned_shared_client
+def _closed() -> AdminTokenCheck | None:
+    """The admin API is off, or its token is too weak to be trusted: nothing gets in, by token or by session."""
+    global _weak_reported
     admin = cfg.admin
     if not admin.enabled:
         return AdminTokenCheck("disabled")
@@ -87,6 +90,14 @@ def check_admin_token(request, token: str | None) -> AdminTokenCheck:
                 "(scripts/generate_secret.py makes one)."
             )
         return AdminTokenCheck("weak")
+    return None
+
+
+def check_admin_token(request, token: str | None) -> AdminTokenCheck:
+    global _warned_shared_client
+    admin = cfg.admin
+    if (closed := _closed()) is not None:
+        return closed
     if not token:
         return AdminTokenCheck("missing")
 
@@ -134,6 +145,23 @@ def _decide(request, token: str, identity, counting: bool) -> AdminTokenCheck:
     return AdminTokenCheck("invalid")
 
 
+def check_admin_session(request) -> AdminTokenCheck:
+    """The browser session of the admin panel, from the cookie alone. A cookie request that changes something is also
+    checked for the panel's header and an allowed origin. Sets ``request.state.admin_session`` when it is valid."""
+    if (closed := _closed()) is not None:
+        return closed
+    cookie = request.cookies.get(admin_session.COOKIE_NAME) if cfg.admin.session_enabled else None
+    if not cookie:
+        return AdminTokenCheck("missing")
+    if (problem := admin_session.csrf_problem(request)) is not None:
+        return AdminTokenCheck("csrf", detail=problem)
+    session = admin_session.authenticate(cookie)
+    if session is None:
+        return AdminTokenCheck("session")
+    request.state.admin_session = session
+    return AdminTokenCheck("ok")
+
+
 def raise_for(check: AdminTokenCheck) -> bool:
     """The HTTP answer of a check for the admin routes: True when the token is valid, else an HTTPException."""
     if check.outcome == "ok":
@@ -144,6 +172,10 @@ def raise_for(check: AdminTokenCheck) -> bool:
         raise HTTPException(503, detail={"error": "Admin API disabled: token too weak"})
     if check.outcome == "missing":
         raise HTTPException(401, detail={"error": "Admin token required in X-Admin-Token header"})
+    if check.outcome == "session":
+        raise HTTPException(401, detail={"error": "Admin session expired, revoked or unknown"})
+    if check.outcome == "csrf":
+        raise HTTPException(403, detail={"error": check.detail})
     if check.outcome == "blocked":
         raise HTTPException(
             429,
@@ -157,5 +189,7 @@ def raise_for(check: AdminTokenCheck) -> bool:
 
 
 async def verify_admin_token(request: Request, x_admin_token: str | None = Header(None)) -> bool:
-    """FastAPI dependency of the admin routes."""
-    return raise_for(check_admin_token(request, x_admin_token))
+    """FastAPI dependency of the admin routes: the token header decides when it is sent, else the session cookie."""
+    if x_admin_token:
+        return raise_for(check_admin_token(request, x_admin_token))
+    return raise_for(check_admin_session(request))
