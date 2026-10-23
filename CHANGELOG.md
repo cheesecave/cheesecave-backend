@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`GET /admin/api/auth/client` lists the forwarded addresses** (`forwarded_for`, left to right, every `X-Forwarded-For` line) and the socket `peer`, so the value of `ADMIN_AUTH_TRUSTED_PROXY_HOPS` can be read off one request instead of inferred ([#127](https://github.com/cheesecave/cheesecave-backend/issues/127)). Nothing else changes.
 - **One call for the admin Overview** ([cheesecave-admin#20](https://github.com/cheesecave/cheesecave-admin/issues/20)).
   `GET /admin/api/overview?sections=&range=24h|7d|30d` returns status (dependency probes, workers, queue), a prioritised
   "needs attention" list, counts with their change and trend over the range, activity per hour or day, recent events and the
