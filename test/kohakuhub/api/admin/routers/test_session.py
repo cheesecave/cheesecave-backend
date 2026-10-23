@@ -286,7 +286,14 @@ async def test_the_cookie_does_not_reach_the_routes_outside_the_admin_path(clien
     assert response.status_code == 401
 
 
-async def test_the_three_repository_actions_have_admin_scoped_routes_that_take_the_cookie(client, admin_client, owner_client, live):
+@pytest.fixture
+def squash_on(monkeypatch):
+    """SQLite disables squash by design (503 before any authentication); these tests are about who may call it."""
+    module = sys.modules["kohakuhub.api.operation_capabilities"]
+    monkeypatch.setattr(module, "get_repository_operation_capabilities", lambda: {"revert": True, "reset": True, "squash": True})
+
+
+async def test_the_three_repository_actions_have_admin_scoped_routes_that_take_the_cookie(client, admin_client, owner_client, live, squash_on):
     created = await owner_client.post(
         "/api/repos/create", json={"type": "dataset", "name": "by-the-panel", "organization": "acme-labs"}
     )
@@ -310,7 +317,7 @@ async def test_the_three_repository_actions_have_admin_scoped_routes_that_take_t
     assert missing.status_code in (404, 403)  # the same answer the header route gives for a repository that is not there
 
 
-async def test_the_repository_actions_refuse_a_cookie_request_without_the_panels_header(client, admin_client, live):
+async def test_the_repository_actions_refuse_a_cookie_request_without_the_panels_header(client, admin_client, live, squash_on):
     await sign_in(client, admin_client)
 
     assert (await client.post("/admin/api/repos/move", json={"fromRepo": "a/b", "toRepo": "a/c"})).status_code == 403
