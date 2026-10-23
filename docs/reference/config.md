@@ -98,6 +98,11 @@ In Compose, the shipped files read `CHEESE_CAVE_<NAME>` from `.env` first and `K
 | `CHEESE_CAVE_ADMIN_AUTH_ALERT_PER_MINUTE` | Log one warning a minute when more than this many wrong tokens arrive in that minute, from any clients. `0` turns it off. | `50` |
 | `CHEESE_CAVE_ADMIN_AUTH_TRUSTED_PROXY_HOPS` | How many proxies of yours stand in front of the API. `0` ignores `X-Forwarded-For`; `N` takes the N-th address from the right. | `0` |
 | `CHEESE_CAVE_ADMIN_AUTH_ALLOWLIST` | Comma-separated addresses or networks that are never counted or made to wait. | empty |
+| `CHEESE_CAVE_ADMIN_SESSION_ENABLED` | If `true`, the admin panel can exchange the token for a session cookie. If `false`, the session routes answer `404` and the panel keeps the token in memory as before. | `true` |
+| `CHEESE_CAVE_ADMIN_SESSION_IDLE_MINUTES` | A session ends after this long without use; each use moves that forward. | `30` |
+| `CHEESE_CAVE_ADMIN_SESSION_ABSOLUTE_HOURS` | A session ends at the latest this long after it was made, however busy it is. | `12` |
+| `CHEESE_CAVE_ADMIN_SESSION_COOKIE_SECURE` | Whether the session cookie is `Secure`. Unset: it is when `BASE_URL` is https. Set `false` only for plain-HTTP development. | unset |
+| `CHEESE_CAVE_ADMIN_SESSION_ALLOWED_ORIGINS` | Comma-separated origins, besides the public address (`BASE_URL`), that may make changes with the session cookie (the origin the admin panel is served from, when it is not the hub's). | empty |
 
 ### Wrong admin tokens
 

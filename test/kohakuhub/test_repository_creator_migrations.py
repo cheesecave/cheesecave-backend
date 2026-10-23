@@ -14,7 +14,7 @@ from types import SimpleNamespace
 import pytest
 from peewee import SqliteDatabase
 
-from kohakuhub.db import Repository, RepositoryCreator, User
+from kohakuhub.db import AdminSession, Repository, RepositoryCreator, User
 from test.kohakuhub.support.factories import make_commit, make_org, make_repo, make_user
 
 MIGRATION = Path(__file__).resolve().parents[2] / "scripts/db_migrations/040_repository_creator.py"
@@ -29,7 +29,8 @@ def migration(db_dual, monkeypatch):
     backend = "sqlite" if isinstance(db_dual, SqliteDatabase) else "postgres"
     monkeypatch.setattr(module, "db", db_dual)
     monkeypatch.setattr(module, "cfg", SimpleNamespace(app=SimpleNamespace(db_backend=backend)))
-    db_dual.drop_tables([RepositoryCreator], safe=True)  # the schema before 040
+    # the schema before 040: without it and without the table of 041, which would otherwise make 040 look superseded
+    db_dual.drop_tables([AdminSession, RepositoryCreator], safe=True)
     return module
 
 

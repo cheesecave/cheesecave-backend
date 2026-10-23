@@ -85,6 +85,14 @@ class AdminConfig(BaseModel):
     auth_trusted_proxy_hops: int = 0
     # Addresses or networks that are never counted or delayed.
     auth_allowlist: list[str] = []
+    # Browser sessions of the admin panel (the shared token exchanged once for an HttpOnly cookie).
+    session_enabled: bool = True
+    session_idle_minutes: int = 30
+    session_absolute_hours: int = 12
+    # None: the cookie is Secure exactly when the public address (BASE_URL) is https.
+    session_cookie_secure: bool | None = None
+    # Origins, besides the public address, that may make cookie-authenticated changes (the admin panel's own origin).
+    session_allowed_origins: list[str] = []
 
 
 class QuotaConfig(BaseModel):
@@ -486,6 +494,8 @@ def load_config(path: str = None) -> Config:
         ("auth_reset_seconds", "ADMIN_AUTH_RESET_SECONDS", 1, 604800),
         ("auth_alert_per_minute", "ADMIN_AUTH_ALERT_PER_MINUTE", 0, 1000000),
         ("auth_trusted_proxy_hops", "ADMIN_AUTH_TRUSTED_PROXY_HOPS", 0, 10),
+        ("session_idle_minutes", "ADMIN_SESSION_IDLE_MINUTES", 1, 10080),
+        ("session_absolute_hours", "ADMIN_SESSION_ABSOLUTE_HOURS", 1, 8760),
     ):
         value = _lenient_int(name, lowest, highest)
         if value is not None:
@@ -493,6 +503,8 @@ def load_config(path: str = None) -> Config:
     for field, name in (
         ("allow_weak_token", "ADMIN_ALLOW_WEAK_TOKEN"),
         ("auth_throttle_enabled", "ADMIN_AUTH_THROTTLE_ENABLED"),
+        ("session_enabled", "ADMIN_SESSION_ENABLED"),
+        ("session_cookie_secure", "ADMIN_SESSION_COOKIE_SECURE"),
     ):
         value = _lenient_bool(name)
         if value is not None:
@@ -501,6 +513,12 @@ def load_config(path: str = None) -> Config:
         admin_env["auth_allowlist"] = [
             entry.strip()
             for entry in read_env("ADMIN_AUTH_ALLOWLIST").split(",")
+            if entry.strip()
+        ]
+    if read_env("ADMIN_SESSION_ALLOWED_ORIGINS") is not None:
+        admin_env["session_allowed_origins"] = [
+            entry.strip()
+            for entry in read_env("ADMIN_SESSION_ALLOWED_ORIGINS").split(",")
             if entry.strip()
         ]
     if admin_env:

@@ -18,6 +18,7 @@ from kohakuhub import usage  # noqa: F401 - registers the usage recount tasks
 from kohakuhub import duplicate_sweep  # noqa: F401 - registers the sweep of failed duplicates
 from kohakuhub import path_commits
 from kohakuhub import session_cleanup  # noqa: F401 - registers the expired session cleanup
+from kohakuhub import admin_session_cleanup  # noqa: F401 - registers the expired admin session cleanup
 from kohakuhub.config import cfg
 from kohakuhub.db import BackgroundTask, BackgroundWorker, db
 from kohakuhub.lakefs_rest_client import close_lakefs_rest_client

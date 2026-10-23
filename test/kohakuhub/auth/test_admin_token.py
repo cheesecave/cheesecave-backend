@@ -22,7 +22,9 @@ class Headers:
 
 
 def request(peer="198.51.100.20", **forwarded):
-    return SimpleNamespace(client=SimpleNamespace(host=peer), headers=Headers(**forwarded), state=SimpleNamespace())
+    return SimpleNamespace(
+        client=SimpleNamespace(host=peer), headers=Headers(**forwarded), state=SimpleNamespace(), cookies={}, method="GET"
+    )
 
 
 NOW = {"t": 5000.0}

@@ -408,3 +408,14 @@ Rollback facts and the command are in
 - **A table of its own on purpose**, as for 035, 037, 038 and 039: an older release does not know it and ignores it, so rolling
   back is leaving it. The fill adds rows only for repositories that have none, so it can run again, or after `init_db()` built
   the empty table, without harm. `CREATE TABLE IF NOT EXISTS`; two containers starting together take turns on an advisory lock.
+
+## Admin sessions: 041
+
+- **041** (`041_admin_session.py`) creates `admin_session`: one row per browser session of the admin panel (`token_hash`, the hash of
+  the session id and never the id; `secret_fingerprint`, a keyed hash of the shared admin token the session was made with, so
+  changing that token ends every session; `created_at`, `last_used_at`, `expires_at` (idle end), `absolute_expires_at`; `ip`,
+  `user_agent`, `revoked_at`). `principal_type` and `user_id` are for the phase that adds admin accounts.
+- **A table of its own on purpose**, as for 035, 037, 038, 039 and 040: an older release does not know it and ignores it, so rolling
+  back is leaving it. Nothing is backfilled. `CREATE TABLE IF NOT EXISTS` and two indexes; two containers starting together take turns
+  on an advisory lock. A migration test of an earlier number must drop this table with its own (see the fixture of 040), or the
+  earlier migration looks superseded.

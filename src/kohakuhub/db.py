@@ -206,6 +206,33 @@ class UserPreference(BaseModel):
         table_name = "user_preference"
 
 
+class AdminSession(BaseModel):
+    """A browser session of the admin panel: the shared admin token exchanged once for an HttpOnly cookie.
+
+    A table of its own so a release from before it keeps running on the same database. Only the hash of the session id
+    is kept (the id is the secret the browser holds). ``secret_fingerprint`` is a keyed hash of the shared token the
+    session was made with: when that token is changed no old session matches it. ``principal_type`` and ``user`` are
+    for the phase that adds admin accounts; a session of the shared token has no user.
+    """
+
+    id = AutoField()
+    token_hash = CharField(max_length=64, unique=True)
+    principal_type = CharField(max_length=16, default="token")
+    user = ForeignKeyField(User, null=True, on_delete="CASCADE", index=False)
+    secret_fingerprint = CharField(max_length=64, null=True)
+    created_at = DateTimeField(default=partial(datetime.now, tz=timezone.utc))
+    last_used_at = DateTimeField(default=partial(datetime.now, tz=timezone.utc))
+    expires_at = DateTimeField()  # the idle end, moved forward by use
+    absolute_expires_at = DateTimeField()
+    ip = CharField(max_length=64, null=True)
+    user_agent = CharField(max_length=200, null=True)
+    revoked_at = DateTimeField(null=True)
+
+    class Meta:
+        table_name = "admin_session"
+        indexes = ((("expires_at",), False),)
+
+
 class UserFollow(BaseModel):
     """Following is an interest signal, never a repository permission."""
 
@@ -1017,6 +1044,7 @@ def init_db():
             User,
             UserPreference,
             PasswordResetToken,
+            AdminSession,
             UserFollow,
             EmailVerification,
             Session,
