@@ -1,0 +1,239 @@
+diff -ruN imp-base/src/components/repo/RepoViewer.vue imp-new/src/components/repo/RepoViewer.vue
+--- a/src/components/repo/RepoViewer.vue	2026-10-23 14:38:52.618745977 +0800
++++ b/src/components/repo/RepoViewer.vue	2026-10-23 14:41:55.621457005 +0800
+@@ -119,6 +119,21 @@
+                 <div class="i-carbon-launch inline-block mr-1" />
+                 View on {{ repoInfo._source }}
+               </el-button>
++              <el-button
++                v-if="isExternalRepo"
++                size="small"
++                type="success"
++                data-testid="import-to-local"
++                @click="
++                  router.push({
++                    path: '/import',
++                    query: { type: repoType, repo: `${namespace}/${name}`, preview: 1 },
++                  })
++                "
++              >
++                <div class="i-carbon-cloud-download inline-block mr-1" />
++                Import to local
++              </el-button>
+             </div>
+           </div>
+ 
+diff -ruN imp-base/src/pages/import.vue imp-new/src/pages/import.vue
+--- a/src/pages/import.vue	1970-01-01 08:00:00.000000000 +0800
++++ b/src/pages/import.vue	2026-10-23 14:41:55.622456998 +0800
+@@ -0,0 +1,197 @@
++<!-- MOCKUP of the repository import flow (issue #17). The API it calls does not exist yet: the screenshots serve fake answers. -->
++<template>
++  <div class="container-main" data-testid="import-page">
++    <div class="max-w-4xl mx-auto space-y-4">
++      <div>
++        <h1 class="text-2xl md:text-3xl font-bold mb-1">Import a repository</h1>
++        <p class="text-sm text-gray-600 dark:text-gray-400">
++          Copy a repository from Hugging Face or another Hugging Face-compatible hub. A transfer runner moves the files straight into storage;
++          this site does not carry them.
++        </p>
++      </div>
++
++      <!-- ======================================================== progress -->
++      <template v-if="job">
++        <div class="card p-4 space-y-3" data-testid="progress">
++          <div class="flex flex-wrap items-center gap-2">
++            <h2 class="text-lg font-semibold">{{ job.target }}</h2>
++            <el-tag :type="tagType" data-testid="status">{{ job.status }}</el-tag>
++            <span class="text-sm text-gray-500">from {{ job.source }} · {{ job.source_repo }} @ <code>{{ job.source_sha.slice(0, 8) }}</code></span>
++            <span class="flex-1" />
++            <el-button v-if="job.status === 'running' || job.status === 'queued'" size="small" data-testid="cancel">Cancel</el-button>
++            <el-button v-if="job.status === 'succeeded'" size="small" type="primary" data-testid="open">Open repository</el-button>
++            <el-button v-if="job.status === 'failed'" size="small" type="primary" data-testid="retry">Retry</el-button>
++          </div>
++
++          <el-steps :active="stageIndex" :finish-status="job.status === 'failed' ? 'error' : 'success'" align-center data-testid="steps">
++            <el-step v-for="s in STAGES" :key="s" :title="s" />
++          </el-steps>
++
++          <el-alert v-if="job.error" type="error" show-icon :closable="false" data-testid="job-error"
++            :title="job.error.code" :description="job.error.message" />
++          <el-alert v-if="job.notice" type="warning" show-icon :closable="false" data-testid="job-notice" :title="job.notice" />
++
++          <div>
++            <div class="flex justify-between text-sm mb-1">
++              <span data-testid="bytes">{{ fmt(job.bytes_done) }} of {{ fmt(job.bytes_total) }} · {{ job.files_done }} of {{ job.files_total }} files</span>
++              <span class="text-gray-500" data-testid="rate">{{ job.rate ? `${job.rate} MB/s · about ${job.eta}` : "" }}</span>
++            </div>
++            <el-progress :percentage="pct" :status="job.status === 'succeeded' ? 'success' : job.status === 'failed' ? 'exception' : ''" :stroke-width="14" />
++          </div>
++
++          <div class="grid sm:grid-cols-3 gap-3 text-sm">
++            <div class="border border-gray-200 dark:border-gray-700 rounded-lg p-3"><div class="text-gray-500 text-xs">Transfer runner</div><b data-testid="runner">{{ job.runner || "waiting for a runner" }}</b><div class="text-xs text-gray-500">bytes never touch this site</div></div>
++            <div class="border border-gray-200 dark:border-gray-700 rounded-lg p-3"><div class="text-gray-500 text-xs">Already stored (skipped)</div><b>{{ job.skipped_files }} files · {{ fmt(job.skipped_bytes) }}</b></div>
++            <div class="border border-gray-200 dark:border-gray-700 rounded-lg p-3"><div class="text-gray-500 text-xs">Integrity</div><b data-testid="integrity">{{ job.verified }} of {{ job.files_total }} sha256 verified</b></div>
++          </div>
++
++          <table class="w-full text-sm" data-testid="files">
++            <thead class="bg-gray-50 dark:bg-gray-800 text-left"><tr><th class="px-3 py-1.5">File</th><th class="px-3 py-1.5 w-28">Size</th><th class="px-3 py-1.5 w-56">State</th></tr></thead>
++            <tbody>
++              <tr v-for="f in job.files" :key="f.path" class="border-t border-gray-100 dark:border-gray-800">
++                <td class="px-3 py-1.5 font-mono text-xs">{{ f.path }}</td>
++                <td class="px-3 py-1.5">{{ fmt(f.size) }}</td>
++                <td class="px-3 py-1.5">
++                  <el-progress v-if="f.state === 'transferring'" :percentage="Math.round((f.done / f.size) * 100)" :stroke-width="8" />
++                  <el-tag v-else size="small" :type="f.state === 'done' ? 'success' : f.state === 'skipped' ? 'info' : f.state === 'failed' ? 'danger' : ''">{{ f.state === "skipped" ? "already stored" : f.state }}</el-tag>
++                </td>
++              </tr>
++            </tbody>
++          </table>
++
++          <div v-if="job.report" class="border border-green-300 rounded-lg p-3 text-sm" data-testid="report">
++            <b>Import report.</b> {{ job.report }}
++          </div>
++          <details><summary class="cursor-pointer text-sm font-semibold">Log</summary>
++            <pre class="text-xs bg-gray-50 dark:bg-gray-800 rounded p-2 overflow-x-auto" data-testid="log">{{ job.log.join("\n") }}</pre></details>
++        </div>
++      </template>
++
++      <!-- ======================================================== form + preview -->
++      <template v-else>
++        <div class="card p-4 space-y-4" data-testid="form">
++          <div class="grid sm:grid-cols-[1fr_140px_1.5fr_120px] gap-3">
++            <label class="text-sm">Source
++              <el-select v-model="form.source" data-testid="source" class="w-full"><el-option v-for="s in sources" :key="s" :label="s" :value="s" /></el-select></label>
++            <label class="text-sm">Type
++              <el-select v-model="form.type" class="w-full"><el-option v-for="t in ['model','dataset','space']" :key="t" :value="t" :label="t" /></el-select></label>
++            <label class="text-sm">Repository on the source
++              <el-input v-model="form.repo" data-testid="repo" placeholder="owner/name" /></label>
++            <label class="text-sm">Revision
++              <el-input v-model="form.revision" placeholder="main" /></label>
++          </div>
++          <div class="grid sm:grid-cols-[1fr_1fr_120px] gap-3">
++            <label class="text-sm">Into namespace<el-select v-model="form.ns" class="w-full"><el-option v-for="n in ['narugo1992','deepghs']" :key="n" :value="n" :label="n" /></el-select></label>
++            <label class="text-sm">As<el-input v-model="form.name" placeholder="same name" /></label>
++            <label class="text-sm">Visibility<el-select v-model="form.visibility" class="w-full"><el-option value="private" label="private" /><el-option value="public" label="public" /></el-select></label>
++          </div>
++          <div>
++            <div class="text-sm mb-1">Files to copy <span class="text-gray-500">(like <code>allow_patterns</code> / <code>ignore_patterns</code> of <code>snapshot_download</code>)</span></div>
++            <div class="grid sm:grid-cols-2 gap-3">
++              <el-input v-model="form.allow" type="textarea" :rows="2" placeholder="allow: *.json, *.safetensors" data-testid="allow" />
++              <el-input v-model="form.ignore" type="textarea" :rows="2" placeholder="ignore: *.onnx, *.tflite, *.h5" data-testid="ignore" />
++            </div>
++            <div class="flex flex-wrap gap-2 mt-2 text-xs">
++              <el-tag v-for="p in PRESETS" :key="p.label" class="cursor-pointer" effect="plain" @click="Object.assign(form, p.set)">{{ p.label }}</el-tag>
++            </div>
++          </div>
++          <div class="flex items-center gap-3">
++            <el-button type="primary" data-testid="preview-btn" :loading="busy" @click="previewNow">Preview</el-button>
++            <span class="text-xs text-gray-500">Nothing is copied until you press Start. The preview only lists the source.</span>
++          </div>
++        </div>
++
++        <el-alert v-if="error" :title="error" type="error" show-icon :closable="false" data-testid="form-error" />
++
++        <div v-if="preview" class="card p-4 space-y-3" data-testid="preview">
++          <div class="flex flex-wrap items-center gap-2">
++            <h2 class="text-lg font-semibold">Preview</h2>
++            <el-tag type="info">source commit <code>{{ preview.source_sha.slice(0, 8) }}</code></el-tag>
++            <el-tag v-for="w in preview.warnings" :key="w" type="warning">{{ w }}</el-tag>
++          </div>
++          <div class="grid sm:grid-cols-4 gap-3 text-sm">
++            <div class="border border-gray-200 dark:border-gray-700 rounded-lg p-3"><div class="text-xs text-gray-500">Files</div><b class="text-xl" data-testid="t-files">{{ preview.totals.files }}</b></div>
++            <div class="border border-gray-200 dark:border-gray-700 rounded-lg p-3"><div class="text-xs text-gray-500">Selected size</div><b class="text-xl">{{ fmt(preview.totals.bytes) }}</b></div>
++            <div class="border border-gray-200 dark:border-gray-700 rounded-lg p-3"><div class="text-xs text-gray-500">Already stored here</div><b class="text-xl text-green-700" data-testid="t-saved">{{ fmt(preview.totals.deduped_bytes) }}</b></div>
++            <div class="border border-amber-300 rounded-lg p-3"><div class="text-xs text-gray-500">New bytes (counts against quota)</div><b class="text-xl" data-testid="t-new">{{ fmt(preview.totals.new_bytes) }}</b></div>
++          </div>
++          <div>
++            <div class="flex justify-between text-xs mb-1"><span>Quota of {{ form.ns }}</span><span data-testid="quota">{{ fmt(preview.quota.used) }} used + {{ fmt(preview.totals.new_bytes) }} new of {{ fmt(preview.quota.limit) }}</span></div>
++            <el-progress :percentage="Math.min(100, Math.round(((preview.quota.used + preview.totals.new_bytes) / preview.quota.limit) * 100))" :status="over ? 'exception' : ''" :stroke-width="12" />
++          </div>
++          <el-alert v-if="over" type="error" show-icon :closable="false" data-testid="over-quota"
++            title="This import would exceed the quota" description="Narrow the file filter, or ask an administrator to raise the quota. Nothing was copied." />
++          <table class="w-full text-sm" data-testid="preview-files">
++            <thead class="bg-gray-50 dark:bg-gray-800 text-left"><tr><th class="px-3 py-1.5">File</th><th class="px-3 py-1.5 w-28">Size</th><th class="px-3 py-1.5 w-24">Kind</th><th class="px-3 py-1.5 w-44">Will be</th></tr></thead>
++            <tbody>
++              <tr v-for="f in preview.files" :key="f.path" class="border-t border-gray-100 dark:border-gray-800">
++                <td class="px-3 py-1.5 font-mono text-xs">{{ f.path }}</td><td class="px-3 py-1.5">{{ fmt(f.size) }}</td>
++                <td class="px-3 py-1.5">{{ f.lfs ? "LFS" : "regular" }}</td>
++                <td class="px-3 py-1.5"><el-tag size="small" :type="f.present ? 'info' : 'success'">{{ f.present ? "skipped (already stored)" : "transferred" }}</el-tag></td>
++              </tr>
++            </tbody>
++          </table>
++          <div class="text-xs text-gray-500">… and {{ preview.totals.files - preview.files.length }} more files</div>
++          <div class="flex items-center gap-3">
++            <el-button type="primary" :disabled="over" data-testid="start-btn">Start import</el-button>
++            <span class="text-xs text-gray-500">Runs in the background; you can close this page. The repository appears when everything is verified, in one commit that records where it came from.</span>
++          </div>
++        </div>
++      </template>
++    </div>
++  </div>
++</template>
++
++<script setup>
++import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
++import { useRoute } from "vue-router";
++import api from "@/utils/api";
++
++const route = useRoute();
++const STAGES = ["Queued", "Listing", "Transferring", "Verifying", "Committing", "Done"];
++const PRESETS = [
++  { label: "weights as safetensors only", set: { allow: "*.json, *.txt, *.safetensors", ignore: "" } },
++  { label: "skip onnx / tflite / h5", set: { allow: "", ignore: "*.onnx, *.tflite, *.h5, *.msgpack, *.ot" } },
++  { label: "docs and config only", set: { allow: "*.md, *.json, *.txt", ignore: "" } },
++];
++const sources = ["HuggingFace", "ModelScope mirror (HF-compatible)", "Internal Artifactory"];
++const form = reactive({ source: "HuggingFace", type: route.query.type || "model", repo: route.query.repo || "", revision: "main", ns: "narugo1992", name: "", visibility: "private", allow: "", ignore: "" });
++const preview = ref(null);
++const error = ref("");
++const busy = ref(false);
++const job = ref(null);
++let timer = null;
++
++const over = computed(() => preview.value && preview.value.quota.used + preview.value.totals.new_bytes > preview.value.quota.limit);
++const pct = computed(() => (job.value && job.value.bytes_total ? Math.round((job.value.bytes_done / job.value.bytes_total) * 100) : 0));
++const tagType = computed(() => ({ succeeded: "success", failed: "danger", running: "warning", queued: "info" }[job.value?.status] || "info"));
++const stageIndex = computed(() => (job.value?.status === "succeeded" ? STAGES.length : STAGES.indexOf(job.value?.stage)));
++const fmt = (n) => (n < 1e6 ? `${(n / 1e3).toFixed(0)} kB` : n < 1e9 ? `${(n / 1e6).toFixed(1)} MB` : `${(n / 1e9).toFixed(2)} GB`);
++
++async function previewNow() {
++  busy.value = true;
++  error.value = "";
++  try {
++    preview.value = (await api.post("/api/repos/import/preview", { ...form })).data;
++  } catch (e) {
++    preview.value = null;
++    error.value = e.response?.data?.detail?.error || e.message;
++  } finally {
++    busy.value = false;
++  }
++}
++
++async function poll() {
++  job.value = (await api.get(`/api/repos/import/${route.query.id}`)).data;
++  if (["succeeded", "failed", "cancelled"].includes(job.value.status)) clearInterval(timer);
++}
++onMounted(async () => {
++  if (route.query.id) {
++    await poll();
++    timer = setInterval(poll, 2000);
++  } else if (route.query.repo && route.query.preview) {
++    await previewNow();
++  }
++});
++onBeforeUnmount(() => clearInterval(timer));
++</script>
+diff -ruN imp-base/src/pages/new.vue imp-new/src/pages/new.vue
+--- a/src/pages/new.vue	2026-10-23 14:38:52.619745970 +0800
++++ b/src/pages/new.vue	2026-10-23 14:41:55.622456998 +0800
+@@ -7,6 +7,9 @@
+         class="text-sm md:text-base text-gray-600 dark:text-gray-400 mb-6 md:mb-8"
+       >
+         A repository contains all project files, including revision history.
++        <router-link to="/import" class="text-blue-600 dark:text-blue-400" data-testid="import-link">
++          Already have it on Hugging Face or another hub? Import it instead →
++        </router-link>
+       </p>
+ 
+       <div class="card">
