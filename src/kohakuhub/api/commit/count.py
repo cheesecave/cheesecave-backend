@@ -1,19 +1,22 @@
 """Count the reachable history of an immutable LakeFS commit."""
 
-from collections import OrderedDict
+import json
 
-COMMIT_COUNTS_KEPT = 512
-_counts: OrderedDict[tuple[str, str], int] = OrderedDict()
+from kohakuhub.cache import cache_get_or_fetch
 
 
 async def count_commit_history(client, lakefs_repo: str, head: str) -> int:
     """Only complete walks are cached; branch movement cannot alter a walk."""
     if not isinstance(head, str) or not head:
         raise RuntimeError("LakeFS returned no immutable commit head")
-    key = (lakefs_repo, head)
-    if key in _counts:
-        _counts.move_to_end(key)
-        return _counts[key]
+    key = "commit-count:" + json.dumps([lakefs_repo, head], separators=(",", ":"))
+    return await cache_get_or_fetch(
+        key, lambda: _walk_history(client, lakefs_repo, head), immutable=True, ttl=3600
+    )
+
+
+async def _walk_history(client, lakefs_repo: str, head: str) -> int:
+    """Return a total only after LakeFS has answered every history page."""
     count, after = 0, None
     cursors = set()
     while True:
@@ -30,9 +33,6 @@ async def count_commit_history(client, lakefs_repo: str, head: str) -> int:
             raise RuntimeError("LakeFS returned invalid commit pagination")
         count += len(commits)
         if not pagination["has_more"]:
-            _counts[key] = count
-            if len(_counts) > COMMIT_COUNTS_KEPT:
-                _counts.popitem(last=False)
             return count
         after = pagination["next_offset"]
         if not isinstance(after, str) or not after or after in cursors:

@@ -1,9 +1,9 @@
 """Repository tree listing and path information endpoints."""
 
 import asyncio
+import json
 import re
 import weakref
-from collections import OrderedDict
 from datetime import datetime, timezone
 from typing import Literal
 from urllib.parse import urlencode
@@ -16,6 +16,7 @@ from kohakuhub.api.commit.records import branch_identities, read_branch, revisio
 from kohakuhub.config import cfg
 from kohakuhub.auth.dependencies import get_optional_user
 from kohakuhub.auth.permissions import check_repo_read_permission
+from kohakuhub.cache import cache_get_or_fetch
 from kohakuhub.constants import DATETIME_FORMAT_ISO
 from kohakuhub.db import File, Repository, User
 from kohakuhub.db_operations import get_repository, should_use_lfs
@@ -67,12 +68,15 @@ _lookup_slots: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Sem
 
 # A file's last commit as of a commit, which never changes, per (LakeFS
 # repository, commit, path): every visitor of a directory would otherwise
-# cost LakeFS the same lookups (#101). ponytail: per process, by entry count.
-LAST_COMMIT_CACHE_ENTRIES = 100_000
-_last_commits: "OrderedDict[tuple[str, str, str], dict | None]" = OrderedDict()
+# cost LakeFS the same lookups (#101). Values use the shared bounded cache;
+# these tasks only coordinate active requests and shield them from cancellation.
 _looking_up: dict[tuple[str, str, str], asyncio.Task] = {}
 _COMMIT_ID = re.compile(r"^[0-9a-f]{64}$")
 NAME_PREFIX_MAX_LENGTH = 256
+
+
+class _LastCommitUnavailable(Exception):
+    """LakeFS failed to answer; this is not a cacheable empty history."""
 
 
 def _slots() -> asyncio.Semaphore:
@@ -329,24 +333,29 @@ async def resolve_last_commits_for_paths(
                 repository=lakefs_repo, ref=revision, amount=1, limit=True, objects=[path]
             )
 
-    async def look_up(path: str) -> tuple[dict | None, bool]:
-        """The last commit, and whether LakeFS answered (else it is not kept)."""
+    async def fetch_commit(path: str) -> dict | None:
         try:
-            page = await asyncio.wait_for(ask(path), LAST_COMMIT_LOOKUP_TIMEOUT)
-        except Exception as error:  # an error, or no answer in time
-            logger.debug(f"log_commits for {path!r} on {lakefs_repo}@{revision}: {error!r}")
-            return None, False
-
+            page = await ask(path)
+        except Exception as error:
+            raise _LastCommitUnavailable(str(error)) from error
         results = page.get("results") or []
-        return (_serialize_last_commit(results[0]) if results else None), True
+        return _serialize_last_commit(results[0]) if results else None
 
-    async def look_up_and_keep(key, path) -> tuple[dict | None, bool]:
-        commit, answered = await look_up(path)
-        if answered:
-            _last_commits[key] = commit
-            while len(_last_commits) > LAST_COMMIT_CACHE_ENTRIES:
-                _last_commits.popitem(last=False)
-        return commit, answered
+    async def look_up(path: str, key: str | None = None) -> dict | None:
+        """Cache successful immutable answers, including verified empty history."""
+        try:
+            lookup = (
+                cache_get_or_fetch(
+                    key, lambda: fetch_commit(path), immutable=True, ttl=3600
+                )
+                if key is not None else fetch_commit(path)
+            )
+            # Cache coordination and waiting for a LakeFS slot share the same
+            # deadline as the upstream lookup; an outage cannot extend it.
+            return await asyncio.wait_for(lookup, LAST_COMMIT_LOOKUP_TIMEOUT)
+        except (asyncio.TimeoutError, _LastCommitUnavailable) as error:
+            logger.debug(f"log_commits for {path!r} on {lakefs_repo}@{revision}: {error!r}")
+            return None
 
     async def fetch_one(target: dict[str, str]) -> tuple[str, dict | None]:
         path = target.get("path")
@@ -355,19 +364,17 @@ async def resolve_last_commits_for_paths(
         if target.get("type") == "directory":
             return path, None
         if not keep:
-            return path, (await look_up(path))[0]
+            return path, await look_up(path)
         key = (lakefs_repo, revision, path)
-        if key in _last_commits:
-            _last_commits.move_to_end(key)
-            return path, _last_commits[key]
         # Concurrent requests for the same path share one lookup
         task = _looking_up.get(key)
         if task is None or task.get_loop() is not asyncio.get_running_loop():
-            task = _looking_up[key] = asyncio.ensure_future(look_up_and_keep(key, path))
+            cache_key = "last-commit:" + json.dumps(key, separators=(",", ":"))
+            task = _looking_up[key] = asyncio.ensure_future(look_up(path, cache_key))
             task.add_done_callback(
                 lambda t: _looking_up.pop(key, None) if _looking_up.get(key) is t else None
             )
-        return path, (await asyncio.shield(task))[0]
+        return path, await asyncio.shield(task)
 
     pairs = await asyncio.gather(*(fetch_one(target) for target in targets))
     return {path: commit for path, commit in pairs if path}

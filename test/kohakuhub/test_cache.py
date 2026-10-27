@@ -162,6 +162,118 @@ async def raw_client(valkey_url):
 # ---------------------------------------------------------------------------
 
 
+class TestMemoryFallback:
+    @pytest.fixture(autouse=True)
+    async def cache_setup(self, monkeypatch):
+        await close_cache()
+        monkeypatch.setattr(cfg.cache, "enabled", False)
+        monkeypatch.setattr(cfg.cache, "local_enabled", True)
+        monkeypatch.setattr(cfg.cache, "jitter_fraction", 0)
+        monkeypatch.setattr(cfg.cache, "local_max_entries", 4)
+        monkeypatch.setattr(cfg.cache, "local_max_bytes", 4096)
+        reset_metrics()
+        yield
+        await close_cache()
+
+    async def test_immutable_only_and_value_isolation(self):
+        assert not await cache_set_json("sess:1", {"role": "admin"})
+        value = {"items": [1]}
+        assert await cache_set_json("commit:1", value, immutable=True)
+        value["items"].append(2)
+        hit, cached = await cache_get_json("commit:1", immutable=True)
+        assert hit and cached == {"items": [1]}
+        cached["items"].append(3)
+        assert await cache_get_json("commit:1", immutable=True) == (True, {"items": [1]})
+        assert await cache_get_json("commit:1") == (False, None)
+        assert await read_gen("repo:gen:1") == 0
+        assert await bump_gen("repo:gen:1") == 0
+
+    async def test_negative_and_invalidation(self):
+        assert await cache_set_negative("commit:absent", immutable=True)
+        assert await cache_get_json("commit:absent", immutable=True) == (True, None)
+        assert await cache_invalidate("commit:absent") == 1
+        for key in ("literal[*]:1", "literal*:2", "other:3"):
+            await cache_set_json(key, 1, immutable=True)
+        assert await cache_invalidate_prefix("literal[*]:") == 1
+        assert await cache_get_json("literal*:2", immutable=True) == (True, 1)
+
+    async def test_internal_recheck_does_not_inflate_read_metrics(self):
+        async def fetch():
+            return 7
+        assert await cache_get_or_fetch("commit:metrics", fetch, immutable=True) == 7
+        assert await cache_get_or_fetch("commit:metrics", fetch, immutable=True) == 7
+        local = cache_mod.get_runtime_snapshot()["local"]
+        assert (local["hits"], local["misses"]) == (1, 1)
+        metrics = get_metrics_snapshot()
+        assert (metrics["hits"]["commit"], metrics["misses"]["commit"]) == (1, 1)
+
+    async def test_singleflight_and_failure_do_not_poison(self):
+        calls = []
+        async def fetch():
+            calls.append(1)
+            await asyncio.sleep(.01)
+            return {"ok": True}
+        results = await asyncio.gather(*(cache_get_or_fetch("commit:1", fetch, immutable=True) for _ in range(10)))
+        assert results == [{"ok": True}] * 10 and len(calls) == 1
+        metrics = get_metrics_snapshot()
+        assert sum(metrics["hits"].values()) + sum(metrics["misses"].values()) == 10
+        async def fail():
+            raise ValueError("source failed")
+        with pytest.raises(ValueError):
+            await cache_get_or_fetch("commit:bad", fail, immutable=True)
+        assert await cache_get_json("commit:bad", immutable=True) == (False, None)
+        assert cache_mod.get_runtime_snapshot()["backend"]["mode"] == "memory"
+
+    async def test_disabled_fallback_and_bounds(self, monkeypatch):
+        for i in range(30):
+            await cache_set_json(f"commit:{i}", i, immutable=True)
+        local = cache_mod.get_runtime_snapshot()["local"]
+        assert local["entries"] == 4 and local["evictions"] == 26
+        assert local["used_bytes"] <= 4096
+        monkeypatch.setattr(cfg.cache, "local_enabled", False)
+        assert not await cache_set_json("commit:new", 1, immutable=True)
+        assert await cache_get_json("commit:29", immutable=True) == (False, None)
+        assert cache_mod.get_runtime_snapshot()["backend"]["mode"] == "disabled"
+
+    async def test_background_expiry_and_close(self, monkeypatch):
+        monkeypatch.setattr(cfg.cache, "local_cleanup_interval_seconds", .01)
+        await init_cache()
+        memory = cache_mod._memory_cache()
+        memory.set("commit:short", "1", .01)
+        await asyncio.sleep(.06)
+        # Inspect retained data without a read/snapshot triggering lazy cleanup.
+        assert len(memory._entries) == 0
+        task = cache_mod._maintenance_task
+        await close_cache()
+        assert task.done() and cache_mod._maintenance_task is None
+
+    async def test_redis_failure_skips_lock_wait_and_retries_after_cooldown(self, monkeypatch):
+        from unittest.mock import AsyncMock
+        client = AsyncMock()
+        client.get.return_value = None
+        client.set.side_effect = ConnectionError("redis://user:secret@private.example")
+        monkeypatch.setattr(cfg.cache, "enabled", True)
+        monkeypatch.setattr(cache_mod, "_client", client)
+        monkeypatch.setattr(cache_mod, "_redis_available", True)
+        async def fetch():
+            return 7
+        result = await asyncio.wait_for(cache_get_or_fetch("commit:1", fetch, immutable=True), .5)
+        assert result == 7
+        assert await cache_get_json("commit:1", immutable=True) == (True, 7)
+        client.ping.assert_not_awaited()
+        state = cache_mod.get_runtime_snapshot()["backend"]
+        assert state["mode"] == "memory" and "secret" not in state["reason"]
+        monkeypatch.setattr(cache_mod, "_next_redis_retry", 0)
+        client.set.side_effect = None
+        client.info.return_value = {"run_id": "new"}
+        client.scan.return_value = (0, [])
+        client.get.return_value = None
+        await cache_get_json("commit:2", immutable=True)
+        assert cache_mod.get_runtime_snapshot()["backend"]["mode"] == "redis"
+        client.ping.assert_awaited_once()
+        assert cache_mod.get_runtime_snapshot()["local"]["entries"] == 0
+
+
 async def test_init_cache_is_idempotent():
     """Calling init_cache twice must not produce a second pool."""
     await init_cache()
@@ -1061,7 +1173,8 @@ async def test_get_memory_info_swallows_info_error(mock_client):
     mock_client.info.side_effect = RuntimeError("INFO failed")
     info = await get_memory_info()
     assert info["available"] is False
-    assert "INFO failed" in info["reason"]
+    # Operational status must not echo a Redis URL/password from an exception.
+    assert info["reason"] == "memory_probe_failed"
 
 
 async def test_get_memory_info_handles_non_dict_response(mock_client):
@@ -1126,27 +1239,17 @@ SINGLEFLIGHT_POLL_INTERVAL_FOR_TEST = 0.07
 
 
 async def test_get_or_fetch_cross_lock_release_swallows_error(monkeypatch):
-    """When the singleflight cross-lock release ``DELETE`` fails
+    """When the singleflight cross-lock ownership check/release fails
     (network blip), the helper still returns the freshly fetched value
     instead of propagating.
     """
-    # Use a partially-real client: real for everything except DELETE
-    # of the singleflight lock key.
+    # Real Redis reads/writes; fail the Lua operation that releases the lock.
     real_client = cache_mod._get_client()
     if real_client is None:
         pytest.skip("requires live cache for this scenario")
 
-    original_delete = real_client.delete
-
-    async def _delete_with_failure(*keys):
-        # Fail only when the call targets a sf:lock key — leave normal
-        # invalidations alone so the surrounding test infrastructure
-        # works.
-        if any("sf:lock" in str(k) for k in keys):
-            raise RuntimeError("simulated delete failure on lock release")
-        return await original_delete(*keys)
-
-    monkeypatch.setattr(real_client, "delete", _delete_with_failure)
+    release = AsyncMock(side_effect=RuntimeError("simulated lock release failure"))
+    monkeypatch.setattr(real_client, "eval", release)
 
     async def fetch():
         return {"v": "ok"}
@@ -1156,6 +1259,8 @@ async def test_get_or_fetch_cross_lock_release_swallows_error(monkeypatch):
         "lakefs:commit:lock-release-test", fetch, ttl=60
     )
     assert v == {"v": "ok"}
+    release.assert_awaited_once()
+    assert cache_mod.get_runtime_snapshot()["backend"]["reason"] == "lock_release_failed"
 
 
 async def test_get_or_fetch_cross_lock_release_swallows_error_on_fetch_failure(
@@ -1169,14 +1274,8 @@ async def test_get_or_fetch_cross_lock_release_swallows_error_on_fetch_failure(
     if real_client is None:
         pytest.skip("requires live cache for this scenario")
 
-    original_delete = real_client.delete
-
-    async def _delete_with_failure(*keys):
-        if any("sf:lock" in str(k) for k in keys):
-            raise RuntimeError("simulated delete failure on lock release")
-        return await original_delete(*keys)
-
-    monkeypatch.setattr(real_client, "delete", _delete_with_failure)
+    release = AsyncMock(side_effect=RuntimeError("simulated lock release failure"))
+    monkeypatch.setattr(real_client, "eval", release)
 
     async def fetch_boom():
         raise RuntimeError("source unavailable")
@@ -1185,6 +1284,8 @@ async def test_get_or_fetch_cross_lock_release_swallows_error_on_fetch_failure(
         await cache_get_or_fetch(
             "lakefs:commit:lock-release-test-2", fetch_boom, ttl=60
         )
+    release.assert_awaited_once()
+    assert cache_mod.get_runtime_snapshot()["backend"]["reason"] == "lock_release_failed"
 
 
 def test_mode_b_prefixes_sane_shape():
@@ -1202,3 +1303,314 @@ def test_mode_b_prefixes_sane_shape():
     assert "lakefs:commit:" not in MODE_B_PREFIXES
     assert "lakefs:stat:" not in MODE_B_PREFIXES
     assert "lakefs:list:" not in MODE_B_PREFIXES
+
+
+class TestBoundedMemoryCache:
+    """Pure fallback tests run even when no Redis/Valkey is installed."""
+
+    @pytest.fixture(autouse=True)
+    def cache_setup(self):
+        # Override only this class's inherited Redis fixture, not its tests.
+        return None
+
+    @pytest.fixture
+    def memory_cache(self):
+        from kohakuhub.cache_memory import BoundedMemoryCache
+
+        now = [100.0]
+        return BoundedMemoryCache(3, 10_000, clock=lambda: now[0]), now
+
+    def test_roundtrip_expiry_and_metrics(self, memory_cache):
+        cache, now = memory_cache
+        assert cache.get("count:a") is None
+        assert cache.set("count:a", "12", 5)
+        assert cache.get("count:a") == "12"
+        now[0] += 5
+        assert cache.get("count:a") is None
+        assert cache.get("count:a") is None
+        snapshot = cache.snapshot()
+        assert snapshot["entries"] == snapshot["used_bytes"] == 0
+        assert snapshot["hits"] == 1
+        assert snapshot["misses"] == 3
+        assert snapshot["sets"] == 1
+        assert snapshot["expirations"] == 1
+
+    def test_lru_entry_budget(self, memory_cache):
+        cache, _ = memory_cache
+        for key in ("a", "b", "c"):
+            assert cache.set(key, key, 30)
+        assert cache.get("a") == "a"
+        assert cache.set("d", "d", 30)
+        assert cache.get("b") is None
+        assert cache.get("a") == "a"
+        assert cache.get("c") == "c"
+        snapshot = cache.snapshot()
+        assert snapshot["entries"] == snapshot["max_entries"] == 3
+        assert snapshot["evictions"] == 1
+        assert snapshot["peak_entries"] == 3
+
+    def test_byte_budget_evicts_and_oversize_does_not_displace(self, memory_cache):
+        from kohakuhub.cache_memory import BoundedMemoryCache
+
+        probe, _ = memory_cache
+        probe.set("a", "x" * 100, 30)
+        one_entry_bytes = probe.snapshot()["used_bytes"]
+        cache = BoundedMemoryCache(10, one_entry_bytes * 2)
+        assert cache.set("a", "x" * 100, 30)
+        assert cache.set("b", "x" * 100, 30)
+        assert cache.set("c", "x" * 100, 30)
+        assert cache.get("a") is None
+        assert cache.get("b") == "x" * 100
+        assert not cache.set("b", "x" * 100_000, 30)
+        assert cache.get("b") == "x" * 100
+        snapshot = cache.snapshot()
+        assert snapshot["entries"] == 2
+        assert snapshot["used_bytes"] == one_entry_bytes * 2
+        assert snapshot["peak_bytes"] <= snapshot["max_bytes"]
+        assert snapshot["evictions"] == 1
+        assert snapshot["rejected_oversize"] == 1
+
+    def test_replacement_accounts_for_old_size_and_refreshes_ttl(self, memory_cache):
+        cache, now = memory_cache
+        assert cache.set("a", "x" * 1000, 2)
+        large = cache.snapshot()["used_bytes"]
+        assert cache.set("a", "x", 10)
+        small = cache.snapshot()["used_bytes"]
+        assert small < large
+        assert cache.snapshot()["entries"] == 1
+        now[0] += 3
+        assert cache.get("a") == "x"
+        now[0] += 7
+        assert cache.sweep() == 1
+        assert cache.snapshot()["used_bytes"] == 0
+
+    def test_sweep_reclaims_unread_entries_before_evicting_live_data(self, memory_cache):
+        cache, now = memory_cache
+        cache.set("long", "alive", 100)
+        cache.set("short:a", "expired", 1)
+        cache.set("short:b", "expired", 1)
+        now[0] += 2
+        assert cache.set("new", "alive", 100)
+        snapshot = cache.snapshot()
+        assert snapshot["entries"] == 2
+        assert snapshot["expirations"] == 2
+        assert snapshot["evictions"] == 0
+        assert cache.get("long") == "alive"
+        now[0] += 100
+        assert cache.sweep() == 2
+        assert cache.sweep() == 0
+        assert cache.snapshot()["used_bytes"] == 0
+
+    def test_snapshot_expires_and_groups_only_live_namespaces(self, memory_cache):
+        cache, now = memory_cache
+        cache.set("count:a", "1", 100)
+        cache.set("count:b", "2", 100)
+        cache.set("tree:old", "[]", 1)
+        now[0] += 2
+        snapshot = cache.snapshot()
+        assert snapshot["entries"] == 2
+        assert snapshot["namespaces"] == [
+            {"namespace": "count", "entries": 2, "used_bytes": snapshot["used_bytes"]}
+        ]
+
+    def test_delete_prefix_is_literal_and_clear_releases_contents(self, memory_cache):
+        cache, _ = memory_cache
+        cache.set("ns:*:a", "1", 30)
+        cache.set("ns:x:a", "2", 30)
+        cache.set("ns2:a", "3", 30)
+        assert cache.delete_prefix("ns:*:") == 1
+        assert cache.delete("missing", "ns2:a", "ns2:a") == 1
+        assert cache.get("ns:x:a") == "2"
+        assert cache.clear() == 1
+        assert cache.clear() == 0
+        snapshot = cache.snapshot()
+        assert snapshot["entries"] == snapshot["used_bytes"] == 0
+        assert snapshot["namespaces"] == []
+        assert snapshot["clears"] == 2
+
+    def test_reset_metrics_preserves_data_and_resets_peaks_to_current(self, memory_cache):
+        cache, _ = memory_cache
+        cache.set("a", "large" * 100, 30)
+        cache.set("b", "small", 30)
+        cache.get("a")
+        cache.get("missing")
+        cache.delete("a")
+        cache.reset_metrics()
+        snapshot = cache.snapshot()
+        assert snapshot["entries"] == snapshot["peak_entries"] == 1
+        assert snapshot["used_bytes"] == snapshot["peak_bytes"] > 0
+        for field in ("hits", "misses", "sets", "evictions", "expirations", "rejected_oversize", "clears"):
+            assert snapshot[field] == 0
+        assert cache.get("b") == "small"
+
+    @pytest.mark.parametrize("limits", [(0, 1000), (3, 0), (0, 0)])
+    def test_zero_capacity_disables_storage(self, limits):
+        from kohakuhub.cache_memory import BoundedMemoryCache
+
+        cache = BoundedMemoryCache(*limits)
+        assert not cache.set("a", "value", 30)
+        assert cache.get("a") is None
+        assert cache.snapshot()["entries"] == cache.snapshot()["used_bytes"] == 0
+
+    def test_empty_namespace_and_unicode_accounting(self, memory_cache):
+        cache, _ = memory_cache
+        cache.set(":a", "汉字" * 10, 30)
+        cache.set("plain", "", 30)
+        snapshot = cache.snapshot()
+        assert {row["namespace"] for row in snapshot["namespaces"]} == {"<unknown>", "plain"}
+        assert sum(row["used_bytes"] for row in snapshot["namespaces"]) == snapshot["used_bytes"]
+        assert snapshot["used_bytes"] > len("汉字" * 10)
+        assert cache.get("plain") == ""
+
+    def test_churn_is_bounded_and_expired_entries_release_references(self, memory_cache):
+        import weakref
+
+        class Payload(str):
+            pass
+
+        cache, now = memory_cache
+        payload = Payload("tracked")
+        payload_ref = weakref.ref(payload)
+        cache.set("old", payload, 1)
+        del payload
+        assert payload_ref() is not None
+        now[0] += 2
+        cache.sweep()
+        assert payload_ref() is None
+        for index in range(2000):
+            cache.set(f"ns{index}:key", "payload", 30)
+        snapshot = cache.snapshot()
+        assert snapshot["entries"] == 3
+        assert len(snapshot["namespaces"]) == 3
+        assert snapshot["used_bytes"] <= snapshot["max_bytes"]
+        assert snapshot["evictions"] == 1997
+
+
+class TestCacheResourceBounds:
+    """Resource limits and outage branches do not require a Redis server."""
+
+    @pytest.fixture(autouse=True)
+    async def cache_setup(self, monkeypatch):
+        await close_cache()
+        monkeypatch.setattr(cfg.cache, "enabled", False)
+        monkeypatch.setattr(cfg.cache, "local_enabled", True)
+        monkeypatch.setattr(cfg.cache, "jitter_fraction", 0)
+        monkeypatch.setattr(cfg.cache, "local_max_entries", 8)
+        monkeypatch.setattr(cfg.cache, "local_max_bytes", 8192)
+        reset_metrics()
+        yield
+        await close_cache()
+        assert not cache_mod._local_locks, "completed or cancelled work retained a lock"
+
+    @pytest.fixture
+    def redis_client(self, monkeypatch):
+        from unittest.mock import AsyncMock
+
+        client = AsyncMock()
+        client.get.return_value = None
+        client.set.return_value = True
+        monkeypatch.setattr(cfg.cache, "enabled", True)
+        monkeypatch.setattr(cache_mod, "_client", client)
+        monkeypatch.setattr(cache_mod, "_redis_available", True)
+        return client
+
+    async def test_hostile_namespace_cardinality_and_length_are_bounded(self):
+        for index in range(500):
+            key = f"{index:04d}-" + "x" * 4096 + ":item"
+            assert await cache_get_json(key) == (False, None)
+        misses = get_metrics_snapshot()["misses"]
+        assert len(misses) == 65
+        assert all(len(namespace) <= 64 for namespace in misses)
+        assert sum(misses.values()) == 500
+        assert misses["<other>"] == 436
+
+    async def test_lock_cap_never_evicts_an_active_lock_and_cancelled_waiters_leave(self):
+        from contextlib import AsyncExitStack
+
+        async with AsyncExitStack() as stack:
+            for index in range(4096):
+                await stack.enter_async_context(cache_mod._local_singleflight(f"active:{index}"))
+            original = cache_mod._local_locks["active:0"][0]
+            assert original.locked()
+            async with cache_mod._local_singleflight("overflow"):
+                assert "overflow" not in cache_mod._local_locks
+                assert len(cache_mod._local_locks) == 4096
+                assert cache_mod._local_locks["active:0"][0] is original
+
+            async def wait_on_active_key():
+                async with cache_mod._local_singleflight("active:0"):
+                    pytest.fail("waiter entered while the original lock was held")
+
+            waiter = asyncio.create_task(wait_on_active_key())
+            try:
+                await asyncio.sleep(0)
+                assert cache_mod._local_locks["active:0"] == (original, 2)
+            finally:
+                waiter.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await waiter
+            assert cache_mod._local_locks["active:0"] == (original, 1)
+        assert not cache_mod._local_locks
+
+    async def test_cancelled_fetch_releases_lock_and_does_not_cache_partial_result(self):
+        started = asyncio.Event()
+        never = asyncio.Event()
+
+        async def interrupted_source():
+            started.set()
+            await never.wait()
+
+        task = asyncio.create_task(
+            cache_get_or_fetch("commit:cancelled", interrupted_source, immutable=True)
+        )
+        await started.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert not cache_mod._local_locks
+        assert await cache_get_json("commit:cancelled", immutable=True) == (False, None)
+
+        async def healthy_source():
+            return 17
+
+        assert await cache_get_or_fetch("commit:cancelled", healthy_source, immutable=True) == 17
+
+    async def test_invalid_redis_url_keeps_memory_fallback_operational(self, monkeypatch):
+        monkeypatch.setattr(cfg.cache, "enabled", True)
+        monkeypatch.setattr(cfg.cache, "url", "invalid-scheme://user:secret@example.invalid")
+        await init_cache()
+        status = cache_mod.get_runtime_snapshot()["backend"]
+        assert status["mode"] == "memory"
+        assert status["reason"] == "configuration_error"
+        assert "secret" not in json.dumps(status)
+        assert await cache_set_json("commit:local", 3, immutable=True)
+        assert await cache_get_json("commit:local", immutable=True) == (True, 3)
+
+    async def test_exhausted_peer_poll_budget_fetches_immediately(self, monkeypatch, redis_client):
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock
+
+        redis_client.set.return_value = False  # Another worker owns the lock.
+        times = iter((100.0, 106.0))
+        monkeypatch.setattr(cache_mod, "time", SimpleNamespace(monotonic=lambda: next(times)))
+        source = AsyncMock(return_value=23)
+        assert await cache_get_or_fetch("commit:late-peer", source) == 23
+        source.assert_awaited_once()
+        # Initial lookup and lock recheck only: the elapsed budget skips polling.
+        assert redis_client.get.await_count == 2
+        redis_client.eval.assert_not_awaited()
+
+    async def test_redis_failure_while_polling_stops_waiting_and_uses_memory(self, redis_client):
+        from unittest.mock import AsyncMock
+
+        redis_client.get.side_effect = [None, None, ConnectionError("cache unavailable")]
+        redis_client.set.return_value = False  # Another worker owns the lock.
+        source = AsyncMock(return_value={"complete": True})
+        result = await asyncio.wait_for(
+            cache_get_or_fetch("commit:peer-outage", source, immutable=True), timeout=.5
+        )
+        assert result == {"complete": True}
+        assert cache_mod.get_runtime_snapshot()["backend"]["mode"] == "memory"
+        assert await cache_get_json("commit:peer-outage", immutable=True) == (True, result)
+        source.assert_awaited_once()
+        assert redis_client.get.await_count == 3

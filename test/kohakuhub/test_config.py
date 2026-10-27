@@ -281,6 +281,31 @@ def test_load_config_cache_env_vars(monkeypatch):
     assert cfg.cache.socket_connect_timeout_seconds == pytest.approx(0.4)
 
 
+@pytest.mark.parametrize("prefix", ["CHEESE_CAVE_", "KOHAKU_HUB_"])
+def test_cache_local_limits_environment(monkeypatch, prefix):
+    hub_config.load_config.cache_clear()
+    monkeypatch.setattr(hub_config.os.path, "exists", lambda path: False)
+    values = {"LOCAL_ENABLED": "false", "LOCAL_MAX_ENTRIES": "123",
+              "LOCAL_MAX_BYTES": "4096", "LOCAL_CLEANUP_INTERVAL": "2.5",
+              "REDIS_RETRY_INTERVAL": "8"}
+    for name, value in values.items():
+        monkeypatch.setenv(prefix + "CACHE_" + name, value)
+    config = hub_config.load_config().cache
+    assert config.local_enabled is False
+    assert config.local_max_entries == 123
+    assert config.local_max_bytes == 4096
+    assert config.local_cleanup_interval_seconds == 2.5
+    assert config.redis_retry_interval_seconds == 8
+    hub_config.load_config.cache_clear()
+
+
+@pytest.mark.parametrize("field", ["local_max_entries", "local_max_bytes", "local_cleanup_interval_seconds", "redis_retry_interval_seconds"])
+def test_cache_limits_reject_negative_values(field):
+    from pydantic import ValidationError
+    with pytest.raises(ValidationError):
+        hub_config.CacheConfig(**{field: -1})
+
+
 def test_load_config_cache_url_implicit_enables(monkeypatch):
     """Setting only ``KOHAKU_HUB_CACHE_URL`` (no ENABLED) flips the
     cache to enabled — this is the dev-friendly path that prevents

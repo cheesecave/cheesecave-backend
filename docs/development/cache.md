@@ -1,174 +1,233 @@
 # Cache layer
 
-KohakuHub uses a Valkey-based L2 cache (Redis-compatible) to absorb traffic
-that would otherwise hit Postgres or LakeFS REST repeatedly. The design has
-one non-negotiable rule:
+CheeseCave uses one cache interface for Redis/Valkey and bounded process-local
+storage. A configured, reachable Redis is preferred. When Redis is unavailable
+or disabled, explicitly immutable values can use the local fallback. A cache
+failure must not turn a successful source read into an API error.
 
-> The cache must never be on the correctness critical path.
+Implementation lives in [`cache.py`](../../src/kohakuhub/cache.py),
+[`cache_memory.py`](../../src/kohakuhub/cache_memory.py), and
+[`cache_monitor.py`](../../src/kohakuhub/cache_monitor.py). The Python package
+name remains `kohakuhub` for compatibility.
 
-If the cache is unavailable, the API stays correct — every read falls through
-to the source of truth. The cache is allowed to be late, but never wrong, and
-its absence is allowed to be slow, but never an outage.
+## Backend selection
 
-This document covers what is in the cache, what is not, and the invariants
-that callers must respect when integrating with it. Implementation lives in
-[`src/kohakuhub/cache.py`](../../src/kohakuhub/cache.py); tests in
-[`test/kohakuhub/test_cache.py`](../../test/kohakuhub/test_cache.py).
-
-## Architecture
-
-```
-L1: per-worker cachetools.TTLCache (~µs)
-    Immutable / content-addressed data ONLY.
-    Mutable data is forbidden in L1 — no cross-worker invalidation channel.
-
-L2: Valkey (~ms)
-    All cacheable data (mutable + immutable).
-    Cross-worker shared, cross-worker invalidation automatic.
-
-L3: Postgres / LakeFS REST / S3 — source of truth.
+```text
+Cache read
+  -> configured Redis is available: read Redis
+  -> otherwise, immutable=True and local fallback enabled: read local storage
+  -> miss or caching unavailable: fetch from the source
 ```
 
-L1 is intentionally narrow. The default 4-worker uvicorn deployment cannot
-synchronously invalidate per-process state across workers; rather than build
-a Pub/Sub fan-out (high complexity, low marginal benefit on top of a 1ms L2
-hit), we restrict L1 to data that is provably safe to keep stale across all
-workers — namely content-addressed entries whose key contains its own version
-identifier.
+The local store is a fallback, not a second copy of every Redis value. Successful
+Redis reads and writes use Redis. A connection failure switches subsequent
+operations to fallback without repeatedly waiting on a broken connection. One
+probe can attempt recovery after the retry interval; a background maintenance
+task also checks recovery while Redis is unavailable. Successful recovery clears
+the local store and resumes Redis use. These state and cache decisions are per
+process.
 
-## Consistency model
+An explicit Redis URL opts into Redis when supplied through the environment
+without an explicit `CACHE_ENABLED` value. The application does not discover or
+scan unrelated Redis endpoints. With no Redis configuration, immutable caching
+works locally by default.
 
-Two patterns, applied per data class:
+The default `immutable=False` never uses local value storage. It can use Redis,
+but falls through to the source when Redis is unavailable. Local caches have no
+cross-process invalidation channel, so mutable values must not opt into local
+fallback merely to improve their hit rate.
 
-### Mode A — Immutable / content-addressed
+## Current integrations
 
-Key contains the version. Examples:
+These three business caches use the shared interface with `immutable=True` and
+a one-hour TTL, subject to the configured TTL jitter:
 
-- `lakefs:commit:{repo}:{commit_id}` — LakeFS commits are SHA-addressed.
-- `lakefs:stat:{repo}:{commit_id}:{path}` — same, scoped by commit.
-- `lakefs:list:{repo}:{commit_id}:{prefix}` — same, scoped by commit.
+| Namespace | Key identity | Cached value |
+| --- | --- | --- |
+| `commit-count` | LakeFS repository and resolved immutable commit head | Total commits after a complete history walk |
+| `last-commit` | LakeFS repository, immutable commit and file path | Last commit touching the file, or a verified empty result |
+| `manifest` | LakeFS repository and immutable commit | Name-only siblings JSON |
 
-These are correct by construction: the key cannot resolve to a different
-value over time. TTL is a memory-pressure tool, not a correctness tool. No
-active invalidation is needed; LFU eviction reclaims them when memory tightens.
+Key components are encoded as a JSON array after the namespace so punctuation
+inside names or paths cannot merge different identities. Every read still checks
+the reader's permissions before returning repository data. Branch names are
+resolved to immutable heads before using persistent cache entries.
 
-### Mode B — Mutable, real-time consistency required
+Incomplete history walks, lookup failures and timeouts are not cached. File
+last-commit lookups retain their existing deadline, including cache coordination
+and waiting for a LakeFS slot. Directory lookups are not added. In-flight file
+and manifest tasks are shared and shielded from cancellation by one reader;
+completed tasks are removed from their coordination dictionaries.
 
-Two sub-patterns, picked by fan-out:
+Manifest requests with blob metadata still read live `File` rows and share only
+the active build. They are not retained in either backend: a file's blob ID can
+be recorded after LakeFS creates the commit. Large name-only manifests remain
+valid responses even when they exceed the local cache budget; they simply are
+not retained. JSON construction and encoding/decoding of large cached strings
+are moved off the event loop.
 
-**B1. Generation counter** — preferred for entities with many derived caches
-(Repository, User, Organization).
+Other existing caches, such as upstream repository-source discovery, are not
+automatically migrated or reported as entries in these namespaces.
 
-- The entity table has a `cache_gen BIGINT NOT NULL DEFAULT 1` column.
-- Every mutating `db_operations.*` path bumps `cache_gen` in the same
-  transaction as the business write.
-- Reads embed the current gen in their cache key:
-  `repo:info:{id}:g{gen}`. Old gens are unreachable; LFU reclaims them.
-- Avoids the bug class of "forgot to enumerate one of the derived keys
-  during invalidation."
+## Configuration
 
-**B2. Write-through DEL** — used for narrow-fanout entities (Session, Token,
-Branch HEAD).
+Environment settings use `CHEESE_CAVE_` first, with `KOHAKU_HUB_` as the legacy
+fallback. The table omits that prefix. TOML settings belong under `[cache]`.
+Apply configuration changes by restarting the API processes.
 
-- The mutator path explicitly `DEL`s the affected key(s) **after** DB commit.
-- Order matters: DB commit → cache DEL → response. Inverting that ordering
-  races concurrent reads back into stale state before the new value is durable.
+| Environment suffix | TOML field | Default |
+| --- | --- | --- |
+| `CACHE_ENABLED` | `enabled` | `false`; controls Redis only |
+| `CACHE_URL` | `url` | `redis://localhost:6379/0` |
+| `CACHE_NAMESPACE` | `namespace` | `kh` |
+| `CACHE_DEFAULT_TTL` | `default_ttl_seconds` | `300` seconds |
+| `CACHE_JITTER_FRACTION` | `jitter_fraction` | `0.15` (approximately ±15%) |
+| `CACHE_MAX_CONNECTIONS` | `max_connections` | `50` per process |
+| `CACHE_SOCKET_TIMEOUT` | `socket_timeout_seconds` | `0.5` seconds |
+| `CACHE_SOCKET_CONNECT_TIMEOUT` | `socket_connect_timeout_seconds` | `0.5` seconds |
+| `CACHE_LOCAL_ENABLED` | `local_enabled` | `true` |
+| `CACHE_LOCAL_MAX_ENTRIES` | `local_max_entries` | `10000` per process |
+| `CACHE_LOCAL_MAX_BYTES` | `local_max_bytes` | `67108864` (64 MiB) per process |
+| `CACHE_LOCAL_CLEANUP_INTERVAL` | `local_cleanup_interval_seconds` | `15` seconds |
+| `CACHE_REDIS_RETRY_INTERVAL` | `redis_retry_interval_seconds` | `10` seconds |
 
-## Persistence and the boot-time flush
+For example, a Redis URL without credentials can be configured as:
 
-The cache container is started with RDB snapshotting enabled (`--save 300 100`,
-`--appendonly no`) and a persistent volume. Two reasons:
+```text
+CHEESE_CAVE_CACHE_URL=redis://cache:6379/0
+CHEESE_CAVE_CACHE_NAMESPACE=cheesecave
+```
 
-1. The bulk of cache value lives in Mode-A immutable keys. Discarding them on
-   every Valkey restart turns routine maintenance into a synchronized 1k-fanout
-   LakeFS REST burst — exactly the spike the cache exists to prevent.
-2. Mode-B keys CAN go stale across a restart (a write whose `DEL` lands during
-   Valkey downtime is silently lost), so RDB-restored Mode-B values are
-   suspect.
+Setting `CHEESE_CAVE_CACHE_ENABLED=false` overrides the URL's implicit enablement
+and leaves local fallback enabled. To bypass both backends, also set
+`CHEESE_CAVE_CACHE_LOCAL_ENABLED=false`. Zero local entry or byte limits disable
+local storage as well. Local limits must be nonnegative; cleanup and retry
+intervals must be at least one second. Supplying only a URL in TOML does not
+implicitly set `enabled=true`.
 
-Resolution: persist RDB, but **flush all Mode-B namespaces on every Valkey
-restart**. The list of Mode-B prefixes is the `MODE_B_PREFIXES` constant in
-`cache.py`:
+## Memory bounds and singleflight
 
-| Survives across restart (Mode A) | Flushed on every Valkey restart (Mode B) |
-| --- | --- |
-| `lakefs:commit:` | `lakefs:branch:` |
-| `lakefs:stat:` | `repo:gen:`, `repo:info:`, `org:gen:`, `org:info:`, `user:gen:`, `user:info:` |
-| `lakefs:list:` | `uo:`, `sess:`, `tok:`, `list_gen:`, `list:`, `negative:` |
+Hit/miss counters count the initial cache lookup once. Internal singleflight
+rechecks and peer polling do not add extra reads; coalesced requests are also
+reported through the singleflight contention counter.
 
-Restart detection uses Valkey's `INFO server.run_id` (changes on every Valkey
-process start). The API stores the last-seen `run_id` *in Valkey itself*
-(`cache:bootstrap_run_id`); on connect, the worker that wins
-`SET cache:bootstrap_lock 1 NX EX 30` performs the flush and updates the
-marker. Other workers wait until the marker matches the current `run_id`
-before serving Mode-B reads.
+The local store has both an entry limit and an accounted-byte limit. Each entry
+has a monotonic expiry time. Reads discard expired entries, capacity pressure
+first reclaims expired entries and then evicts least-recently-used entries, and
+the maintenance task sweeps expired entries even when there are no requests.
+There are no per-entry timers or tasks that can retain evicted values. An entry
+larger than the total byte budget is rejected without emptying useful entries.
 
-This decouples cache flushes from API restarts: redeploying the API against
-a long-running Valkey is a no-op for the flush coordinator; a Valkey upgrade
-or pod-eviction triggers exactly one flush across all API workers.
+Accounted bytes estimate retained Python key/value strings, the entry and its
+scalar fields, plus an allowance for the dictionary node. This is not an exact
+heap measurement or a limit on the process's resident memory. Limits apply
+separately to each API process; adding workers multiplies the possible retained
+local cache data. Redis memory limits and eviction policy belong to the Redis
+server configuration and are not changed by this interface.
 
-## Stampede / eviction defenses
+Cached values are serialized; decoded dictionaries and lists cannot modify the
+stored value by reference. Cached value writes have a TTL, and the three integrations
+above explicitly use 3600 seconds rather than the generic 300-second default.
 
-All five must remain in place; each closes a different failure mode.
+`cache_get_or_fetch` coalesces requests for the same key with a process-local
+lock, and with a short Redis lock when Redis is available. Active local lock
+keys are capped at 4096 and removed after their last participant exits. At the
+cap, new keys bypass local coordination instead of growing the lock registry.
+Redis lock acquisition failures fall back immediately rather than polling a
+dead connection. Lock release checks its ownership token so a slow reader
+cannot delete a newer reader's lock. A source failure is propagated and never
+stored. Namespace counters retain at most 64 named buckets plus an overflow
+bucket, preventing metrics from becoming an unbounded key registry.
 
-1. **TTL jitter ±15%** — applied inside `cache_set_json`, no opt-out. Without
-   this, a synchronized burst of writes all expire at the same instant.
-2. **Two-level singleflight** — `asyncio.Lock` per cache key inside the
-   worker, plus Valkey `SET sf:lock:{key} 1 NX EX 5` across workers. Both
-   required: per-worker alone leaves N workers racing; cross-worker alone
-   leaves intra-worker contention.
-3. **Negative cache** — `cache_set_negative()` writes a sentinel under a short
-   TTL (15s default). Prevents repeated lookups for nonexistent entities from
-   hammering L3. Critical: when the entity is later created, the create path
-   MUST `cache_invalidate(...)` the negative key — otherwise the negative
-   result hides the new entity until TTL expiry.
-4. **Refresh-ahead** — allowed *only* on Mode-A immutable entries with
-   measured high QPS. Forbidden on Mode-B; serving a stale value while
-   refreshing in the background defeats write-through consistency.
-5. **`maxmemory` + `allkeys-lfu`**, no key allowed without TTL (even
-   immutable entries: cap at 24h). Memory is bounded; eviction is automatic.
+## Immutable and reserved mutable contracts
 
-## What is NOT cached
+Immutable, content-addressed values are Mode A: their key contains the version,
+so independent processes may safely retain the same answer. The explicit
+`immutable=True` argument is the caller's assertion of this property; the cache
+does not infer it from a namespace name.
 
-These are deliberately uncached, even though they would benefit from the
-performance:
+Mode B helpers remain reserved infrastructure for future mutable integrations:
 
-| Data | Why not |
-| --- | --- |
-| `File` row by `(repo, path)` | Preupload SHA256 dedup is strong-consistency-sensitive; a wrong-side cache miss causes silent skip-of-upload. |
-| `Quota` / `used_bytes` | Mutated on every write; caching adds bug surface for no win. |
-| Presigned S3 URLs | Already short-TTL by design, per-request, per-user — no shared key. |
-| Likes / downloads counters | Already updated asynchronously; an extra cache layer adds inconsistency without latency win. |
+- `read_gen` and `bump_gen` access Redis generation counters and return zero
+  when Redis is unavailable. They do not create local generation counters.
+- There is currently no database `cache_gen` column or transaction-level
+  generation maintenance in the repository/user/organization models. A counter
+  API alone does not establish a complete generation-based consistency model.
+- `cache_invalidate` and `cache_invalidate_prefix` clear matching local entries
+  and attempt Redis invalidation. A future mutable integration must handle
+  every write path, with invalidation after the authoritative database commit.
 
-## Adding a new cached read
+The existing Redis bootstrap coordinator checks `INFO server.run_id` during
+initialization/reconnection and clears the reserved `MODE_B_PREFIXES` when it
+detects a new server run. Recovery after an observed connection failure also
+clears these reserved prefixes, because invalidations may have been missed
+without a Redis restart. Immutable namespaces are excluded from these flushes.
+This machinery is not a guarantee of cross-worker real-time mutable coherence;
+future mutable consumers need explicit write, recovery and multi-worker tests.
+The current three integrations rely only on immutable identities.
 
-1. Decide the mode (A vs B1 vs B2). If you can't decide, the data is
-   probably not safe to cache without more thought.
-2. Pick a key shape that reflects the mode:
-   - Mode A: include the version in the key.
-   - Mode B1: include `:g{gen}` and add a generation bump to every mutator.
-   - Mode B2: pick a deterministic key and add `cache_invalidate(key)` to
-     every mutator post-DB-commit.
-3. Use `cache_get_or_fetch(key, fetch_fn, ttl=...)` from `cache.py`. Do not
-   call `redis.asyncio` directly — singleflight, jitter, silent degradation,
-   and metrics all live in the helper.
-4. Add a test that writes the underlying entity and immediately reads through
-   the cached path; assert the new value is returned. This is the regression
-   guard for the real-time consistency contract.
+Negative cache entries distinguish a cache miss from a verified absent value:
+`(False, None)` is a miss and `(True, None)` is a cached answer. Negative entries
+have a short TTL (15 seconds by default). Mutable absence must not be marked
+immutable, and an entity creation must invalidate any negative key that could
+hide it. A verified empty history at an immutable commit remains an immutable
+answer.
 
-## Operating
+## Admin observations and actions
 
-- Admin endpoint `GET /admin/api/cache/stats` returns hit/miss/error
-  counters per namespace plus Valkey memory state and the last-flush
-  metadata.
-- `POST /admin/api/cache/metrics/reset` zeros the counters without
-  touching cache contents.
-- `CHEESE_CAVE_CACHE_ENABLED=false` disables the cache layer at startup.
-  All cache calls then degrade to "miss" silently. CI runs a dedicated job
-  with this flag set, so the silent-degradation contract is regression-tested
-  on every push.
+`GET /admin/api/cache/stats` requires Admin authentication and returns:
 
-## Related issues
+- `metrics`: namespace hit/miss/error/write/invalidation counters, singleflight
+  contention and bootstrap-flush metadata.
+- `backend`: active mode (`redis`, `memory`, or `disabled`), Redis configuration
+  and availability, fallback state, status reason, retry time and process identity.
+- `local`: current and peak entries/accounted bytes, limits, hits/misses, writes,
+  evictions, expirations, rejected oversized entries, clears and namespace totals.
+- `singleflight`: active local lock keys and their cap.
+- `process`: current resident memory (RSS/working set) and its measurement source;
+  unsupported or failed measurements are explicitly unknown.
+- `history`: up to 120 observations of local entries, accounted bytes and process
+  RSS. Normal observations use the cleanup interval; clearing the store also
+  records an observation. The history is bounded and does not survive restart.
+- `memory`: Redis server memory, configured maximum, eviction policy and evicted
+  keys when reachable. This describes the server, including other clients and
+  namespaces, not just this application's entries.
 
-- [#73](https://github.com/deepghs/KohakuHub/issues/73) — design issue and
-  TODO list for follow-up cache integrations beyond infrastructure.
+All counters, local cache measurements and history belong to the responding
+process. `instance_id`, PID and `scope: "process"` identify that scope. Requests
+balanced across workers can return different observations; the Admin panel
+must not join them into one process history or describe them as a cluster total.
+
+`POST /admin/api/cache/metrics/reset` resets in-process counters and local peaks
+without deleting cached values. It works in local-only mode and accepts an
+optional `{"instance_id": "..."}` body. The Admin panel supplies that identity.
+
+`POST /admin/api/cache/local/clear` requires an `instance_id` body and clears only
+the matching process's local entries. A different receiving worker returns 409;
+refresh the panel and retry. This action does not flush Redis or other workers,
+and active requests can repopulate the cache. Neither action resets business
+data.
+
+Entry counts and accounted bytes should plateau at their configured bounds;
+expiry and eviction counts help explain changes. RSS includes every part of the
+application and can stay elevated after a cache clear because of other workloads
+or allocator behavior. These observations help investigate memory growth; they
+do not establish or rule out a memory leak by themselves.
+
+## Adding a cached read
+
+1. Prove whether the value is immutable. Use an authoritative version in the
+   key and check permissions before returning cached repository data.
+2. Use a collision-free key and a distinct namespace. Call
+   `cache_get_or_fetch(key, fetch, immutable=True, ttl=...)` for immutable data;
+   do not introduce another persistent dictionary or call Redis directly.
+3. Test cache hits, identity isolation, source failures, bounded local storage,
+   invalidation, concurrent requests and relevant cancellation behavior. Verify
+   both Redis use and no-Redis behavior; local-only tests must not require Redis.
+4. For mutable data, leave `immutable=False` and implement the required database
+   and invalidation protocol before enabling caching. Do not treat the reserved
+   generation helpers as a finished protocol.
+
+The cache foundation tests are in
+[`test/kohakuhub/test_cache.py`](../../test/kohakuhub/test_cache.py). Existing
+commit-history, tree and HF utility tests cover the three business integrations.

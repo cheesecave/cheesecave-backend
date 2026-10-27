@@ -12,10 +12,11 @@ import httpx
 import pytest
 
 import kohakuhub.api.commit.routers.history as commit_history
-from kohakuhub.api.commit import count as counts
+from kohakuhub import cache
 from kohakuhub.api.repo.utils.hf import hf_repo_not_found
 from kohakuhub.auth.dependencies import get_optional_user
 from kohakuhub.auth.permissions import RepoReadDeniedError
+from kohakuhub.config import cfg
 from kohakuhub.db import UserOrganization
 from kohakuhub.utils.commit_id import hub_oid
 from test.kohakuhub.support.factories import make_commit, make_file, make_org, make_repo, make_user
@@ -409,7 +410,10 @@ class LakeFSHistory:
 
 @pytest.fixture
 async def count_api(monkeypatch):
-    counts._counts.clear()
+    monkeypatch.setattr(cfg.cache, "enabled", False)
+    monkeypatch.setattr(cfg.cache, "local_enabled", True)
+    await cache.close_cache()
+    cache.reset_metrics()
     owner = make_user("alice")
     repo = make_repo(owner, "demo", lakefs_repo="count-model-demo")
     lakefs = LakeFSHistory()
@@ -427,6 +431,7 @@ async def count_api(monkeypatch):
         transport=httpx.ASGITransport(app=application), base_url="http://testserver"
     ) as session:
         yield SimpleNamespace(session=session, lakefs=lakefs, owner=owner, repo=repo, actor=actor)
+    await cache.close_cache()
 
 
 async def test_count_comes_from_the_resolved_branch_history_not_database_rows(count_api):
@@ -569,7 +574,8 @@ async def test_type_routes_and_missing_local_repositories(count_api, repo_type):
 
 
 async def test_cache_is_bounded_lru_and_isolated_by_lakefs_repository(count_api, monkeypatch):
-    monkeypatch.setattr(counts, "COMMIT_COUNTS_KEPT", 2)
+    monkeypatch.setattr(cfg.cache, "local_max_entries", 2)
+    await cache.close_cache()
     for name in ("second", "third"):
         make_repo(count_api.owner, name, lakefs_repo=f"count-{name}")
 
@@ -586,6 +592,13 @@ async def test_cache_is_bounded_lru_and_isolated_by_lakefs_repository(count_api,
     assert not any(operation == "log" for operation, _ in count_api.lakefs.calls)
     assert (await request("second")).json()["count"] == 2  # evicted and recounted
     assert sum(operation == "log" for operation, _ in count_api.lakefs.calls) == 1
+
+
+async def test_commit_counts_are_invalidated_through_the_shared_cache(count_api):
+    assert (await count_api.session.get(f"{BASE}/main")).json()["count"] == 1
+    await cache.cache_invalidate_prefix("commit-count:")
+    count_api.lakefs.pages[None]["results"].append({"id": "b" * 64})
+    assert (await count_api.session.get(f"{BASE}/main")).json()["count"] == 2
 
 
 @pytest.mark.parametrize("status, expected, code", [

@@ -12,11 +12,23 @@ import pytest
 from fastapi.responses import JSONResponse
 
 import kohakuhub.api.repo.routers.tree as tree_api
+from kohakuhub import cache
+from kohakuhub.config import cfg
 from kohakuhub.db import User
 from test.kohakuhub.support.fakes import lakefs_error
 from test.kohakuhub.support.factories import make_file, make_repo, make_user
 
 pytestmark = pytest.mark.usefixtures("db_scope")
+
+
+@pytest.fixture(autouse=True)
+async def _local_cache(monkeypatch):
+    monkeypatch.setattr(cfg.cache, "enabled", False)
+    monkeypatch.setattr(cfg.cache, "local_enabled", True)
+    await cache.close_cache()
+    cache.reset_metrics()
+    yield
+    await cache.close_cache()
 
 
 def _demo_repo():
@@ -442,11 +454,13 @@ class _StallingClient:
 
     def __init__(self):
         self.answering = asyncio.Event()
+        self.started = asyncio.Event()
         self.calls = 0
         self.cancelled = 0
 
     async def log_commits(self, **kwargs):
         self.calls += 1
+        self.started.set()
         try:
             await self.answering.wait()
         except asyncio.CancelledError:
@@ -481,6 +495,22 @@ async def test_a_stalled_lookup_gives_up_and_is_asked_again(monkeypatch):
 
     assert again["README.md"]["id"] == "late"
     assert stalling.calls == 2
+
+
+async def test_cancelled_last_commit_reader_does_not_cancel_shared_lookup(monkeypatch):
+    stalling = _StallingClient()
+    monkeypatch.setattr(tree_api, "get_lakefs_rest_client", lambda: stalling)
+    targets = [{"path": "README.md", "type": "file"}]
+    first = asyncio.create_task(tree_api.resolve_last_commits_for_paths("lake", "e" * 64, targets))
+    await asyncio.wait_for(stalling.started.wait(), timeout=1)
+    second = asyncio.create_task(tree_api.resolve_last_commits_for_paths("lake", "e" * 64, targets))
+    first.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await first
+    stalling.answering.set()
+    assert (await second)["README.md"]["id"] == "late"
+    assert stalling.calls == 1 and stalling.cancelled == 0
+    assert not tree_api._looking_up
 
 
 async def test_waiting_for_a_lookup_slot_counts_against_its_time(monkeypatch):
@@ -1585,11 +1615,9 @@ class _CountingLog:
 
 @pytest.fixture
 def last_commit_log(monkeypatch):
-    tree_api._last_commits.clear()
     client = _CountingLog()
     monkeypatch.setattr(tree_api, "get_lakefs_rest_client", lambda: client)
-    yield client
-    tree_api._last_commits.clear()
+    return client
 
 
 @pytest.mark.asyncio
@@ -1606,6 +1634,35 @@ async def test_last_commits_at_a_commit_are_looked_up_once(last_commit_log):
     assert all(r == again for r in results)
     assert again["meta"] is None and again["README.md"]["id"] == "c-README.md"
     assert last_commit_log.calls == [(COMMIT, "README.md")]
+
+
+async def test_last_commits_are_invalidated_through_the_shared_cache(last_commit_log):
+    targets = [{"path": "README.md", "type": "file"}]
+    await tree_api.resolve_last_commits_for_paths("lake", COMMIT, targets)
+    await cache.cache_invalidate_prefix("last-commit:")
+    await tree_api.resolve_last_commits_for_paths("lake", COMMIT, targets)
+    assert last_commit_log.calls == [(COMMIT, "README.md")] * 2
+
+
+async def test_empty_last_commit_history_is_cached_but_invalid_history_is_not(monkeypatch):
+    responses = [{"results": []}, {"results": [{}]}, {"results": [{"id": "valid"}]}]
+    calls = []
+
+    class Client:
+        async def log_commits(self, **kwargs):
+            calls.append(kwargs)
+            return responses.pop(0)
+
+    monkeypatch.setattr(tree_api, "get_lakefs_rest_client", Client)
+    targets = [{"path": "empty", "type": "file"}]
+    for _ in range(2):
+        assert await tree_api.resolve_last_commits_for_paths("lake", COMMIT, targets) == {"empty": None}
+    assert len(calls) == 1
+    targets = [{"path": "malformed", "type": "file"}]
+    with pytest.raises(KeyError):
+        await tree_api.resolve_last_commits_for_paths("lake", COMMIT, targets)
+    assert (await tree_api.resolve_last_commits_for_paths("lake", COMMIT, targets))["malformed"]["id"] == "valid"
+    assert len(calls) == 3
 
 
 @pytest.mark.asyncio
@@ -1625,14 +1682,17 @@ async def test_last_commits_on_a_branch_or_after_a_failure_are_asked_again(last_
 
 @pytest.mark.asyncio
 async def test_last_commit_cache_keeps_to_its_size(last_commit_log, monkeypatch):
-    monkeypatch.setattr(tree_api, "LAST_COMMIT_CACHE_ENTRIES", 2)
+    monkeypatch.setattr(cfg.cache, "local_max_entries", 2)
+    await cache.close_cache()
 
     for path in ("a", "b", "c"):
         await tree_api.resolve_last_commits_for_paths("lake", COMMIT, [{"path": path, "type": "file"}])
     await tree_api.resolve_last_commits_for_paths("lake", COMMIT, [{"path": "b", "type": "file"}])
 
-    assert [key[-1] for key in tree_api._last_commits] == ["c", "b"]
     assert len(last_commit_log.calls) == 3
+    await tree_api.resolve_last_commits_for_paths("lake", COMMIT, [{"path": "a", "type": "file"}])
+    assert last_commit_log.calls[-1] == (COMMIT, "a")
+    assert len(last_commit_log.calls) == 4
 
 
 # ----- a side branch's identities come from LakeFS, not from main's rows (#11) -----

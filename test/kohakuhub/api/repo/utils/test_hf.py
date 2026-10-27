@@ -7,6 +7,8 @@ from datetime import datetime
 
 import pytest
 import kohakuhub.api.repo.utils.hf as hf_utils
+from kohakuhub import cache
+from kohakuhub.config import cfg
 from kohakuhub.db import File
 from test.kohakuhub.support.db import table_missing
 from test.kohakuhub.support.factories import make_file, make_repo, make_user
@@ -225,8 +227,11 @@ class _Lister:
 
 
 @pytest.fixture
-def lister(monkeypatch):
-    hf_utils._manifests.clear()
+async def lister(monkeypatch):
+    monkeypatch.setattr(cfg.cache, "enabled", False)
+    monkeypatch.setattr(cfg.cache, "local_enabled", True)
+    await cache.close_cache()
+    cache.reset_metrics()
 
     def use(*pages):
         client = _Lister(*pages)
@@ -234,7 +239,7 @@ def lister(monkeypatch):
         return client
 
     yield use
-    hf_utils._manifests.clear()
+    await cache.close_cache()
 
 
 def test_git_blob_id_and_lfs_pointer_match_the_hub():
@@ -284,6 +289,17 @@ async def test_names_only_siblings_are_built_once_per_commit(lister):
 
 
 @pytest.mark.usefixtures("db_scope")
+async def test_manifests_are_invalidated_through_the_shared_cache(lister):
+    repo = _demo_repo()
+    client = lister(_page([("first", 1, "")]), _page([("second", 1, "")]))
+    await hf_utils.hf_siblings_json(repo, "lake", "c1", with_metadata=False)
+    await cache.cache_invalidate_prefix("manifest:")
+    result = await hf_utils.hf_siblings_json(repo, "lake", "c1", with_metadata=False)
+    assert json.loads(result) == [{"rfilename": "second"}]
+    assert len(client.calls) == 2
+
+
+@pytest.mark.usefixtures("db_scope")
 async def test_concurrent_requests_for_one_commit_list_it_once(lister):
     import asyncio
 
@@ -298,21 +314,57 @@ async def test_concurrent_requests_for_one_commit_list_it_once(lister):
 
 
 @pytest.mark.usefixtures("db_scope")
-async def test_the_manifest_cache_keeps_to_its_budget(lister, monkeypatch):
-    monkeypatch.setattr(hf_utils, "MANIFEST_CACHE_BYTES", 60)
+async def test_cancelled_manifest_reader_does_not_cancel_the_shared_build(lister, monkeypatch):
+    import asyncio
+
+    started, release = asyncio.Event(), asyncio.Event()
+    calls = []
+
+    async def list_objects(*args):
+        calls.append(args)
+        started.set()
+        await release.wait()
+        return [("large-list-entry", 1, "")]
+
+    monkeypatch.setattr(hf_utils, "list_repo_objects", list_objects)
     repo = _demo_repo()
-    lister(*[_page([(f"file-{i}.txt", 1, "")]) for i in range(3)])
+    first = asyncio.create_task(hf_utils.hf_siblings_json(repo, "lake", "c1", with_metadata=False))
+    await started.wait()
+    second = asyncio.create_task(hf_utils.hf_siblings_json(repo, "lake", "c1", with_metadata=False))
+    first.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await first
+    release.set()
+    result = await second
+    assert json.loads(result) == [{"rfilename": "large-list-entry"}]
+    assert await hf_utils.hf_siblings_json(repo, "lake", "c1", with_metadata=False) == result
+    assert len(calls) == 1
+    assert not hf_utils._building
+
+
+@pytest.mark.usefixtures("db_scope")
+async def test_the_manifest_cache_keeps_to_its_budget(lister, monkeypatch):
+    monkeypatch.setattr(cfg.cache, "local_max_entries", 2)
+    await cache.close_cache()
+    repo = _demo_repo()
+    client = lister(*[_page([(f"file-{i}.txt", 1, "")]) for i in range(4)])
 
     for commit in ("c1", "c2", "c3"):
         await hf_utils.hf_siblings_json(repo, "lake", commit, with_metadata=False)
 
-    # Each manifest is 29 bytes: the oldest went
-    assert list(hf_utils._manifests) == [("lake", "c2", False), ("lake", "c3", False)]
+    # The shared cache retains the two newest manifests.
+    await hf_utils.hf_siblings_json(repo, "lake", "c2", with_metadata=False)
+    await hf_utils.hf_siblings_json(repo, "lake", "c3", with_metadata=False)
+    assert len(client.calls) == 3
+    await hf_utils.hf_siblings_json(repo, "lake", "c1", with_metadata=False)
+    assert len(client.calls) == 4
 
-    monkeypatch.setattr(hf_utils, "MANIFEST_CACHE_BYTES", 10)
-    lister(_page([("big-file-name.txt", 1, "")]))
-    await hf_utils.hf_siblings_json(repo, "lake", "c4", with_metadata=False)
-    assert ("lake", "c4", False) not in hf_utils._manifests  # larger than the whole budget
+    monkeypatch.setattr(cfg.cache, "local_max_bytes", 1)
+    await cache.close_cache()  # Recreate the store with the changed configuration.
+    client = lister(*[_page([("big-file-name.txt", 1, "")])] * 2)
+    first = await hf_utils.hf_siblings_json(repo, "lake", "c4", with_metadata=False)
+    again = await hf_utils.hf_siblings_json(repo, "lake", "c4", with_metadata=False)
+    assert first == again and len(client.calls) == 2  # too large to retain, still returned
 
 
 @pytest.mark.usefixtures("db_scope")
@@ -344,7 +396,7 @@ async def test_blob_siblings_follow_the_linked_object(lister):
     ]
     # Not kept: blobIds come from File rows, which a commit records after
     # LakeFS has the commit; a list built in between would keep stale ids
-    assert not hf_utils._manifests
+    assert cache.get_metrics_snapshot()["set_count"].get("manifest", 0) == 0
 
 
 @pytest.mark.usefixtures("db_scope")
@@ -368,7 +420,20 @@ async def test_concurrent_blob_requests_share_one_build(lister, monkeypatch):
     assert len(set(blobs)) == 1 and "blobId" in blobs[0]
     assert json.loads(names) == [{"rfilename": "model.bin"}]
     assert len(client.calls) == 2 and loads == [1]  # one listing for each form
-    assert list(hf_utils._manifests) == [("lake", "c1", False)]
+    assert cache.get_metrics_snapshot()["set_count"]["manifest"] == 1
+
+
+@pytest.mark.usefixtures("db_scope")
+async def test_blob_manifest_reads_file_rows_written_after_the_commit(lister):
+    repo = _demo_repo()
+    client = lister(*[_page([("README.md", 4, "s3://hub/data/r")])] * 2)
+    first = json.loads(await hf_utils.hf_siblings_json(repo, "lake", "c1", with_metadata=True))
+    make_file(repo, "README.md", sha256="aa" * 20, size=4)
+    again = json.loads(await hf_utils.hf_siblings_json(repo, "lake", "c1", with_metadata=True))
+    assert "blobId" not in first[0]
+    assert again[0]["blobId"] == "aa" * 20
+    assert len(client.calls) == 2
+    assert cache.get_metrics_snapshot()["set_count"].get("manifest", 0) == 0
 
 
 @pytest.mark.usefixtures("db_scope")

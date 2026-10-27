@@ -118,12 +118,7 @@ class FallbackConfig(BaseModel):
 
 
 class CacheConfig(BaseModel):
-    """L2 cache (Valkey/Redis) configuration.
-
-    Pure cache, no business state. When ``enabled`` is False the cache layer
-    silently degrades and every call falls back to its source. See
-    ``docs/development/cache.md`` for the full design.
-    """
+    """Redis preferred, bounded per-process fallback for immutable data."""
 
     # Disabled by default so existing deployments don't acquire a hard
     # dependency on Valkey unintentionally. Local-dev .env.dev.example flips
@@ -146,6 +141,11 @@ class CacheConfig(BaseModel):
     # timeouts so a flaky Valkey degrades to "cache miss" within ms, not s.
     socket_timeout_seconds: float = 0.5
     socket_connect_timeout_seconds: float = 0.5
+    local_enabled: bool = True
+    local_max_entries: int = Field(default=10_000, ge=0)
+    local_max_bytes: int = Field(default=64 * 1024 * 1024, ge=0)
+    local_cleanup_interval_seconds: float = Field(default=15, ge=1)
+    redis_retry_interval_seconds: float = Field(default=10, ge=1)
 
 
 class WorkerConfig(BaseModel):
@@ -574,6 +574,16 @@ def load_config(path: str = None) -> Config:
         cache_env["socket_connect_timeout_seconds"] = float(
             read_env("CACHE_SOCKET_CONNECT_TIMEOUT")
         )
+    if read_env("CACHE_LOCAL_ENABLED") is not None:
+        cache_env["local_enabled"] = read_env("CACHE_LOCAL_ENABLED").lower() == "true"
+    for env_name, field_name, parse in (
+        ("CACHE_LOCAL_MAX_ENTRIES", "local_max_entries", int),
+        ("CACHE_LOCAL_MAX_BYTES", "local_max_bytes", int),
+        ("CACHE_LOCAL_CLEANUP_INTERVAL", "local_cleanup_interval_seconds", float),
+        ("CACHE_REDIS_RETRY_INTERVAL", "redis_retry_interval_seconds", float),
+    ):
+        if read_env(env_name) is not None:
+            cache_env[field_name] = parse(read_env(env_name))
     if cache_env:
         config_from_env["cache"] = cache_env
 

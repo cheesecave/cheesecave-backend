@@ -8,13 +8,13 @@ import asyncio
 import hashlib
 import json
 import re
-from collections import OrderedDict
 from typing import Optional
 
 from fastapi import HTTPException
 from fastapi.responses import Response
 from peewee import PeeweeException
 
+from kohakuhub.cache import cache_get_or_fetch
 from kohakuhub.db import File
 from kohakuhub.logger import get_logger
 from kohakuhub.utils.lakefs import lakefs_status, ref_in_history
@@ -485,11 +485,8 @@ CARD_PROPERTIES = frozenset({"cardData", "tags", "pipeline_tag", "library_name",
 # Properties the Hub returns only when expanded, from another field
 _EXPAND_ONLY = {"downloadsAllTime": "downloads"}
 
-# Name-only sibling lists, per (LakeFS repository, commit, False): a
-# commit's file list never changes. ponytail: per process, by bytes; share it through
-# Valkey if several workers keep rebuilding the same big lists.
-MANIFEST_CACHE_BYTES = 256 * 1024 * 1024
-_manifests: "OrderedDict[tuple[str, str, bool], str]" = OrderedDict()
+# Active builds only. Name-only manifests use the shared bounded cache;
+# metadata manifests depend on live File rows and must never be kept.
 _building: dict[tuple[str, str, bool], asyncio.Task] = {}
 
 
@@ -678,14 +675,6 @@ def _blobs_json(objects: list[tuple[str, int, str]], blob_ids: dict[str, str]) -
     return "[" + ", ".join(entries) + "]"
 
 
-def _remember(key: tuple[str, str, bool], manifest: str) -> None:
-    if len(manifest) > MANIFEST_CACHE_BYTES:
-        return
-    _manifests[key] = manifest
-    while sum(map(len, _manifests.values())) > MANIFEST_CACHE_BYTES:
-        _manifests.popitem(last=False)
-
-
 async def _build(repo_row, key: tuple[str, str, bool]) -> str:
     lakefs_repo, commit, with_metadata = key
     objects = await list_repo_objects(lakefs_repo, commit)
@@ -699,9 +688,7 @@ async def _build(repo_row, key: tuple[str, str, bool]) -> str:
         # Shared by concurrent requests, not kept: regular files' blobIds are
         # File rows, which a commit records after LakeFS has it
         return await asyncio.to_thread(_blobs_json, objects, blob_ids)
-    manifest = await asyncio.to_thread(_names_json, objects)
-    _remember(key, manifest)
-    return manifest
+    return await asyncio.to_thread(_names_json, objects)
 
 
 async def hf_siblings_json(repo_row, lakefs_repo: str, commit: str, *, with_metadata: bool) -> str:
@@ -710,16 +697,22 @@ async def hf_siblings_json(repo_row, lakefs_repo: str, commit: str, *, with_meta
     Name-only by default; with ``blobs``, ``blobId`` and ``size`` for every
     file, and ``lfs`` for the files LakeFS links to a global LFS object, whose
     address carries their sha256. Concurrent requests share one build, the
-    name-only list is kept in ``_manifests``, and the JSON is built off the
+    name-only list uses the shared cache, and the JSON is built off the
     event loop: a big repository's would hold up every other request.
     """
     key = (lakefs_repo, commit, with_metadata)
-    if key in _manifests:
-        _manifests.move_to_end(key)
-        return _manifests[key]
     task = _building.get(key)
     if task is None or task.get_loop() is not asyncio.get_running_loop():
-        task = _building[key] = asyncio.ensure_future(_build(repo_row, key))
+        build = (
+            _build(repo_row, key)
+            if with_metadata else cache_get_or_fetch(
+                "manifest:" + json.dumps([lakefs_repo, commit], separators=(",", ":")),
+                lambda: _build(repo_row, key),
+                immutable=True,
+                ttl=3600,
+            )
+        )
+        task = _building[key] = asyncio.ensure_future(build)
         task.add_done_callback(lambda t: _building.pop(key, None) if _building.get(key) is t else None)
     return await asyncio.shield(task)
 
