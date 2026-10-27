@@ -3,6 +3,7 @@
 import asyncio
 import difflib
 from datetime import datetime, timezone
+from json import JSONDecodeError
 from typing import Optional
 
 import httpx
@@ -16,9 +17,10 @@ from kohakuhub.lakefs_rest_client import get_lakefs_rest_client
 from kohakuhub.logger import get_logger
 from kohakuhub.auth.dependencies import get_optional_user
 from kohakuhub.auth.permissions import check_repo_read_permission
-from kohakuhub.utils.lakefs import resolve_lakefs_repo
+from kohakuhub.utils.lakefs import resolve_lakefs_repo, resolve_revision
 from kohakuhub.utils.commit_id import hub_metadata, hub_oid, hub_oids
 from kohakuhub.api.commit.availability import mark_lfs_statuses
+from kohakuhub.api.commit.count import count_commit_history
 from kohakuhub.api.repo.utils.hf import (
     ensure_revision_in_history,
     format_hf_datetime,
@@ -61,6 +63,47 @@ def _to_hf_commit_response(commit: dict, include_formatted: bool) -> dict:
             "message": message,
         }
     return payload
+
+
+@router.get("/{repo_type}s/{namespace}/{name}/commit-count/{branch:path}")
+async def get_commit_count(
+    repo_type: str,
+    namespace: str,
+    name: str,
+    branch: str,
+    user: User | None = Depends(get_optional_user),
+):
+    """Count this branch's reachable commits, independently of history pages."""
+    repo_id = f"{namespace}/{name}"
+    repo = get_repository(repo_type, namespace, name)
+    if not repo:
+        return hf_repo_not_found(repo_id, repo_type)
+    # Never expose a cached count before checking the current reader's access.
+    check_repo_read_permission(repo, user)
+    lakefs_repo = resolve_lakefs_repo(repo)
+    client = get_lakefs_rest_client()
+    try:
+        try:
+            head, _ = await resolve_revision(client, lakefs_repo, branch, repo=repo)
+        except JSONDecodeError:
+            raise  # malformed upstream JSON is not a missing revision
+        except ValueError as error:
+            # resolve_revision wraps a failed commit lookup. Preserve its
+            # cause so outages and malformed responses retain service errors.
+            if isinstance(error.__cause__, httpx.InvalidURL):
+                return hf_revision_not_found(repo_id, branch)
+            if error.__cause__ is not None:
+                raise error.__cause__ from error
+            return hf_revision_not_found(repo_id, branch)
+        count = await count_commit_history(client, lakefs_repo, head)
+        return {"count": count, "head": hub_oid(head)}
+    except httpx.HTTPError as error:
+        raise lakefs_error_to_http(
+            error, "Failed to count commits", repo_id=repo_id, revision=branch
+        ) from error
+    except Exception as error:
+        logger.exception(f"Failed to count commits for {repo_id}/{branch}", error)
+        return hf_server_error("Failed to count commits")
 
 
 @router.get("/{repo_type}s/{namespace}/{name}/commits/{branch:path}")
