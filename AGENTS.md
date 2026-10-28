@@ -29,7 +29,9 @@ in `NOTICE.md`, `LICENSE` and `provenance/` intact when editing inherited code.
   identifiers and client paths. Settings are read from `CHEESE_CAVE_<NAME>` first and fall back to
   `KOHAKU_HUB_<NAME>` (see `read_env` in `kohakuhub.envnames`, re-exported by `kohakuhub.config`; scripts and the entrypoint
   use the same module, shell scripts `scripts/dev/envnames.sh`); never remove the fallback. Renames of user-facing product
-  text use CheeseCave; KohakuHub appears only as attribution.
+  text use CheeseCave; KohakuHub appears only as attribution. The service's own identity is `cheesecave`
+  (`kohakuhub.identity`: `/api/version`, `whoami-v2`, git `agent=`); the fallback source type `kohakuhub`, which names a remote
+  KohakuHub server, and the author name of the git mirror's synthetic commit (part of a commit hash) stay as they are.
 - **Deployment.** Production deployment is a manual workflow on `main`. Do not change deployment
   targets, hosts or secrets from code.
 - **Documentation.** Keep English as the source of repository documents. Where a Chinese

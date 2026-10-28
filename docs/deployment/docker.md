@@ -54,7 +54,7 @@ CheeseCave/
 ```
 
 ```sh
-# Optional build identity; /api/version still uses its compatibility API identifier.
+# Optional build identity, reported by /api/version (its `api` is `cheesecave`).
 export CHEESE_CAVE_GIT_SHA="$(git rev-parse HEAD)"
 export CHEESE_CAVE_BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 export CHEESECAVE_WEB_GIT_SHA="$(git -C ../cheesecave-web rev-parse HEAD)"

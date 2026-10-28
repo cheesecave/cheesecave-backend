@@ -48,6 +48,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The service calls itself CheeseCave.** `GET /api/version` and `GET /api/whoami-v2` (`site`) say `"api": "cheesecave"` instead of
+  `"kohakuhub"`, report the version of the installed package instead of a written-in `0.0.1`, and name the site as the
+  administrator set it (it read the environment's name before, so a renamed site still said "KohakuHub"); `whoami-v2` carries
+  `build` too. How a client tells the kinds apart: `cheesecave` is CheeseCave, `kohakuhub` **with** `build` is an older
+  CheeseCave, `kohakuhub` **without** `build` is KohakuHub. The API title and root, the `agent=` of the git services (now
+  `cheesecave/<version>`) and the verification and invitation emails (they named "Kohaku Hub"; they now use the site name,
+  escaped in the HTML part) follow. Not changed: the fallback source type `kohakuhub` (it names a remote KohakuHub server) and the
+  author name of the git mirror's synthetic commit, which is part of a commit hash.
+
 - **Settings are `CHEESE_CAVE_<NAME>` environment variables everywhere; `KOHAKU_HUB_<NAME>` still works.** The application already read
   `CHEESE_CAVE_<NAME>` first and `KOHAKU_HUB_<NAME>` second. Now the container entrypoint (`docker/startup.py`), the database
   initialisation script of the LakeFS image, the dev and operator scripts, migration 008's `AUTO_MIGRATE`, and the test harness do too,

@@ -1,4 +1,4 @@
-"""Main FastAPI application for Kohaku Hub."""
+"""Main FastAPI application."""
 
 import uuid
 from contextlib import asynccontextmanager
@@ -43,6 +43,7 @@ from kohakuhub.api.quota import router as quota
 from kohakuhub.auth.dependencies import get_optional_user
 from kohakuhub.auth.session import SessionRenewalMiddleware
 from kohakuhub.envnames import legacy_advice
+from kohakuhub.identity import PRODUCT_NAME, SERVICE_VERSION
 from kohakuhub.api.git.errors import GitProtocolError, render_protocol_error
 from kohakuhub.auth.permissions import RepoReadDeniedError
 from kohakuhub.utils.s3 import init_storage
@@ -109,9 +110,9 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="Kohaku Hub",
+    title=PRODUCT_NAME,
     description="HuggingFace-compatible hub with LakeFS and S3 storage",
-    version="0.0.1",
+    version=SERVICE_VERSION,
     lifespan=lifespan,
 )
 
@@ -354,8 +355,8 @@ async def public_resolve_get(
 def root():
     """Root endpoint with API information."""
     return {
-        "name": "Kohaku Hub",
-        "version": "0.0.1",
+        "name": PRODUCT_NAME,
+        "version": SERVICE_VERSION,
         "description": "HuggingFace-compatible hub with LakeFS and S3 storage",
         "endpoints": {
             "api": cfg.app.api_base,

@@ -85,6 +85,7 @@ def test_send_verification_email_builds_multipart_message(monkeypatch):
     logger = DummyLogger([], [])
     FakeSMTP.instances = []
     _set_smtp_config(monkeypatch, enabled=True, use_tls=True)
+    monkeypatch.setattr(email_module, "site_name", lambda: "CheeseCave")
     monkeypatch.setattr(email_module, "logger", logger)
     monkeypatch.setattr(email_module.smtplib, "SMTP", FakeSMTP)
 
@@ -99,7 +100,8 @@ def test_send_verification_email_builds_multipart_message(monkeypatch):
     assert [part.get_content_subtype() for part in payloads] == ["plain", "html"]
     message_text = smtp.messages[0].as_string()
     assert "https://hub.local/api/auth/verify-email?token=token-2" in message_text
-    assert "Verify your Kohaku Hub account" in message_text
+    assert "Verify your CheeseCave account" in message_text
+    assert "Kohaku" not in message_text
     assert logger.exceptions == []
 
 
@@ -161,3 +163,44 @@ def test_send_org_invitation_email_supports_disabled_and_enabled_smtp(monkeypatc
     assert "acme-labs" in message_text
     assert "owner" in message_text
     assert "admin" in message_text
+
+
+def _sent_text(monkeypatch, send, *args):
+    FakeSMTP.instances = []
+    _set_smtp_config(monkeypatch, enabled=True)
+    monkeypatch.setattr(email_module, "logger", DummyLogger([], []))
+    monkeypatch.setattr(email_module.smtplib, "SMTP", FakeSMTP)
+    assert send(*args) is True
+    message = FakeSMTP.instances[-1].messages[0]
+    # decoded parts: the subject and both bodies, as a reader sees them
+    parts = [message["Subject"]] + [part.get_payload(decode=True).decode() for part in message.get_payload()]
+    return "\n".join(parts)
+
+
+def test_the_emails_speak_for_the_site_the_administrator_named(monkeypatch):
+    monkeypatch.setattr(email_module, "site_name", lambda: "DeepGHS Hub")
+
+    verify = _sent_text(monkeypatch, email_module.send_verification_email, "user@example.com", "owner", "t")
+    invite = _sent_text(
+        monkeypatch, email_module.send_org_invitation_email, "i@example.com", "acme", "owner", "tok", "admin"
+    )
+
+    assert "Verify your DeepGHS Hub account" in verify
+    assert "Welcome to DeepGHS Hub!" in verify
+    assert "The DeepGHS Hub Team" in verify
+    assert "DeepGHS Hub Team" in verify  # the plain-text signature
+    assert "invited to join acme on DeepGHS Hub" in invite
+    assert "on DeepGHS Hub as" in invite
+    for text in (verify, invite):
+        assert "Kohaku" not in text
+
+
+def test_a_site_name_cannot_inject_markup_into_the_html_part(monkeypatch):
+    monkeypatch.setattr(email_module, "site_name", lambda: "A&B <script>Hub")
+
+    verify = _sent_text(monkeypatch, email_module.send_verification_email, "user@example.com", "owner", "t")
+
+    html_part = verify.split("<!DOCTYPE html>", 1)[1]
+    assert "<script>" not in html_part
+    assert "A&amp;B &lt;script&gt;Hub" in html_part
+    assert "A&B <script>Hub" in verify.split("<!DOCTYPE html>", 1)[0]  # plain text and subject stay as written

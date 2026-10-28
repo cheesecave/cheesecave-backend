@@ -14,7 +14,7 @@ from test.kohakuhub.support.db import history_operations_need_postgres
 async def test_version_site_config_and_yaml_validation(client):
     version_response = await client.get("/api/version")
     assert version_response.status_code == 200
-    assert version_response.json()["api"] == "kohakuhub"
+    assert version_response.json()["api"] == "cheesecave"
 
     site_config_response = await client.get("/api/site-config")
     assert site_config_response.status_code == 200
@@ -373,8 +373,65 @@ def test_build_identity_reads_either_prefix_and_skips_an_empty_one(monkeypatch, 
 async def test_version_reports_the_build(client):
     response = await client.get("/api/version")
 
-    assert response.json()["api"] == "kohakuhub"
+    assert response.json()["api"] == "cheesecave"
     assert set(response.json()["build"]) == {"git_sha", "build_time"}
+
+
+async def test_version_names_the_service_the_way_a_client_reads_it(client):
+    """hfutils: ``cheesecave`` is CheeseCave; an older build said ``kohakuhub`` but also carried ``build``."""
+    from kohakuhub.identity import SERVICE_VERSION
+
+    info = (await client.get("/api/version")).json()
+
+    assert info["api"] == "cheesecave"
+    assert info["version"] == SERVICE_VERSION
+    assert "build" in info
+
+
+@pytest.fixture
+def site_named():
+    """Name the site for one test; the shared database is emptied of it afterwards."""
+    from kohakuhub.db import SiteBranding
+    from kohakuhub.site_branding import update_branding
+
+    yield lambda name: update_branding({"site_name": name})
+    SiteBranding.delete().execute()
+
+
+async def test_version_names_the_site_the_administrator_chose(client, site_named):
+    site_named("DeepGHS Hub")
+
+    assert (await client.get("/api/version")).json()["name"] == "DeepGHS Hub"
+
+
+async def test_whoami_says_who_serves_it_like_version_does(owner_client, site_named):
+    from kohakuhub.identity import SERVICE_VERSION
+
+    site_named("DeepGHS Hub")
+    version = (await owner_client.get("/api/version")).json()
+    site = (await owner_client.get("/api/whoami-v2")).json()["site"]
+
+    assert site == {
+        "name": "DeepGHS Hub",
+        "api": "cheesecave",
+        "version": SERVICE_VERSION,
+        "build": version["build"],
+    }
+
+
+async def test_the_root_and_the_api_description_name_the_product(client):
+    import importlib
+
+    from kohakuhub.identity import SERVICE_VERSION
+
+    app = importlib.import_module("kohakuhub.main").app
+    root = (await client.get("/")).json()
+
+    assert app.title == "CheeseCave"
+    assert app.version == SERVICE_VERSION
+    assert root["name"] == "CheeseCave"
+    assert root["version"] == SERVICE_VERSION
+    assert "Kohaku" not in str(root) and "Kohaku" not in app.title
 
 
 @pytest.mark.parametrize("key", ["repoType", "repo_type"])

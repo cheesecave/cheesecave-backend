@@ -7,6 +7,7 @@ import base64
 import hashlib
 import struct
 
+from kohakuhub.identity import SERVICE_VERSION, SITE_API
 from kohakuhub.logger import get_logger
 
 logger = get_logger("GIT")
@@ -195,7 +196,7 @@ class GitUploadPackHandler:
             "side-band-64k",
             "thin-pack",
             "ofs-delta",
-            "agent=kohakuhub/0.0.1",
+            f"agent={SITE_API}/{SERVICE_VERSION}",
         ]
 
     def get_service_info(self, refs: dict[str, str]) -> bytes:
@@ -301,7 +302,7 @@ class GitReceivePackHandler:
             "side-band-64k",
             "delete-refs",
             "ofs-delta",
-            "agent=kohakuhub/0.0.1",
+            f"agent={SITE_API}/{SERVICE_VERSION}",
         ]
 
     def get_service_info(self, refs: dict[str, str]) -> bytes:

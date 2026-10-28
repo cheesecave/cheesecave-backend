@@ -568,7 +568,7 @@ erDiagram
 | Endpoint | Method | Auth | Description |
 |----------|--------|------|-------------|
 | `/api/whoami-v2` | GET | ✓ | Get detailed current user info |
-| `/api/version` | GET | ✗ | Get API version information |
+| `/api/version` | GET | ✗ | Which service this is (`api: "cheesecave"`), its version, site name and build |
 | `/health` | GET | ✗ | Health check |
 | `/` | GET | ✗ | API information |
 

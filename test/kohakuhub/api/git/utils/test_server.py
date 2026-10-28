@@ -142,3 +142,14 @@ def test_parse_git_credentials_handles_valid_invalid_and_malformed_headers(monke
     )
     assert git_server.parse_git_credentials(bad) == (None, None)
     assert errors
+
+
+def test_both_git_services_announce_cheesecave_and_its_version():
+    from kohakuhub.identity import SERVICE_VERSION
+
+    upload = git_server.GitUploadPackHandler("/tmp/repo")
+    receive = git_server.GitReceivePackHandler("/tmp/repo")
+
+    for handler in (upload, receive):
+        assert f"agent=cheesecave/{SERVICE_VERSION}" in handler.capabilities
+        assert not any("kohakuhub" in capability for capability in handler.capabilities)

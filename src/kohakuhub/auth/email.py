@@ -3,8 +3,10 @@
 import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from html import escape
 
 from kohakuhub.config import cfg
+from kohakuhub.identity import site_name
 from kohakuhub.logger import get_logger
 
 logger = get_logger("EMAIL")
@@ -27,7 +29,9 @@ def send_verification_email(to_email: str, username: str, token: str) -> bool:
         )
         return True
 
-    subject = "Verify your Kohaku Hub account"
+    name = site_name()
+    html_name = escape(name)
+    subject = f"Verify your {name} account"
     verify_link = f"{cfg.app.base_url}/api/auth/verify-email?token={token}"
 
     # Plain text version (fallback)
@@ -43,7 +47,7 @@ This link will expire in 24 hours.
 If you didn't create this account, please ignore this email.
 
 Best regards,
-Kohaku Hub Team
+{name} Team
 """
 
     # HTML version (styled with table-based layout and inline CSS)
@@ -65,7 +69,7 @@ Kohaku Hub Team
                     <tr>
                         <td style="padding: 40px 40px 20px 40px; text-align: center; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 8px 8px 0 0;">
                             <h1 style="margin: 0; color: #ffffff; font-size: 28px; font-weight: 600;">
-                                🎉 Welcome to Kohaku Hub!
+                                🎉 Welcome to {html_name}!
                             </h1>
                         </td>
                     </tr>
@@ -78,7 +82,7 @@ Kohaku Hub Team
                             </p>
 
                             <p style="margin: 0 0 30px 0; font-size: 16px; line-height: 1.6; color: #555555;">
-                                Thank you for signing up! Please verify your email address to activate your account and start using Kohaku Hub.
+                                Thank you for signing up! Please verify your email address to activate your account and start using {html_name}.
                             </p>
 
                             <!-- CTA Button -->
@@ -121,7 +125,7 @@ Kohaku Hub Team
                         <td style="padding: 30px 40px; background-color: #f8f9fa; border-radius: 0 0 8px 8px; text-align: center;">
                             <p style="margin: 0 0 10px 0; font-size: 14px; color: #666666;">
                                 Best regards,<br>
-                                <strong>The Kohaku Hub Team</strong>
+                                <strong>The {html_name} Team</strong>
                             </p>
                             <p style="margin: 0; font-size: 12px; color: #999999;">
                                 This is an automated email, please do not reply.
@@ -134,7 +138,7 @@ Kohaku Hub Team
                 <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="max-width: 600px; margin: 20px auto 0 auto;">
                     <tr>
                         <td style="padding: 20px; text-align: center; font-size: 12px; color: #999999; line-height: 1.5;">
-                            © 2025 Kohaku Hub. All rights reserved.<br>
+                            © 2025 {html_name}. All rights reserved.<br>
                             You received this email because you registered an account.
                         </td>
                     </tr>
@@ -193,14 +197,16 @@ def send_org_invitation_email(
         )
         return True
 
-    subject = f"You've been invited to join {org_name} on Kohaku Hub"
+    name = site_name()
+    html_name = escape(name)
+    subject = f"You've been invited to join {org_name} on {name}"
     invite_link = f"{cfg.app.base_url}/invite/{token}"
 
     # Plain text version (fallback)
     text_body = f"""
 Hello,
 
-{inviter_username} has invited you to join the "{org_name}" organization on Kohaku Hub as a {role}.
+{inviter_username} has invited you to join the "{org_name}" organization on {name} as a {role}.
 
 Click the link below to accept this invitation:
 
@@ -213,7 +219,7 @@ If you don't have an account yet, you'll need to create one before accepting the
 If you weren't expecting this invitation, you can safely ignore this email.
 
 Best regards,
-Kohaku Hub Team
+{name} Team
 """
 
     # HTML version (styled with table-based layout and inline CSS)
@@ -248,7 +254,7 @@ Kohaku Hub Team
                             </p>
 
                             <p style="margin: 0 0 30px 0; font-size: 16px; line-height: 1.6; color: #555555;">
-                                <strong>{inviter_username}</strong> has invited you to join the <strong>{org_name}</strong> organization on Kohaku Hub as a <strong>{role}</strong>.
+                                <strong>{inviter_username}</strong> has invited you to join the <strong>{org_name}</strong> organization on {html_name} as a <strong>{role}</strong>.
                             </p>
 
                             <!-- Organization Info Box -->
@@ -308,7 +314,7 @@ Kohaku Hub Team
                         <td style="padding: 30px 40px; background-color: #f8f9fa; border-radius: 0 0 8px 8px; text-align: center;">
                             <p style="margin: 0 0 10px 0; font-size: 14px; color: #666666;">
                                 Best regards,<br>
-                                <strong>The Kohaku Hub Team</strong>
+                                <strong>The {html_name} Team</strong>
                             </p>
                             <p style="margin: 0; font-size: 12px; color: #999999;">
                                 This is an automated email, please do not reply.
@@ -321,7 +327,7 @@ Kohaku Hub Team
                 <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="max-width: 600px; margin: 20px auto 0 auto;">
                     <tr>
                         <td style="padding: 20px; text-align: center; font-size: 12px; color: #999999; line-height: 1.5;">
-                            © 2025 Kohaku Hub. All rights reserved.<br>
+                            © 2025 {html_name}. All rights reserved.<br>
                             You received this email because someone invited you to an organization.
                         </td>
                     </tr>
