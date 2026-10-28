@@ -1,4 +1,4 @@
-"""Utility API endpoints for Kohaku Hub."""
+"""Utility API endpoints."""
 
 import os
 from pathlib import Path
@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from kohakuhub.api.utils.accounts import avatar_url
 from kohakuhub.config import cfg
 from kohakuhub.envnames import read_env_nonempty
+from kohakuhub.identity import SERVICE_VERSION, SITE_API, site_name
 from kohakuhub.repo_card import check_readme
 from kohakuhub.user_preferences import get_preferences
 from kohakuhub.db import User, UserOrganization
@@ -57,21 +58,19 @@ def build_identity(start: Path | None = None) -> dict:
 
 @router.get("/version")
 def get_version():
-    """Get KohakuHub version and site information.
+    """Which service this is, and which code it runs.
 
-    This endpoint helps client libraries (like hfutils) detect if they're
-    connecting to KohakuHub vs HuggingFace Hub.
-
-    HuggingFace Hub returns 404 for this endpoint.
-    KohakuHub returns site identification and version info.
+    Client libraries (like hfutils) read this to tell the kinds of hub apart; huggingface.co
+    answers 401. The ``api`` is ``cheesecave``. An older build said ``kohakuhub`` here but also
+    carried ``build``, which KohakuHub never did (see ``kohakuhub.identity``).
 
     Returns:
-        Site identification and version information
+        Site identification, version and build
     """
     return {
-        "api": "kohakuhub",
-        "version": "0.0.1",
-        "name": cfg.app.site_name,
+        "api": SITE_API,
+        "version": SERVICE_VERSION,
+        "name": site_name(),
         "build": build_identity(),
     }
 
@@ -170,16 +169,17 @@ def whoami_v2(user: User | None = Depends(get_optional_user)):
         "canPay": False,
         "isPro": False,
         "orgs": orgs_list,
-        # KohakuHub-specific: what the reader chose for themselves, so the page does not flash the site's default
+        # CheeseCave-specific: what the reader chose for themselves, so the page does not flash the site's default
         "preferences": get_preferences(user),
         "auth": {
             "type": "access_token",
             "accessToken": {"displayName": "Auto-generated token", "role": "write"},
         },
-        # KohakuHub-specific fields
+        # CheeseCave-specific fields: the same identity as /api/version
         "site": {
-            "name": cfg.app.site_name,  # Configurable site name
-            "api": "kohakuhub",  # Hardcoded API identifier
-            "version": "0.0.1",  # Hardcoded version
+            "name": site_name(),
+            "api": SITE_API,
+            "version": SERVICE_VERSION,
+            "build": build_identity(),
         },
     }

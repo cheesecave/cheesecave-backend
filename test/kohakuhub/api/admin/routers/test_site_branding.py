@@ -86,8 +86,11 @@ def test_defaults_and_text_override_persist_across_connections(branding_client):
     config = session.get("/api/site-config").json()
     assert config["site_name"] == "Example Hub"
     assert "header_logo" not in config and "favicon" not in config
-    # The separate API product-identification endpoint keeps its original behavior.
-    assert session.get("/api/version").json()["name"] == "Configured Hub"
+    # The identification endpoint names the site the administrator named too (it used to keep the
+    # environment's name, so a renamed site still said "Configured Hub" to a client).
+    version = session.get("/api/version").json()
+    assert version["name"] == "Example Hub"
+    assert version["api"] == "cheesecave"
 
 
 def test_assets_are_independent_normalized_and_resettable(branding_client):
