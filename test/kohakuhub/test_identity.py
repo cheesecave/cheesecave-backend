@@ -37,9 +37,9 @@ def test_the_site_name_follows_what_the_administrator_set(monkeypatch, db_fresh)
     from kohakuhub.site_branding import update_branding
 
     monkeypatch.setattr(cfg.app, "site_name", "Configured Hub")
-    update_branding({"site_name": "DeepGHS Hub"})
+    update_branding({"site_name": "Example Hub"})
 
-    assert identity.site_name() == "DeepGHS Hub"
+    assert identity.site_name() == "Example Hub"
 
 
 @pytest.mark.parametrize("blank", ["", "   ", None])

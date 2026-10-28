@@ -51,7 +51,7 @@ Get authenticated user information in HuggingFace-compatible format.
     }
   },
   "site": {
-    "name": "DeepGHS Hub",
+    "name": "Example Hub",
     "api": "cheesecave",
     "version": "0.0.1",
     "build": { "git_sha": "12e65aa…", "build_time": "2026-10-27T12:15:55+00:00" }
@@ -59,8 +59,8 @@ Get authenticated user information in HuggingFace-compatible format.
 }
 ```
 
-`site` is the same identity `GET /api/version` returns. `name` is the site name the administrator set (else the
-configured one), `api` is `cheesecave`, `version` is the version of the backend package, and `build` says which code runs.
+`site` is the same identity `GET /api/version` returns. `name` is the name of this installation (the site name the administrator set, else the
+configured one; the product is always CheeseCave), `api` is `cheesecave`, `version` is the version of the backend package, and `build` says which code runs.
 
 **How a client tells the kinds of hub apart** (what hfutils does with `/api/version`):
 

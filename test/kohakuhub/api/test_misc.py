@@ -399,20 +399,20 @@ def site_named():
 
 
 async def test_version_names_the_site_the_administrator_chose(client, site_named):
-    site_named("DeepGHS Hub")
+    site_named("Example Hub")
 
-    assert (await client.get("/api/version")).json()["name"] == "DeepGHS Hub"
+    assert (await client.get("/api/version")).json()["name"] == "Example Hub"
 
 
 async def test_whoami_says_who_serves_it_like_version_does(owner_client, site_named):
     from kohakuhub.identity import SERVICE_VERSION
 
-    site_named("DeepGHS Hub")
+    site_named("Example Hub")
     version = (await owner_client.get("/api/version")).json()
     site = (await owner_client.get("/api/whoami-v2")).json()["site"]
 
     assert site == {
-        "name": "DeepGHS Hub",
+        "name": "Example Hub",
         "api": "cheesecave",
         "version": SERVICE_VERSION,
         "build": version["build"],

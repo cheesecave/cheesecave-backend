@@ -178,19 +178,19 @@ def _sent_text(monkeypatch, send, *args):
 
 
 def test_the_emails_speak_for_the_site_the_administrator_named(monkeypatch):
-    monkeypatch.setattr(email_module, "site_name", lambda: "DeepGHS Hub")
+    monkeypatch.setattr(email_module, "site_name", lambda: "Example Hub")
 
     verify = _sent_text(monkeypatch, email_module.send_verification_email, "user@example.com", "owner", "t")
     invite = _sent_text(
         monkeypatch, email_module.send_org_invitation_email, "i@example.com", "acme", "owner", "tok", "admin"
     )
 
-    assert "Verify your DeepGHS Hub account" in verify
-    assert "Welcome to DeepGHS Hub!" in verify
-    assert "The DeepGHS Hub Team" in verify
-    assert "DeepGHS Hub Team" in verify  # the plain-text signature
-    assert "invited to join acme on DeepGHS Hub" in invite
-    assert "on DeepGHS Hub as" in invite
+    assert "Verify your Example Hub account" in verify
+    assert "Welcome to Example Hub!" in verify
+    assert "The Example Hub Team" in verify
+    assert "Example Hub Team" in verify  # the plain-text signature
+    assert "invited to join acme on Example Hub" in invite
+    assert "on Example Hub as" in invite
     for text in (verify, invite):
         assert "Kohaku" not in text
 
