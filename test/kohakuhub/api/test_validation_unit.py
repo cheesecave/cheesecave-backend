@@ -77,6 +77,15 @@ async def test_check_name_availability_rejects_reserved_names():
 
 
 @pytest.mark.asyncio
+async def test_collections_is_a_reserved_name_because_it_is_a_route():
+    response = await validation_api.check_name_availability(
+        validation_api.CheckNameRequest(name="Collections")
+    )
+
+    assert response.available is False and "reserved" in response.message
+
+
+@pytest.mark.asyncio
 async def test_check_name_availability_covers_repository_normalized_conflict_and_available():
     owner = make_user("owner")
     make_repo(owner, "My-Repo")

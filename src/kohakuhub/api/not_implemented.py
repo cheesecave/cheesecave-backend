@@ -16,7 +16,6 @@ that live in the PR #18 matrix as "Not Supported / Not Claimed":
 
 * Discussions / Pull Requests
 * Space runtime management (restart / sleep / hardware / storage / variables / secrets)
-* Collections
 * Webhooks
 * Papers, Jobs, Space logs / templates / hardware list
 * Gated-access requests (``user-access-request``; the routes real gating will take over)
@@ -56,8 +55,6 @@ _SPACE_RUNTIME_REASON = (
     "CheeseCave does not manage Space runtimes, hardware, secrets, or variables "
     "through the hub API. Configure your deployment environment directly."
 )
-
-_COLLECTIONS_REASON = "Collections are not implemented by CheeseCave."
 
 _WEBHOOKS_REASON = "Webhooks are not implemented by CheeseCave."
 
@@ -137,28 +134,6 @@ async def space_runtime(
         f"/spaces/{namespace}/{name}/{subresource}",
         _SPACE_RUNTIME_REASON,
     )
-
-
-# ---------------------------------------------------------------------------
-# Collections
-# ---------------------------------------------------------------------------
-
-@router.api_route(
-    "/collections",
-    methods=["GET", "POST"],
-    include_in_schema=False,
-)
-async def collections_root(request: Request):
-    return hf_not_implemented("collections", _COLLECTIONS_REASON)
-
-
-@router.api_route(
-    "/collections/{path:path}",
-    methods=["GET", "POST", "PUT", "DELETE"],
-    include_in_schema=False,
-)
-async def collections_subpath(path: str, request: Request):
-    return hf_not_implemented("collections", _COLLECTIONS_REASON)
 
 
 # ---------------------------------------------------------------------------

@@ -69,6 +69,8 @@ In Compose, the shipped files read `CHEESE_CAVE_<NAME>` from `.env` first and `K
 | `CHEESE_CAVE_LFS_MULTIPART_CHUNK_SIZE_BYTES` | The chunk size for LFS multipart uploads. | `52428800` (50MB) |
 | `CHEESE_CAVE_LFS_KEEP_VERSIONS` | The number of LFS file versions to keep during garbage collection. | `5` |
 | `CHEESE_CAVE_LFS_AUTO_GC` | If `true`, LFS versions beyond the keep count are collected in the background. | `false` |
+| `CHEESE_CAVE_COLLECTION_MAX_ITEMS` | The most items one collection can hold. `0` means no limit. Hugging Face documents no limit (the largest public collection seen has 588 items). | `1000` |
+| `CHEESE_CAVE_COLLECTION_MAX_PER_OWNER` | The most collections one user or organization can own. `0` means no limit (the owner with the most on Hugging Face has 138). | `500` |
 | `CHEESE_CAVE_USAGE_RECOUNT_INTERVAL_HOURS` | Repeats the full storage usage recount (`usage.recount`) every this many hours. Usage is kept up to date as repositories change; this is a safety net. `0` turns it off. | `0` |
 
 ## Authentication & Session Settings

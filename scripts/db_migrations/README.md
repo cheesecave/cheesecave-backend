@@ -419,3 +419,15 @@ Rollback facts and the command are in
   back is leaving it. Nothing is backfilled. `CREATE TABLE IF NOT EXISTS` and two indexes; two containers starting together take turns
   on an advisory lock. A migration test of an earlier number must drop this table with its own (see the fixture of 040), or the
   earlier migration looks superseded.
+
+## Collections: 042
+
+- **042** (`042_collections.py`) creates three tables. `collection` is a curated list (`oid`, the 24 hex characters that end its
+  public slug; `owner_id`, a user or an organization; `title`, `slug` (the title's own slug, unique per owner), `description`, `theme`,
+  `private`, `position` in the owner's list, `upvotes_count`, `created_at`, `updated_at`). `collectionitem` is one entry (`oid`, the
+  `_id` of the item in the API; `collection_id`; `item_type`; `repository_id` or `child_id`, another collection, exactly one of them by
+  a CHECK; `position`; `note`); it leaves with its collection, its repository and the collection it refers to, by `ON DELETE CASCADE`.
+  `collectionupvote` is one row per user and collection.
+- **Tables of their own on purpose**, as for 035, 037 to 041: an older release does not know them and ignores them, so rolling back is
+  leaving them. Nothing is backfilled. `CREATE TABLE IF NOT EXISTS`; two containers starting together take turns on an advisory lock.
+  A migration test of an earlier number drops 041's table with its own, which also makes this one count as not applied.

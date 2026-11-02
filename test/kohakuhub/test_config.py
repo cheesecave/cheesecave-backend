@@ -141,6 +141,8 @@ def test_load_config_merges_file_and_environment(monkeypatch):
     monkeypatch.setenv("KOHAKU_HUB_LFS_MULTIPART_CHUNK_SIZE_BYTES", "1024")
     monkeypatch.setenv("KOHAKU_HUB_LFS_KEEP_VERSIONS", "6")
     monkeypatch.setenv("KOHAKU_HUB_LFS_AUTO_GC", "true")
+    monkeypatch.setenv("KOHAKU_HUB_COLLECTION_MAX_ITEMS", "250")
+    monkeypatch.setenv("KOHAKU_HUB_COLLECTION_MAX_PER_OWNER", "0")
     monkeypatch.setenv("KOHAKU_HUB_USAGE_RECOUNT_INTERVAL_HOURS", "12.5")
     monkeypatch.setenv("KOHAKU_HUB_SITE_NAME", "Env Hub")
     monkeypatch.setenv("KOHAKU_HUB_DEBUG_LOG_PAYLOADS", "true")
@@ -210,6 +212,8 @@ def test_load_config_merges_file_and_environment(monkeypatch):
     assert cfg.app.lfs_multipart_chunk_size_bytes == 1024
     assert cfg.app.lfs_keep_versions == 6
     assert cfg.app.lfs_auto_gc is True
+    assert cfg.app.collection_max_items == 250
+    assert cfg.app.collection_max_per_owner == 0          # 0 = no limit
     assert cfg.app.usage_recount_interval_hours == 12.5
     assert cfg.app.site_name == "Env Hub"
     assert cfg.app.debug_log_payloads is True
@@ -337,6 +341,18 @@ def test_load_config_worker_env_vars(monkeypatch):
     assert cfg.worker.succeeded_retention_days == 3
     assert cfg.worker.failed_retention_days == 90
     assert cfg.worker.queues == ["default", "bulk"]
+    hub_config.load_config.cache_clear()
+
+
+def test_collection_limits_default_to_a_generous_number(monkeypatch):
+    for name in ("COLLECTION_MAX_ITEMS", "COLLECTION_MAX_PER_OWNER"):
+        monkeypatch.delenv(f"CHEESE_CAVE_{name}", raising=False)
+        monkeypatch.delenv(f"KOHAKU_HUB_{name}", raising=False)
+    hub_config.load_config.cache_clear()
+
+    cfg = hub_config.load_config()
+
+    assert (cfg.app.collection_max_items, cfg.app.collection_max_per_owner) == (1000, 500)
     hub_config.load_config.cache_clear()
 
 

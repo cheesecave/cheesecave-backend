@@ -457,7 +457,7 @@ you can read (a `404` would look like a bug). The surfaces:
 | Feature | Routes | What the message says |
 | --- | --- | --- |
 | Discussions and pull requests, `create_pr` | `/api/{type}s/{repo}/discussions...` | use an external issue tracker |
-| Collections | `/api/collections...` | not implemented |
+| Collections | `/api/collections...` | supported: see [collections](collections.md) |
 | Webhooks | `/api/settings/webhooks...` | not implemented |
 | Space runtime, secrets, variables, hardware, pause, restart | `/api/spaces/{repo}/runtime`, `.../secrets`, ... | configure your deployment directly |
 | Space logs, Space templates, the hardware list | `/api/spaces/{repo}/logs/{run\|build}`, `/api/spaces/templates`, `/api/spaces/hardware` | same |

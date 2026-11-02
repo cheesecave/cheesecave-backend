@@ -645,6 +645,67 @@ class RepositoryLike(BaseModel):
         indexes = ((("repository", "user"), True),)  # UNIQUE - can't like twice
 
 
+class Collection(BaseModel):
+    """A curated list of repositories (and other collections), like a Hugging Face collection.
+
+    ``oid`` is the 24-hex id that ends the public slug (``owner/title-slug-<oid>``); ``slug`` is the title's
+    own slug, unique per owner, which is also the short form of the link.
+    """
+
+    id = AutoField()
+    oid = CharField(max_length=24, unique=True, index=True)
+    owner = ForeignKeyField(User, backref="collections", on_delete="CASCADE", index=True)
+    title = CharField(max_length=60)
+    slug = CharField(max_length=80, index=True)
+    description = CharField(max_length=150, null=True)
+    theme = CharField(max_length=16)
+    private = BooleanField(default=False, index=True)
+    position = IntegerField(default=0)  # place in the owner's list of collections
+    upvotes_count = IntegerField(default=0)
+    created_at = DateTimeField(default=partial(datetime.now, tz=timezone.utc))
+    updated_at = DateTimeField(default=partial(datetime.now, tz=timezone.utc), index=True)
+
+    class Meta:
+        indexes = ((("owner", "slug"), True),)  # one title slug per owner
+
+
+class CollectionItem(BaseModel):
+    """One entry of a collection: a repository, or another collection (a reference, never expanded)."""
+
+    id = AutoField()
+    oid = CharField(max_length=24, unique=True, index=True)  # the ``_id`` of the item in the API
+    collection = ForeignKeyField(Collection, backref="items", on_delete="CASCADE", index=True)
+    item_type = CharField(max_length=16)  # model, dataset, space or collection
+    repository = ForeignKeyField(
+        Repository, backref="collection_items", on_delete="CASCADE", null=True, index=True
+    )
+    child = ForeignKeyField(
+        Collection, backref="referenced_by", on_delete="CASCADE", null=True, index=True
+    )
+    position = IntegerField(default=0)
+    note = CharField(max_length=500, null=True)
+    created_at = DateTimeField(default=partial(datetime.now, tz=timezone.utc))
+
+    class Meta:
+        indexes = (
+            (("collection", "repository"), True),
+            (("collection", "child"), True),
+        )
+        # an item is a repository or another collection, never both and never neither (a repository deleted by
+        # peewee's "recursive" delete would leave neither: the rows leave with their repository by ON DELETE CASCADE)
+        constraints = [Check('("repository_id" IS NULL) <> ("child_id" IS NULL)')]
+
+
+class CollectionUpvote(BaseModel):
+    id = AutoField()
+    collection = ForeignKeyField(Collection, backref="upvotes", on_delete="CASCADE", index=True)
+    user = ForeignKeyField(User, backref="collection_upvotes", on_delete="CASCADE", index=True)
+    created_at = DateTimeField(default=partial(datetime.now, tz=timezone.utc), index=True)
+
+    class Meta:
+        indexes = ((("collection", "user"), True),)
+
+
 class DownloadSession(BaseModel):
     """Track download sessions for deduplication and statistics.
 
@@ -1081,6 +1142,9 @@ def init_db():
             RepositoryWrite,
             BranchCommitLock,
             AdminAuthClient,
+            Collection,
+            CollectionItem,
+            CollectionUpvote,
         ],
         safe=True,
     )
