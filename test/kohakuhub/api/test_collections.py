@@ -689,17 +689,22 @@ def test_private_must_be_true_or_false(api, world):
 
 
 def test_the_same_title_created_a_moment_ago_by_someone_else_is_still_409(api, world, monkeypatch):
-    first = create(api, world, title="Race").json()
-    real = Collection.get_or_none
-    calls = {"n": 0}
+    class AppSettings:
+        """Reads the limit after the check for an existing slug, which is when the other request lands."""
 
-    def blind_once(*args, **kwargs):                  # the check for an existing slug finds nothing, as if the other request came later
-        calls["n"] += 1
-        return None if calls["n"] == 1 else real(*args, **kwargs)
+        def __getattr__(self, name):
+            return getattr(cfg.app, name)
 
-    monkeypatch.setattr(Collection, "get_or_none", blind_once)
+        @property
+        def collection_max_per_owner(self):
+            if not Collection.select().where(Collection.slug == "race").exists():
+                Collection.create(oid=collections_api.new_oid(), owner=world.alice, title="Race", slug="race", theme="green")
+            return 0
+
+    monkeypatch.setattr(collections_api, "cfg", SimpleNamespace(app=AppSettings()))
     response = create(api, world, title="Race")
-    assert response.status_code == 409 and response.json()["slug"] == first["slug"]
+    assert response.status_code == 409
+    assert response.json()["slug"].startswith("alice/race-")
 
 
 def test_an_item_is_a_repository_or_a_collection_never_both_or_neither(db_committed, world):
