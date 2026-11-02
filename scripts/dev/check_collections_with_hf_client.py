@@ -159,6 +159,20 @@ def _():
     assert status_of(lambda: list(anon.list_collections(sort="newest"))) == 400
 
 
+@check("the item filter does not reveal a private repository (it matches only what the caller can read)")
+def _():
+    leak = alice.create_collection(f"Leak check {tag}", private=False)     # a PUBLIC collection that holds a PRIVATE repository
+    alice.add_collection_item(leak.slug, "alice/wip-private", "model")
+    try:
+        assert leak.slug not in [c.slug for c in anon.list_collections(item="models/alice/wip-private")]
+        assert leak.slug not in [c.slug for c in mika.list_collections(item="models/alice/wip-private")]
+        assert leak.slug in [c.slug for c in alice.list_collections(item="models/alice/wip-private")]
+        # and the repository itself is not in the collection for those who cannot read it
+        assert anon.get_collection(leak.slug).items == []
+    finally:
+        alice.delete_collection(leak.slug)
+
+
 @check("delete_collection_item: missing item raises, missing_ok=True does not")
 def _():
     col = alice.get_collection(state["slug"])

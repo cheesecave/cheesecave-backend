@@ -620,7 +620,10 @@ async def list_collections(request: Request, user: User | None = Depends(get_opt
         hit = (
             CollectionItem.select(CollectionItem.collection)
             .join(Repository, on=(CollectionItem.repository == Repository.id))
-            .where((Repository.repo_type == repo_type) & (Repository.namespace == ns) & (Repository.name == name))
+            .where(
+                (Repository.repo_type == repo_type) & (Repository.namespace == ns) & (Repository.name == name)
+                & repository_read_predicate(user)   # a repository the caller cannot read matches nothing, as if it did not exist
+            )
         )
         query = query.where(Collection.id.in_(hit))
     if sort == "position":
