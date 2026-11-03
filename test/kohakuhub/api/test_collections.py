@@ -36,16 +36,15 @@ SLUG = re.compile(r"^(?P<owner>[^/]+)/(?P<title>[^/]+)-(?P<oid>[0-9a-f]{24})$")
 # ---------------------------------------------------------------- the world
 
 @pytest.fixture
-def api(db_dual, monkeypatch):
-    monkeypatch.setattr(collections_api, "db", db_dual)     # the routes' transactions on the database of the test
+def api(db_committed, monkeypatch):
+    monkeypatch.setattr(collections_api, "db", db_committed)     # the routes' transactions on the database of the test
     app = FastAPI()
     app.include_router(collections_api.router, prefix="/api")
     with TestClient(app, follow_redirects=False) as client:
         yield client
 
 
-@pytest.fixture
-def world(db_dual):
+def build_world():
     """alice owns repositories and collections; the organization lab has a member, a visitor and an outsider."""
     w = SimpleNamespace()
     w.alice, w.mika, w.guest, w.stranger = (make_user(n) for n in ("alice", "mika", "guest", "stranger"))
@@ -66,6 +65,11 @@ def world(db_dual):
         RepositoryMetadata.create(repository=repo, metadata=json.dumps(meta), state="ready", main_sha="a" * 40)
     make_commit(w.model, "c" * 40, created_at=datetime(2026, 10, 1, 12, 30, 45, tzinfo=timezone.utc))
     return w
+
+
+@pytest.fixture
+def world(db_committed):
+    return build_world()
 
 
 def auth(world, who):
@@ -790,7 +794,7 @@ def test_the_same_title_created_a_moment_ago_by_someone_else_is_still_409(api, w
     assert response.json()["slug"].startswith("alice/race-")
 
 
-def test_an_item_is_a_repository_or_a_collection_never_both_or_neither(db_dual, world):
+def test_an_item_is_a_repository_or_a_collection_never_both_or_neither(db_committed, world):
     from peewee import IntegrityError
     col = Collection.create(oid="a" * 24, owner=world.alice, title="Check", slug="check", theme="green")
     other = Collection.create(oid="b" * 24, owner=world.alice, title="Other", slug="other", theme="green")
