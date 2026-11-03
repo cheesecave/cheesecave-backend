@@ -55,6 +55,15 @@ async def _status_of(func, *args, **kwargs):
         return err.response.status_code
 
 
+async def _refusal(func, *args, **kwargs):
+    """-> (status, text) of what the client raises: it must be an ``HfHubHTTPError`` and say what the server said."""
+    try:
+        await _run(func, *args, **kwargs)
+    except HfHubHTTPError as err:
+        return err.response.status_code, str(err)
+    return 200, ""
+
+
 async def _repos(api):
     """The four repositories the collections hold: model, dataset, space and a private model."""
     for repo_id, repo_type, private in (
@@ -262,3 +271,78 @@ async def test_list_collections_takes_several_owners_and_several_items(live_serv
     assert first.slug in items and second.slug in items
     only = await _run(lambda: [c.slug for c in api.list_collections(item=f"datasets/{DATASET}", limit=100)])
     assert second.slug in only and first.slug not in only
+
+
+@pytest.mark.hf_client
+async def test_every_refusal_reaches_the_client_as_an_HfHubHTTPError_with_its_status_and_the_servers_words(
+    live_server_url, hf_api_token, outsider_hf_api_token
+):
+    api = _api(live_server_url, hf_api_token)
+    outsider = _api(live_server_url, outsider_hf_api_token)
+    anonymous = HfApi(endpoint=live_server_url, token=False)
+    await _repos(api)
+    col = await _run(api.create_collection, "Hf col refused")
+    col = await _run(api.add_collection_item, col.slug, MODEL, "model")
+    item = col.items[0].item_object_id
+    other = await _run(api.create_collection, "Hf col refused other")
+    theirs = await _run(outsider.create_collection, "Hf col refused theirs")
+    hidden = await _run(api.create_collection, "Hf col refused hidden", private=True)
+    missing = "owner/hf-col-none-" + "0" * 24
+    cases = [  # (what is asked, the status the client reports, a word of the server's message that the client shows)
+        (api.get_collection, (missing,), 404, ""),
+        (outsider.get_collection, (hidden.slug,), 404, ""),
+        (anonymous.get_collection, (hidden.slug,), 404, ""),
+        (api.create_collection, ("Hf col refused",), 409, "already exists"),
+        (api.create_collection, ("",), 400, "title"),
+        (api.create_collection, ("x" * 61,), 400, "title"),
+        (outsider.create_collection, ("Hf col refused ns",), 403, ""),  # a namespace the caller may not write in
+        (api.add_collection_item, (col.slug, "owner/hf-col-none", "model"), 404, "not found"),
+        (outsider.add_collection_item, (theirs.slug, PRIVATE, "model"), 404, "not found"),
+        (api.add_collection_item, (col.slug, "2307.09288", "paper"), 501, "not supported"),
+        (api.add_collection_item, (col.slug, col.slug, "collection"), 400, "itself"),
+        (api.add_collection_item, (col.slug, MODEL, "model"), 409, "already"),
+        (api.add_collection_item, (other.slug, MODEL, "model"), 400, "note"),
+        (outsider.add_collection_item, (col.slug, MODEL, "model"), 403, ""),
+        (api.update_collection_item, (col.slug, "0" * 24), 404, ""),
+        (outsider.update_collection_item, (col.slug, item), 403, ""),
+        (api.update_collection_metadata, (col.slug,), 400, "theme"),
+        (api.update_collection_metadata, (other.slug,), 409, ""),
+        (outsider.update_collection_metadata, (col.slug,), 403, ""),
+        (outsider.delete_collection, (col.slug,), 403, ""),
+        (api.delete_collection_item, (col.slug, "0" * 24), 404, ""),
+    ]
+    kwargs = {  # the arguments that make a call a refusal and are not positional
+        (api.add_collection_item, (other.slug, MODEL, "model")): {"note": "n" * 501},
+        (api.update_collection_item, (col.slug, "0" * 24)): {"note": "x"},
+        (outsider.update_collection_item, (col.slug, item)): {"note": "x"},
+        (api.update_collection_metadata, (col.slug,)): {"theme": "mauve"},
+        (api.update_collection_metadata, (other.slug,)): {"title": "Hf col refused"},
+        (outsider.update_collection_metadata, (col.slug,)): {"title": "x"},
+        (outsider.create_collection, ("Hf col refused ns",)): {"namespace": "owner"},
+    }
+    for func, args, status, words in cases:
+        got, text = await _refusal(func, *args, **kwargs.get((func, args), {}))
+        assert got == status, (func.__name__, args, got, text)
+        assert words in text.lower(), (func.__name__, args, text)
+    assert await _status_of(anonymous.create_collection, "Hf col refused anon", namespace="owner") == 401
+    for bad in ({"sort": "newest"}, {"limit": 101}, {"item": "nonsense"}):
+        got, text = await _refusal(lambda bad=bad: list(anonymous.list_collections(**bad)))
+        assert got == 400, (bad, got, text)
+
+
+@pytest.mark.hf_client
+async def test_a_write_through_another_title_prefix_follows_the_redirect_in_every_client(live_server_url, hf_api_token):
+    api = _api(live_server_url, hf_api_token)
+    await _repos(api)
+    col = await _run(api.create_collection, "Hf col redirect")
+    col = await _run(api.add_collection_item, col.slug, MODEL, "model")
+    # the same owner and id under another title: the server answers 307 to the canonical slug, and a write must follow it
+    other_title = f"owner/something-else-{col.slug[-24:]}"
+    renamed = await _run(api.update_collection_metadata, other_title, description="through a redirect")
+    assert renamed.description == "through a redirect" and renamed.slug == col.slug
+    await _run(api.update_collection_item, other_title, col.items[0].item_object_id, note="through a redirect")
+    assert (await _run(api.get_collection, other_title)).items[0].note == "through a redirect"
+    again = await _run(api.add_collection_item, other_title, MODEL, "model", exists_ok=True)
+    assert len(again.items) == 1
+    await _run(api.delete_collection, other_title)
+    assert await _status_of(api.get_collection, col.slug) == 404
