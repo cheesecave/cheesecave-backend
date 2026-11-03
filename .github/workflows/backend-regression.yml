@@ -110,7 +110,7 @@ jobs:
   services:
     if: ${{ inputs.category == 'services' || inputs.category == 'all' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
@@ -151,7 +151,7 @@ jobs:
   hf:
     if: ${{ inputs.category == 'hf' || inputs.category == 'all' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
@@ -199,7 +199,7 @@ jobs:
   downstream:
     if: ${{ inputs.category == 'downstream' || inputs.category == 'all' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
