@@ -243,6 +243,15 @@ def _upvoted(col: Collection, user: User | None) -> bool:
     ).exists()
 
 
+def _card_text(meta: dict, key: str, default: str, first_of_a_list: bool = False) -> str:
+    """A text of a repository card, which anyone writes: a non-empty text, else the default. A ``pipeline_tag`` written as a
+    list of one text is seen on a real model, so for that one the first text of a list counts."""
+    value = meta.get(key)
+    if first_of_a_list and isinstance(value, list) and value:
+        value = value[0]
+    return value if isinstance(value, str) and value else default
+
+
 def _serialize_item(row: CollectionItem, info: dict, user: User | None, liked: set) -> dict:
     out = {"_id": row.oid, "position": row.position, "type": row.item_type}
     if row.note:
@@ -250,7 +259,7 @@ def _serialize_item(row: CollectionItem, info: dict, user: User | None, liked: s
     if row.repository_id:
         repo = row.repository
         data = info[repo.id]
-        meta = data.get("metadata") or {}
+        meta = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}   # a card can hold anything
         out.update({
             "author": repo.namespace, "id": repo.full_id, "repoType": repo.repo_type, "private": repo.private,
             "likes": repo.likes_count, "lastModified": _iso(datetime.fromisoformat(data["lastModified"])),
@@ -262,10 +271,11 @@ def _serialize_item(row: CollectionItem, info: dict, user: User | None, liked: s
         # `tags` except a Space.
         if repo.repo_type == "space":
             out.update({
-                "colorFrom": meta.get("colorFrom", "gray"), "colorTo": meta.get("colorTo", "gray"),
-                "emoji": meta.get("emoji", "🧀"), "title": meta.get("title", repo.name), "createdAt": _iso(repo.created_at),
+                "colorFrom": _card_text(meta, "colorFrom", "gray"), "colorTo": _card_text(meta, "colorTo", "gray"),
+                "emoji": _card_text(meta, "emoji", "🧀"), "title": _card_text(meta, "title", repo.name),
+                "createdAt": _iso(repo.created_at),
                 "pinned": False, "featured": False, "disabled": False, "visibility": "private" if repo.private else "public",
-                "tags": list(meta.get("tags", [])),
+                "tags": [tag for tag in meta["tags"] if isinstance(tag, str)] if isinstance(meta.get("tags"), list) else [],
                 "runtime": {"stage": "STOPPED", "hardware": {"current": None, "requested": None}, "replicas": {"current": None, "requested": 1}},   # CheeseCave does not run Spaces
             })
             if meta.get("sdk") in ("gradio", "docker", "static", "streamlit"):
@@ -274,8 +284,9 @@ def _serialize_item(row: CollectionItem, info: dict, user: User | None, liked: s
             out.update({"downloads": repo.downloads, "gated": False})
             if repo.repo_type == "model":
                 out["availableInferenceProviders"] = []
-                if meta.get("pipeline_tag"):
-                    out["pipeline_tag"] = meta["pipeline_tag"]
+                pipeline = _card_text(meta, "pipeline_tag", "", first_of_a_list=True)
+                if pipeline:
+                    out["pipeline_tag"] = pipeline
     else:
         child = row.child_loaded
         out.update({
