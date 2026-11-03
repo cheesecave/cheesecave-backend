@@ -49,6 +49,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The test jobs of CI may run for 2 hours** (they were cut at 45 minutes): the longest slice of the slowest cells takes 40 to 45 minutes and had
+  one run in three cancelled by the limit ([#138](https://github.com/cheesecave/cheesecave-backend/issues/138)). The expected time of a
+  pull request run in `CONTRIBUTING.md` is about 45 minutes, not 16.
+
 - **The service calls itself CheeseCave.** `GET /api/version` and `GET /api/whoami-v2` (`site`) say `"api": "cheesecave"` instead of
   `"kohakuhub"`, report the version of the installed package instead of a written-in `0.0.1`, and name the site as the
   administrator set it (it read the environment's name before, so a renamed site still said "KohakuHub"); `whoami-v2` carries

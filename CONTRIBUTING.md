@@ -759,7 +759,9 @@ files, `pyproject.toml`, `pytest.ini`, `.coveragerc`, `Makefile` and the workflo
 touch only documentation, images or other resources do not start the full test matrix.
 
 **How the suite is split.** One pull request runs 20 jobs, the size of the organization's runner pool,
-so it finishes in one wave (about 16 minutes) instead of queueing behind itself:
+so it finishes in one wave instead of queueing behind itself. The wave takes about 45 minutes today (the longest slice of the
+slowest cells; it was meant to be 16 minutes when the suite was split and has grown with the suite, see
+[#138](https://github.com/cheesecave/cheesecave-backend/issues/138)), and the test jobs may run for 2 hours:
 
 - Every full cell runs the whole suite cut into 3 slices of whole files (`scripts/ci/shard.py`;
   `scripts/ci/shard_durations.json` holds the seconds each file takes). The cells: Python 3.12 with the
