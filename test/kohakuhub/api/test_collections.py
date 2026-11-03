@@ -276,6 +276,47 @@ def test_items_have_the_shape_of_their_type_in_the_spec(api, world):
     assert child["numberItems"] == 0 and child["owner"]["name"] == "alice" and "description" not in child
 
 
+def _set_metadata(repo, value):
+    meta = RepositoryMetadata.get(RepositoryMetadata.repository == repo)
+    meta.metadata = json.dumps(value)
+    meta.save()
+
+
+@pytest.mark.parametrize(
+    "card, pipeline",
+    [
+        ({"pipeline_tag": "text-to-image"}, "text-to-image"),
+        ({"pipeline_tag": ["text-to-image", "other"]}, "text-to-image"),     # a card written as a list (seen on a real model)
+        ({"pipeline_tag": []}, None),
+        ({"pipeline_tag": [3]}, None),
+        ({"pipeline_tag": {"a": 1}}, None),
+        ({"pipeline_tag": 5}, None),
+        ({"pipeline_tag": ""}, None),
+    ],
+)
+def test_a_model_card_of_any_shape_gives_a_pipeline_tag_that_is_a_string_or_none(api, world, card, pipeline):
+    _set_metadata(world.model, card)
+    col = made(api, world, items=[("model", "alice/tagger")], title="Odd model")
+    item = col["items"][0]
+    assert item.get("pipeline_tag") == pipeline and ("pipeline_tag" in item) is (pipeline is not None)
+
+
+@pytest.mark.parametrize(
+    "card, tags, emoji, title, color",
+    [
+        ({"tags": "gradio", "emoji": 5, "title": ["x"], "colorFrom": None}, [], "🧀", "demo", "gray"),
+        ({"tags": ["a", 3, None, "b"], "emoji": "🚀", "title": "Nice", "colorFrom": "red"}, ["a", "b"], "🚀", "Nice", "red"),
+        ({"tags": {"a": 1}}, [], "🧀", "demo", "gray"),
+    ],
+)
+def test_a_space_card_of_any_shape_gives_the_fields_the_spec_wants(api, world, card, tags, emoji, title, color):
+    _set_metadata(world.space, card)
+    col = made(api, world, items=[("space", "alice/demo")], title="Odd space")
+    item = col["items"][0]
+    assert (item["tags"], item["emoji"], item["title"], item["colorFrom"]) == (tags, emoji, title, color)
+    assert item["colorTo"] == "gray"
+
+
 def test_the_viewer_sees_their_own_like_and_a_space_keeps_its_metadata(api, world):
     RepositoryLike.create(repository=world.model, user=world.mika)
     meta = RepositoryMetadata.get(RepositoryMetadata.repository == world.space)
