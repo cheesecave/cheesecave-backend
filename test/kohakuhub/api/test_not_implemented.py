@@ -3,7 +3,7 @@ support.
 
 These surfaces appear in the PR #18 compatibility matrix as "Not Supported /
 Not Claimed": Discussions / Pull Requests, Space runtime management,
-Collections, and Webhooks. Gradio / datasets / transformers can probe these
+and Webhooks (collections are supported since 042: see test_collections.py). Gradio / datasets / transformers can probe these
 endpoints during deploy / load flows, so the *shape* of the "no" matters:
 
 * HTTP 501 (not 404 / 500) so the intent is readable on the wire.
@@ -61,11 +61,6 @@ from huggingface_hub.utils import HfHubHTTPError
         ("POST", "/api/spaces/owner/demo-space/hardware", "hardware"),
         ("POST", "/api/spaces/owner/demo-space/secrets", "secrets"),
         ("POST", "/api/spaces/owner/demo-space/variables", "variables"),
-        # Collections
-        ("GET", "/api/collections", "collections"),
-        ("POST", "/api/collections", "collections"),
-        ("GET", "/api/collections/some-slug-123", "collections"),
-        ("POST", "/api/collections/some-slug-123/item", "collections"),
         # Webhooks
         ("GET", "/api/settings/webhooks", "webhooks"),
         ("POST", "/api/settings/webhooks", "webhooks"),

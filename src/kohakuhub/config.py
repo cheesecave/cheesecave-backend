@@ -201,6 +201,10 @@ class AppConfig(BaseModel):
     # LFS Garbage Collection settings
     lfs_keep_versions: int = 5  # Keep last K versions of each file
     lfs_auto_gc: bool = False  # Collect LFS versions beyond lfs_keep_versions (background)
+    # Collections (curated lists of repositories): the most items in one, and the most one owner may have.
+    # Hugging Face documents no limit (the largest public collection seen has 588 items, the owner with the most has 138). 0 = no limit
+    collection_max_items: int = 1000
+    collection_max_per_owner: int = 500
     # Storage usage is kept up to date as repositories change; a periodic
     # full recount (kohakuhub.usage) is a safety net. 0 = off
     usage_recount_interval_hours: float = 0
@@ -667,6 +671,10 @@ def load_config(path: str = None) -> Config:
         app_env["lfs_keep_versions"] = int(read_env("LFS_KEEP_VERSIONS"))
     if read_env("LFS_AUTO_GC") is not None:
         app_env["lfs_auto_gc"] = read_env("LFS_AUTO_GC").lower() == "true"
+    if read_env("COLLECTION_MAX_ITEMS") is not None:
+        app_env["collection_max_items"] = int(read_env("COLLECTION_MAX_ITEMS"))
+    if read_env("COLLECTION_MAX_PER_OWNER") is not None:
+        app_env["collection_max_per_owner"] = int(read_env("COLLECTION_MAX_PER_OWNER"))
     if read_env("USAGE_RECOUNT_INTERVAL_HOURS") is not None:
         app_env["usage_recount_interval_hours"] = float(
             read_env("USAGE_RECOUNT_INTERVAL_HOURS")

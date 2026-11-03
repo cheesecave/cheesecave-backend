@@ -16,6 +16,7 @@ RESERVED_NAMES = {
     "models",
     "datasets",
     "spaces",
+    "collections",
     "admin",
     "organizations",
     "api",

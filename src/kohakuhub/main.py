@@ -56,6 +56,7 @@ from kohakuhub.api.repo.routers import discovery as repo_discovery
 from kohakuhub.api.repo.routers import tree as repo_tree
 from kohakuhub.api.xet.routers import cas as xet_cas
 from kohakuhub.api.xet.routers import xet as xet_token
+from kohakuhub.api import collections as collections_api
 from kohakuhub.api import not_implemented as not_implemented_router
 
 logger = get_logger("MAIN")
@@ -236,6 +237,7 @@ app.include_router(settings.router, prefix=cfg.app.api_base, tags=["settings"])
 app.include_router(lfs_files.router, prefix=cfg.app.api_base, tags=["lfs"])
 app.include_router(avatar.router, prefix=cfg.app.api_base, tags=["avatars"])
 app.include_router(likes.router, prefix=cfg.app.api_base, tags=["likes"])
+app.include_router(collections_api.router, prefix=cfg.app.api_base, tags=["collections"])
 app.include_router(social.router, prefix=cfg.app.api_base, tags=["social"])
 app.include_router(hf_account.router, prefix=cfg.app.api_base, tags=["hf-account"])
 app.include_router(stats.router, prefix=cfg.app.api_base, tags=["stats"])
@@ -254,7 +256,7 @@ app.include_router(xet_token.router, prefix=cfg.app.api_base, tags=["xet"])
 app.include_router(xet_cas.router, tags=["xet-cas"])
 
 # Registered last so catch-all 501 routes for won't-support features
-# (discussions, space runtime, collections, webhooks) never shadow the
+# (discussions, space runtime, webhooks) never shadow the
 # real endpoints defined above.
 app.include_router(
     not_implemented_router.router,
