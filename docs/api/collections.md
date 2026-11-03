@@ -69,7 +69,7 @@ See [the configuration reference](../reference/config.md).
 
 ## Checking compatibility
 
-`scripts/dev/check_collections_with_hf_client.py ENDPOINT TOKENS.json` drives every method above with the real `huggingface_hub`
-client; `scripts/dev/check_collections_against_hf_spec.py ENDPOINT TOKENS.json openapi.json` validates the answers against the JSON
-Schemas of Hugging Face's OpenAPI spec (`https://huggingface.co/.well-known/openapi.json`). `TOKENS.json` maps the user names `alice`,
-`mika` and `guest` to API tokens; both scripts expect the demo data their header describes.
+The test suite checks it two ways. `test/kohakuhub/api/test_huggingface_hub_collections.py` drives every client method above with
+the real `huggingface_hub` (it runs in every client version of the CI matrix, 0.20.3 being the oldest with collections), and
+`test/kohakuhub/api/test_collections_hf_spec.py` validates the answers against the JSON Schemas of Hugging Face's OpenAPI spec
+(`https://huggingface.co/.well-known/openapi.json`; the schemas used are kept in `test/kohakuhub/support/hf_collections_openapi.json`).

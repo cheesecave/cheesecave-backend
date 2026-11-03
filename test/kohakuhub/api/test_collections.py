@@ -36,8 +36,8 @@ SLUG = re.compile(r"^(?P<owner>[^/]+)/(?P<title>[^/]+)-(?P<oid>[0-9a-f]{24})$")
 # ---------------------------------------------------------------- the world
 
 @pytest.fixture
-def api(db_committed, monkeypatch):
-    monkeypatch.setattr(collections_api, "db", db_committed)     # the routes' transactions on the database of the test
+def api(db_dual, monkeypatch):
+    monkeypatch.setattr(collections_api, "db", db_dual)     # the routes' transactions on the database of the test
     app = FastAPI()
     app.include_router(collections_api.router, prefix="/api")
     with TestClient(app, follow_redirects=False) as client:
@@ -45,7 +45,7 @@ def api(db_committed, monkeypatch):
 
 
 @pytest.fixture
-def world(db_committed):
+def world(db_dual):
     """alice owns repositories and collections; the organization lab has a member, a visitor and an outsider."""
     w = SimpleNamespace()
     w.alice, w.mika, w.guest, w.stranger = (make_user(n) for n in ("alice", "mika", "guest", "stranger"))
@@ -332,6 +332,29 @@ def test_a_visitor_of_the_organization_reads_but_cannot_change(api, world):
     assert api.patch(f"/api/collections/{col['slug']}", json={"title": "Renamed by a member"}, headers=auth(world, "mika")).status_code == 200
 
 
+@pytest.mark.parametrize("role, may_write", [("visitor", False), ("member", True), ("admin", True), ("super-admin", True)])
+def test_every_role_of_an_organization_reads_and_only_the_writing_roles_write(api, world, role, may_write):
+    person = make_user(f"role-{role}")
+    make_token(person, hash_token(f"token-{role}"))
+    UserOrganization.create(user=person, organization=world.lab, role=role)
+    world.tokens[person.username] = f"token-{role}"
+    col = made(api, world, "alice", namespace="lab", title="Roles", private=True)
+    who = person.username
+    assert api.get(f"/api/collections/{col['slug']}", headers=auth(world, who)).status_code == 200      # a private one, too
+    assert (api.patch(f"/api/collections/{col['slug']}", json={"theme": "pink"}, headers=auth(world, who)).status_code == 200) is may_write
+    assert (create(api, world, who, namespace="lab", title=f"By {role}").status_code == 200) is may_write
+
+
+def test_text_at_the_largest_size_is_accepted(api, world):
+    col = create(api, world, title="t" * 60, description="d" * 150)
+    assert col.status_code == 200
+    slug = col.json()["slug"]
+    assert add(api, world, slug, "model", "alice/tagger", note="n" * 500).status_code == 200
+    item = api.get(f"/api/collections/{slug}").json()["items"][0]["_id"]
+    assert api.patch(f"/api/collections/{slug}/items/{item}", json={"note": "m" * 500}, headers=auth(world, "alice")).status_code == 200
+    assert api.patch(f"/api/collections/{slug}", json={"title": "u" * 60, "description": "e" * 150}, headers=auth(world, "alice")).status_code == 200
+
+
 def test_moving_a_collection_in_the_list_of_its_owner(api, world):
     cols = [create(api, world, title=t).json() for t in ("A", "B", "C")]
     api.patch(f"/api/collections/{cols[2]['slug']}", json={"position": 0}, headers=auth(world, "alice"))
@@ -398,6 +421,23 @@ def test_a_collection_cannot_hold_itself_or_the_same_item_twice(api, world):
         duplicate = add(api, world, col["slug"], kind, ident)
         assert duplicate.status_code == 409 and "already" in duplicate.json()["error"]
     assert add(api, world, other["slug"], "collection", col["slug"]).status_code == 200      # a loop is harmless: never expanded
+
+
+def test_the_same_item_added_a_moment_ago_by_another_request_is_409(api, world, monkeypatch):
+    col = made(api, world, title="Double add")
+    real_oid = collections_api.new_oid
+
+    def other_request_lands_first():       # between the check for the item and its insert
+        monkeypatch.setattr(collections_api, "new_oid", real_oid)
+        CollectionItem.create(
+            oid=real_oid(), collection=Collection.get(Collection.oid == col["slug"][-24:]), item_type="model",
+            repository=world.model, position=0,
+        )
+        return real_oid()
+
+    monkeypatch.setattr(collections_api, "new_oid", other_request_lands_first)
+    response = add(api, world, col["slug"], "model", "alice/tagger")
+    assert response.status_code == 409 and "already" in response.json()["error"]
 
 
 def test_a_collection_can_hold_only_so_many_items(api, world, monkeypatch):
@@ -500,6 +540,21 @@ def test_upvote_counts_once_and_can_be_taken_back(api, world):
     assert api.delete(url, headers=auth(world, "mika")).json() == {"success": True, "upvotes": 1}
     assert api.delete(url, headers=auth(world, "mika")).json()["upvotes"] == 1                # nothing to take back
     assert api.get(f"/api/collections/{col['slug']}", headers=auth(world, "mika")).json()["isUpvotedByUser"] is False
+
+
+def test_a_second_upvote_of_the_same_moment_is_still_one_upvote(api, world, monkeypatch):
+    col = made(api, world, title="Double click")
+    url = f"/api/collections/{col['slug']}/upvote"
+    assert api.post(url, headers=auth(world, "mika")).json()["upvotes"] == 1
+    real, calls = collections_api._upvoted, []
+
+    def not_yet(*args):                    # the check of the second request ran before the first one's upvote was visible
+        calls.append(1)
+        return False if len(calls) == 1 else real(*args)
+
+    monkeypatch.setattr(collections_api, "_upvoted", not_yet)
+    assert api.post(url, headers=auth(world, "mika")).json() == {"success": True, "upvotes": 1}
+    assert len(calls) == 1
 
 
 def test_upvoting_a_collection_one_cannot_see_is_404(api, world):
@@ -707,7 +762,7 @@ def test_the_same_title_created_a_moment_ago_by_someone_else_is_still_409(api, w
     assert response.json()["slug"].startswith("alice/race-")
 
 
-def test_an_item_is_a_repository_or_a_collection_never_both_or_neither(db_committed, world):
+def test_an_item_is_a_repository_or_a_collection_never_both_or_neither(db_dual, world):
     from peewee import IntegrityError
     col = Collection.create(oid="a" * 24, owner=world.alice, title="Check", slug="check", theme="green")
     other = Collection.create(oid="b" * 24, owner=world.alice, title="Other", slug="other", theme="green")

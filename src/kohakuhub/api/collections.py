@@ -482,8 +482,11 @@ async def add_item(namespace: str, slug: str, request: Request, user: User = Dep
     if failure is not None:
         return failure
     body = await _json(request) or {}
-    with db.atomic():
-        failure = _add_item(col, body.get("item"), body.get("note"), user)
+    try:
+        with db.atomic():
+            failure = _add_item(col, body.get("item"), body.get("note"), user)
+    except IntegrityError:   # the same item added by another request a moment ago
+        return _err(409, "Item already exists in the collection")
     return failure or serialize(_reload(col), user)
 
 
@@ -561,7 +564,11 @@ async def delete_item(namespace: str, slug: str, item_id: str, request: Request,
 def _change_upvote(col: Collection, user: User, give: bool) -> dict:
     with db.atomic():
         if give and not _upvoted(col, user):
-            CollectionUpvote.create(collection=col, user=user)
+            try:
+                with db.atomic():   # a savepoint: on PostgreSQL a failed insert would abort the whole transaction
+                    CollectionUpvote.create(collection=col, user=user)
+            except IntegrityError:   # the same user upvoted a moment ago (a double click): it is one upvote
+                pass
         elif not give:
             CollectionUpvote.delete().where((CollectionUpvote.collection == col) & (CollectionUpvote.user == user)).execute()
         count = CollectionUpvote.select().where(CollectionUpvote.collection == col).count()
