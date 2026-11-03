@@ -18,10 +18,12 @@ CheeseCave's own additions: ``sort=position`` (the owner's order, for the profil
 
 import base64
 import json
+import operator
 import re
 import secrets
 import time
 from datetime import datetime, timedelta, timezone
+from functools import reduce
 from html import escape
 from urllib.parse import urlencode
 
@@ -345,6 +347,8 @@ async def create_collection(request: Request, user: User = Depends(get_current_u
         return _err(400, "title is required")
     if (bad := _check_text(body["title"], body.get("description"))) is not None:
         return bad
+    if body.get("resourceGroupId") is not None:
+        return _no_resource_groups()
     owner = User.get_or_none(User.username == (body.get("namespace") or user.username))
     if owner is None or not _member_of(user, owner, WRITE_ROLES):
         return _err(403, f"You can't create collections for '{body.get('namespace')}'")
@@ -372,6 +376,22 @@ async def create_collection(request: Request, user: User = Depends(get_current_u
         return _err(409, "The collection already exists", slug=full_slug(Collection.get((Collection.owner == owner) & (Collection.slug == slug))))
     logger.info(f"{user.username} created the collection {col.oid} of {owner.username}")
     return serialize(_reload(col), user)
+
+
+def _no_resource_groups():
+    """Resource groups are an Enterprise feature of Hugging Face; refuse them instead of pretending to apply one."""
+    return _err(501, "resource groups are not supported by CheeseCave", {"X-Error-Code": "NotImplemented"})
+
+
+@router.post("/collections/{namespace}/{slug}/resource-group")
+async def set_resource_group(namespace: str, slug: str, request: Request, user: User = Depends(get_current_user)):
+    _col, failure = _load(namespace, slug, user, request, write=True)
+    if failure is not None:
+        return failure
+    body = await _json(request) or {}
+    if body.get("resourceGroupId") is not None:
+        return _no_resource_groups()
+    return Response(status_code=200)      # no resource group is what every collection has
 
 
 class _Rollback(Exception):
@@ -630,21 +650,23 @@ async def list_collections(request: Request, user: User | None = Depends(get_opt
     if q.get("q"):
         term = f"%{q['q']}%"   # ilike: case-insensitive on SQLite (a plain like is a case-sensitive GLOB there) and PostgreSQL
         query = query.where(Collection.title.ilike(term) | Collection.description.ilike(term))
-    for ref in items:
-        kind, _, ident = ref.partition("/")
-        if kind == "papers":
-            query = query.where(Collection.id == -1)   # no paper catalogue here: nothing contains one
-            continue
-        namespace, _, name = ident.partition("/")
-        hit = (
-            CollectionItem.select(CollectionItem.collection)
-            .join(Repository, on=(CollectionItem.repository == Repository.id))
-            .where(
-                (Repository.repo_type == kind[:-1]) & (Repository.namespace == namespace) & (Repository.name == name)
-                & repository_read_predicate(user)   # a repository the caller cannot read matches nothing, as if it did not exist
+    if items:   # several items: a collection holding any of them (as on Hugging Face), and a paper is held by none
+        matches = []
+        for ref in items:
+            kind, _, ident = ref.partition("/")
+            if kind == "papers":
+                continue
+            namespace, _, name = ident.partition("/")
+            hit = (
+                CollectionItem.select(CollectionItem.collection)
+                .join(Repository, on=(CollectionItem.repository == Repository.id))
+                .where(
+                    (Repository.repo_type == kind[:-1]) & (Repository.namespace == namespace) & (Repository.name == name)
+                    & repository_read_predicate(user)   # a repository the caller cannot read matches nothing, as if it did not exist
+                )
             )
-        )
-        query = query.where(Collection.id.in_(hit))
+            matches.append(Collection.id.in_(hit))
+        query = query.where(reduce(operator.or_, matches) if matches else Collection.id == -1)
 
     # The order is a key; a cursor holds the key of the last row, so a page never repeats or skips a row when
     # collections change between two requests. (descending keys compare with <, the owner's order with >)

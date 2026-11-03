@@ -12,7 +12,7 @@ of a hub work against CheeseCave. Design notes and the checks behind them: [#134
 - **Fields:** `title` (1 to 60 characters), `description` (at most 150), `theme` (one of `orange`, `blue`, `green`, `purple`, `pink`,
   `indigo`; drawn at random when the collection is made), `private`, `position` (the place in the owner's list), `upvotes`.
 - **Items:** a model, a dataset, a Space or another collection (shown as a reference card, never expanded, so a loop of
-  collections is harmless). Papers and buckets exist on Hugging Face and answer `501` here. Each item can carry a plain-text
+  collections is harmless). Papers and buckets exist on Hugging Face and answer `501` here, and so do resource groups (an Enterprise feature: `resourceGroupId` on create and `POST .../resource-group` with a value answer `501`; `null` means none and is accepted). Each item can carry a plain-text
   note of at most 500 characters, answered as `{"text", "html"}` where the html has the text escaped and the web addresses linked.
   An item points to the repository row, so a renamed repository stays in its collections and a deleted one leaves them.
 - **Positions** count up from 0 and may have gaps: deleting an item does not renumber the others; a new item goes after the
@@ -51,8 +51,8 @@ All under `/api`. Errors are `{"error": "message"}`.
 
 ### The list
 
-`GET /api/collections` takes `owner` (repeat it), `item=models|datasets|spaces|papers/<id>` (repeat it; `papers` matches nothing, a
-collection is not a valid filter), `q` (title and description, case-insensitive), `sort`, `limit` and `cursor`.
+`GET /api/collections` takes `owner` (repeat it: any of them), `item=models|datasets|spaces|papers/<id>` (repeat it: a collection that holds any of
+them, as on Hugging Face; `papers` matches nothing, a collection is not a valid filter), `q` (title and description, case-insensitive), `sort`, `limit` and `cursor`.
 
 - `sort` is `trending` (the default: upvotes of the last 7 days, then the latest change), `upvotes`, `lastModified`, or CheeseCave's
   own `position` (the owner's order; Hugging Face answers `400` to it and a client never sends it).

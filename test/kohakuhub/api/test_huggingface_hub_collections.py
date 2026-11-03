@@ -16,6 +16,7 @@ Conventions used by this module:
 from __future__ import annotations
 
 import asyncio
+import inspect
 import re
 
 import pytest
@@ -232,3 +233,32 @@ async def test_delete_collection_item_and_delete_collection_with_missing_ok(live
     await _run(api.delete_collection, col.slug)
     assert await _status_of(api.get_collection, col.slug) == 404
     await _run(api.delete_collection, col.slug, missing_ok=True)
+
+
+@pytest.mark.hf_client
+async def test_resource_groups_are_refused_not_ignored_by_the_clients_that_have_them(live_server_url, hf_api_token):
+    api = _api(live_server_url, hf_api_token)
+    group = "66980ecfc1e12a49c8f0e42d"
+    if "resource_group_id" in inspect.signature(api.create_collection).parameters:
+        assert await _status_of(api.create_collection, "Hf col grouped", resource_group_id=group) == 501
+        assert await _status_of(api.create_collection, "Hf col grouped", resource_group_id=None) == 200
+    col = await _run(api.create_collection, "Hf col ungrouped")
+    if callable(getattr(api, "update_collection_resource_group", None)):
+        assert await _status_of(api.update_collection_resource_group, col.slug, group) == 501
+        assert await _status_of(api.update_collection_resource_group, col.slug, None) == 200
+
+
+@pytest.mark.hf_client
+async def test_list_collections_takes_several_owners_and_several_items(live_server_url, hf_api_token):
+    api = _api(live_server_url, hf_api_token)
+    await _repos(api)
+    first = await _run(api.create_collection, "Hf col many a")
+    second = await _run(api.create_collection, "Hf col many b", namespace=ORG)
+    await _run(api.add_collection_item, first.slug, MODEL, "model")
+    await _run(api.add_collection_item, second.slug, DATASET, "dataset")
+    owners = await _run(lambda: [c.slug for c in api.list_collections(owner=["owner", ORG], limit=100)])
+    assert first.slug in owners and second.slug in owners
+    items = await _run(lambda: [c.slug for c in api.list_collections(item=[f"models/{MODEL}", f"datasets/{DATASET}"], limit=100)])
+    assert first.slug in items and second.slug in items
+    only = await _run(lambda: [c.slug for c in api.list_collections(item=f"datasets/{DATASET}", limit=100)])
+    assert second.slug in only and first.slug not in only

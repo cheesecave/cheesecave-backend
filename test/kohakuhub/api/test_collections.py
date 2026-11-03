@@ -184,6 +184,22 @@ def test_create_needs_a_user_and_the_right_to_write_in_the_namespace(api, world)
     assert create(api, world, namespace="nobody").status_code == 403                  # no such namespace
 
 
+def test_resource_groups_are_501_not_ignored(api, world):
+    # An Enterprise feature of Hugging Face that CheeseCave does not have: refuse it instead of pretending to apply it
+    response = create(api, world, title="Grouped", resourceGroupId="66980ecfc1e12a49c8f0e42d")
+    assert response.status_code == 501 and response.headers["x-error-code"] == "NotImplemented"
+    assert "resource group" in response.json()["error"]
+    assert Collection.select().where(Collection.title == "Grouped").count() == 0
+    assert create(api, world, title="Not grouped", resourceGroupId=None).status_code == 200      # null means none: the client sends it so
+    col = made(api, world, title="Own")
+    url = f"/api/collections/{col['slug']}/resource-group"
+    assert api.post(url, json={"resourceGroupId": "66980ecfc1e12a49c8f0e42d"}, headers=auth(world, "alice")).status_code == 501
+    assert api.post(url, json={"resourceGroupId": None}, headers=auth(world, "alice")).status_code == 200        # taking it out of none: nothing to do
+    assert api.post(url, json={}, headers={}).status_code == 401
+    assert api.post(url, json={}, headers=auth(world, "mika")).status_code == 403                               # not the owner
+    assert api.post(f"/api/collections/alice/missing-{'0' * 24}/resource-group", json={}, headers=auth(world, "alice")).status_code == 404
+
+
 def test_the_same_title_slug_is_409_with_the_slug_of_the_existing_one(api, world):
     first = create(api, world, title="Same Title").json()
     second = create(api, world, title="same-title!")
@@ -645,6 +661,18 @@ def test_filter_by_owner_item_and_text(api, library, world):
     assert titles(api.get("/api/collections?q=SOUND")) == ["Gamma Audio"]                       # case-insensitive, also on SQLite
     assert titles(api.get("/api/collections?q=text")) == ["Beta Text"]
     assert titles(api.get("/api/collections?q=zzz")) == []
+
+
+def test_several_items_in_the_filter_match_a_collection_with_any_of_them(api, world):
+    # as on Hugging Face (tried on its public API: collections of item A + collections of item B = the answer for both)
+    only_model = made(api, world, title="Only model", items=[("model", "alice/tagger")])
+    only_dataset = made(api, world, title="Only dataset", items=[("dataset", "alice/faces")])
+    neither = made(api, world, title="Neither", items=[("space", "alice/demo")])
+    both = api.get("/api/collections?item=models/alice/tagger&item=datasets/alice/faces&limit=100").json()
+    assert {c["slug"] for c in both} == {only_model["slug"], only_dataset["slug"]}
+    assert neither["slug"] not in {c["slug"] for c in both}
+    one = api.get("/api/collections?item=models/alice/tagger&limit=100").json()
+    assert {c["slug"] for c in one} == {only_model["slug"]}
 
 
 def test_the_item_filter_does_not_reveal_a_private_repository(api, library, world):
