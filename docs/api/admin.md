@@ -875,14 +875,49 @@ before deleting anything.
 
 ## Search
 
+### Lookup (suggestions for a picker)
+
+**Pattern:** `GET /admin/api/lookup?q={typed}&kinds=user&kinds=org&limit=8`
+
+One typed word finds an account or a repository by **username, email, numeric id (`12` or `#12`) or repository full id**. It is what
+the admin panel's pickers send on each keystroke, so it is cheap: it reads only the columns it returns and computes no usage or quota.
+
+**Query Parameters:**
+- `q` (default: empty): What was typed; empty lists the first rows by name
+- `kinds` (repeat the parameter; default: `user`, `org`): any of `user`, `org`, `repo`; anything else answers `400`
+- `limit` (default: 8, 1 to 20): Maximum suggestions in total
+- `repo_type` (optional): restrict `repo` suggestions to `model`, `dataset` or `space`
+
+Best match first: the row whose id was typed, then exact, prefix and contains matches of the username and the email
+(case-insensitive; `_` and `%` in what was typed are literal). `matched` says which field decided.
+
+**Response:**
+```json
+{
+  "query": "park",
+  "results": [
+    {"kind": "user", "id": 29, "username": "parker_dev", "email": "parker@example.org", "email_verified": true,
+     "is_org": false, "is_active": true, "has_avatar": false, "matched": "username"},
+    {"kind": "org", "id": 18, "username": "aurora-labs", "email": null, "email_verified": false,
+     "is_org": true, "is_active": true, "has_avatar": true, "matched": "username"},
+    {"kind": "repo", "id": 48, "full_id": "mai_lin/shared-demo", "repo_type": "model", "namespace": "mai_lin",
+     "name": "shared-demo", "private": false, "matched": "name"}
+  ]
+}
+```
+
+`has_avatar` tells whether `GET /api/users/{name}/avatar` (or `/api/organizations/{name}/avatar`) has an image.
+
 ### Global Search
 
 **Pattern:** `GET /admin/api/search?q={query}&types=users,repos,commits&limit=20`
 
 **Query Parameters:**
 - `q`: Search query string
-- `types` (default: ["users", "repos", "commits"]): Types to search
+- `types` (default: ["users", "repos", "commits"]): Types to search; also `orgs` for organizations (never mixed into `users`)
 - `limit` (default: 20): Max results per type
+
+Users and organizations are ranked like the lookup above (id, exact, prefix, contains) and also match a numeric id.
 
 **Response:**
 ```json
@@ -895,9 +930,13 @@ before deleting anything.
         "username": "alice",
         "email": "alice@example.com",
         "email_verified": true,
-        "is_active": true
+        "is_active": true,
+        "is_org": false,
+        "has_avatar": false,
+        "matched": "username"
       }
     ],
+    "organizations": [],
     "repositories": [
       {
         "id": 1,
@@ -924,6 +963,7 @@ before deleting anything.
   },
   "result_counts": {
     "users": 1,
+    "organizations": 0,
     "repositories": 1,
     "commits": 1
   }
