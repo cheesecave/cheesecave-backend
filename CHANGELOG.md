@@ -101,6 +101,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The admin commit listing no longer shows other repositories' commits** ([#145](https://github.com/cheesecave/cheesecave-backend/issues/145)). `GET /admin/api/commits?repo_full_id=` dropped the filter when no repository had that id (it listed every commit) and took an arbitrary one when a model and a dataset shared `owner/name`. An unknown repository now has no commits, every type sharing the id is listed, and the new optional `repo_type` narrows it (also usable alone). Callers that send only `repo_full_id` keep working.
 - **The activity feed names who created a repository** instead of "Unknown user". The creation event of every repository had
   no actor (the repository table never recorded its creator), so the home feed read "Unknown user created a Dataset" for every
   repository, and 97 % of production's repositories are in organizations. The request that creates (or duplicates) a repository
