@@ -13,6 +13,7 @@ router = APIRouter()
 @router.get("/commits")
 async def list_commits_admin(
     repo_full_id: str | None = None,
+    repo_type: str | None = None,
     username: str | None = None,
     limit: int = 100,
     offset: int = 0,
@@ -21,7 +22,8 @@ async def list_commits_admin(
     """List commits with filters.
 
     Args:
-        repo_full_id: Filter by repository full ID
+        repo_full_id: Filter by repository full ID (every type sharing it, unless repo_type is given)
+        repo_type: Restrict to model / dataset / space
         username: Filter by author username
         limit: Maximum number to return
         offset: Offset for pagination
@@ -34,10 +36,16 @@ async def list_commits_admin(
     query = Commit.select()
 
     if repo_full_id:
-        # Find repository by full_id (need to search across all types)
-        repo = Repository.get_or_none(Repository.full_id == repo_full_id)
-        if repo:
-            query = query.where(Commit.repository == repo)
+        repos = Repository.select().where(Repository.full_id == repo_full_id)
+        if repo_type:
+            repos = repos.where(Repository.repo_type == repo_type)
+        repos = list(repos)
+        if not repos:
+            # An unknown repository has no commits; ignoring the filter would list every commit.
+            return {"commits": [], "limit": limit, "offset": offset}
+        query = query.where(Commit.repository << repos)
+    elif repo_type:
+        query = query.where(Commit.repo_type == repo_type)
     if username:
         query = query.where(Commit.username == username)
 
