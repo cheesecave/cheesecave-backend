@@ -206,3 +206,29 @@ def test_managers_can_grant_accounts_and_revoke_guests_independently(browser):
     assert browser.client.get(browser.base + "/access").json()["access"] == "invite"
     browser.state["user"] = browser.reader
     assert browser.client.get(browser.base + "/access").json()["access"] == "full"
+
+
+def test_private_management_is_masked_and_unknown_application_cannot_be_issued(browser):
+    make_repo(browser.owner, "hidden", private=True)
+    browser.state["user"] = browser.reader
+    results = [browser.client.get(f"/api/models/owner/{name}/access/manage") for name in ("hidden", "missing")]
+    assert [(response.status_code, response.content) for response in results] == [(404, results[0].content)] * 2
+    browser.state["user"] = browser.owner
+    assert browser.client.post(browser.base + "/access/invites", json={"request_id": 99999}).status_code == 404
+    assert RepositoryInvite.select().count() == 0
+
+
+def test_empty_repository_instructions_use_default_without_any_object_read(browser):
+    browser.lakefs.get_branch.return_value = {"commit_id": None}
+    data = browser.client.get(browser.base + "/access").json()
+    assert data["access"] == "invite" and not data["invite_markdown"]
+    browser.lakefs.get_object_prefix.assert_not_awaited()
+
+
+def test_guest_logout_without_guest_preserves_normal_cookie_and_masks_existence(browser):
+    make_repo(browser.owner, "hidden", private=True)
+    browser.client.cookies.set("session_id", "unchanged-normal-cookie")
+    results = [browser.client.delete(f"/api/models/owner/{name}/access/guest") for name in ("hidden", "missing")]
+    assert all(response.status_code == 200 and response.json() == {"success": True} for response in results)
+    assert all("set-cookie" not in response.headers for response in results)
+    assert browser.client.cookies.get("session_id") == "unchanged-normal-cookie"
