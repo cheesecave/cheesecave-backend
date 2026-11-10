@@ -31,6 +31,7 @@ FAST_FILES = {
     "test_site_appearance.py",
     "test_repository_discovery.py",
     "test_repository_visibility.py",
+    "test_repository_grants.py",
     "test_social.py",
     "test_user_repo_activity.py",
     "test_trending.py",

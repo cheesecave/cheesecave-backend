@@ -311,6 +311,7 @@ class Repository(BaseModel):
     # generation > 0 does not derive back to its own id.
     lakefs_repo = CharField(null=True, index=True)
     private = BooleanField(default=False)
+    invite_mode = BooleanField(default=False, constraints=[Check("NOT invite_mode OR private")])
     owner = ForeignKeyField(
         User, backref="owned_repos", on_delete="CASCADE", index=True
     )
@@ -350,6 +351,11 @@ class Repository(BaseModel):
     likes_count = IntegerField(default=0)  # Total likes
 
     created_at = DateTimeField(default=partial(datetime.now, tz=timezone.utc))
+
+    @property
+    def visibility(self) -> str:
+        """Product visibility; HF continues to use the separate boolean ``private``."""
+        return "invite" if self.invite_mode else "private" if self.private else "public"
 
     class Meta:
         # Unique constraint on (repo_type, namespace, name) allows same name across types
@@ -846,6 +852,22 @@ def utcnow() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
+class RepositoryAccessGrant(BaseModel):
+    """An account's independent, read-only authorization for exactly one repository."""
+
+    repository = ForeignKeyField(Repository, backref="access_grants", on_delete="CASCADE")
+    user = ForeignKeyField(User, backref="repository_access_grants", on_delete="CASCADE")
+    granted_by = ForeignKeyField(User, null=True, backref="issued_repository_grants", on_delete="SET NULL")
+    created_at = DateTimeField(default=utcnow)
+    expires_at = DateTimeField(null=True)
+    revoked_at = DateTimeField(null=True)
+    source = CharField(max_length=32, default="manual")
+
+    class Meta:
+        table_name = "repository_access_grant"
+        indexes = ((("repository", "user"), True),)
+
+
 class BackgroundTask(BaseModel):
     """Durable background task row; see ``kohakuhub.tasks`` for semantics."""
 
@@ -1112,6 +1134,7 @@ def init_db():
             Token,
             UserExternalToken,
             Repository,
+            RepositoryAccessGrant,
             RepositoryMetadata,
             RepositoryFacet,
             RepositoryCard,
