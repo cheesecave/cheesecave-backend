@@ -311,14 +311,14 @@ def test_tree_strips_metadata_and_lists_only_one_bounded_level(browser):
         {"path": "docs/weights.bin", "type": "file", "size": 10000, "preview_kind": "unsupported"},
     ]
     assert payload.json()["path"] == "docs" and payload.json()["has_more"] is True
-    assert payload.json()["message"]
+    assert payload.json()["next_cursor"]
     for secret in (SOURCE_SECRET, "checksum", "private-cursor", "next_offset", "deleted.txt"):
         assert secret not in payload.text
     browser.storage.list_objects.assert_awaited_once_with(repository="model-owner-target", ref=HEAD, prefix="docs/", delimiter="/", amount=100)
     browser.storage.get_object_prefix.assert_not_awaited()
 
 
-def test_tree_never_allows_pagination_or_leaks_entries_outside_requested_prefix(browser):
+def test_tree_rejects_unbounded_offsets_and_entries_outside_requested_prefix(browser):
     assert browser.client.get(browser.base + "/tree", params={"offset": 100}).status_code == 400
     browser.storage.list_objects.return_value = {"results": [
         {"path": "other/private.txt", "path_type": "object", "size_bytes": 20},
