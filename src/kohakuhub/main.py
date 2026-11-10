@@ -24,6 +24,7 @@ from kohakuhub.api import (
     stats,
     repository_access,
     repository_guest_preview,
+    repository_guest_media,
     validation,
 )
 from kohakuhub.api.ref_path import FullRefMiddleware
@@ -230,6 +231,7 @@ app.include_router(repo_info.router, prefix=cfg.app.api_base, tags=["repositorie
 app.include_router(repo_discovery.router, prefix=cfg.app.api_base, tags=["discovery"])
 app.include_router(repository_access.router, prefix=cfg.app.api_base, tags=["repository-access"])
 app.include_router(repository_guest_preview.router, prefix=cfg.app.api_base, tags=["repository-guest-preview"])
+app.include_router(repository_guest_media.router, prefix=cfg.app.api_base, tags=["repository-guest-media"])
 app.include_router(repo_tree.router, prefix=cfg.app.api_base, tags=["repositories"])
 app.include_router(files.router, prefix=cfg.app.api_base, tags=["files"])
 app.include_router(commits, prefix=cfg.app.api_base, tags=["commits"])
