@@ -100,7 +100,7 @@ def test_binary_or_invalid_utf8_never_becomes_raw_text(browser, content):
     assert "text" not in result.json()
 
 
-@pytest.mark.parametrize("path", ["document.pdf", "video.mp4", "audio.wav", "data.parquet", "data.tar", "data.zip", "weights.safetensors", "image.svg", "unknown.bin"])
+@pytest.mark.parametrize("path", ["data.parquet", "data.tar", "data.zip", "weights.safetensors", "image.svg", "unknown.bin"])
 def test_unsupported_types_are_metadata_only_and_never_fetch_object_bytes(browser, path):
     browser.contents[path] = b"sensitive original bytes"
     result = get(browser, path)
@@ -461,3 +461,13 @@ def test_non_allowed_raster_formats_cannot_use_an_image_extension():
     data = io.BytesIO()
     Image.new("RGB", (1, 1)).save(data, format="BMP")
     assert preview._thumbnail(data.getvalue()) is None
+
+
+@pytest.mark.parametrize("path", ["document.pdf", "video.mp4", "audio.wav"])
+def test_media_types_attempt_controlled_rendering_and_fail_closed_for_invalid_sources(browser, path):
+    browser.contents[path] = b"sensitive original bytes"
+    result = get(browser, path)
+    assert result.status_code == 422
+    assert "sensitive original bytes" not in result.text
+    browser.storage.get_object_prefix.assert_awaited_once()
+    browser.storage.get_object.assert_not_awaited()

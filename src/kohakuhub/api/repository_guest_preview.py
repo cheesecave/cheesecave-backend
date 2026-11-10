@@ -5,8 +5,9 @@ paginated with scoped signed cursors. The root README card has a fixed 64 KiB /
 1000-line ceiling; other text is plain UTF-8 (8 KiB / 64 lines),
 CSV/TSV/JSONL expose at most 20 rows and columns with 256 characters per cell, and
 small PNG/JPEG/WebP/GIF files become a metadata-free, single-frame PNG thumbnail.
-LFS-backed content, SVG, PDF, audio/video, Parquet, archives, model weights and
-browser model inference are metadata-only in this first release. Nothing here
+PDF pages and audio/video are rendered through private derivative routes.
+Other LFS-backed content, SVG, Parquet, archives, model weights and browser
+model inference remain metadata-only. Nothing here
 returns original file addresses, presigned URLs, checksums, arbitrary ranges or
 caller-controlled offsets. Displayed content can still be copied or saved.
 """
@@ -28,6 +29,7 @@ from pathlib import PurePosixPath
 from fastapi import APIRouter, HTTPException, Request, Response
 from PIL import Image, UnidentifiedImageError
 
+from kohakuhub import repository_media
 from kohakuhub.api.repository_access import BASE, RepoType, guest_for_request
 from kohakuhub.config import cfg
 from kohakuhub.db import Commit, File, PathCommit, RepositoryCard, RepositoryCreator
@@ -263,6 +265,9 @@ def _size(metadata):
 
 
 def _kind(path, size, lfs=False):
+    media = repository_media.media_kind(path)
+    if media:
+        return media
     if lfs:
         return "unsupported"
     suffix = PurePosixPath(path).suffix.lower()
@@ -284,7 +289,10 @@ def _file(repo, path):
 
 
 def _is_lfs(metadata, record):
-    return bool((record is not None and record.lfs) or lfs_oid(metadata.get("physical_address")))
+    address = metadata.get("physical_address")
+    if address is not None and not isinstance(address, str):
+        raise HTTPException(503, detail={"error": "Preview storage metadata is unavailable"})
+    return bool((record is not None and record.lfs) or lfs_oid(address))
 
 
 def _utf8(raw, *, complete):
@@ -573,7 +581,12 @@ async def guest_preview(repo_type: RepoType, namespace: str, name: str, request:
     size = _size(metadata)
     kind = _kind(path, size, _is_lfs(metadata, record))
     payload = _unsupported(size)
-    if kind != "unsupported":
+    if kind in {"pdf", "video", "audio"}:
+        payload = await repository_media.describe(repo, client, source, head, path, metadata, record)
+        _, _, current_head = await _snapshot(repo)
+        if current_head != head:
+            raise HTTPException(409, detail={"error": "Repository changed; reopen the file"})
+    elif kind != "unsupported":
         limit = {"text": MAX_TEXT_BYTES, "rows": MAX_DATA_BYTES, "image": MAX_IMAGE_BYTES}[kind]
         raw = await _storage(client.get_object_prefix(source, head, path, limit + 1))
         if not isinstance(raw, bytes):
