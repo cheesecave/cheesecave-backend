@@ -868,6 +868,90 @@ class RepositoryAccessGrant(BaseModel):
         indexes = ((("repository", "user"), True),)
 
 
+class RepositoryAccessRequest(BaseModel):
+    """An application; anonymous applicants use a separately hashed status receipt."""
+
+    repository = ForeignKeyField(Repository, backref="access_requests", on_delete="CASCADE")
+    user = ForeignKeyField(User, null=True, backref="repository_access_requests", on_delete="CASCADE")
+    email = CharField(max_length=320, null=True)
+    message = TextField(default="")
+    status = CharField(max_length=16, default="pending", constraints=[Check("status IN ('pending', 'approved', 'rejected')")])
+    receipt_hash = CharField(max_length=64, unique=True, null=True)
+    created_at = DateTimeField(default=utcnow)
+    reviewed_at = DateTimeField(null=True)
+    reviewed_by = ForeignKeyField(User, null=True, backref="reviewed_repository_requests", on_delete="SET NULL")
+
+    class Meta:
+        table_name = "repository_access_request"
+        indexes = ((("repository", "user"), True),)
+        constraints = [Check("user_id IS NOT NULL OR email IS NOT NULL")]
+
+
+class RepositoryInvite(BaseModel):
+    """One repository's exchange secret; secrets are never stored in plaintext."""
+
+    repository = ForeignKeyField(Repository, backref="repository_invites", on_delete="CASCADE")
+    token_hash = CharField(max_length=64, unique=True)
+    label = CharField(max_length=100, default="")
+    created_by = ForeignKeyField(User, null=True, backref="issued_repository_invites", on_delete="SET NULL")
+    created_at = DateTimeField(default=utcnow)
+    expires_at = DateTimeField()
+    revoked_at = DateTimeField(null=True)
+    max_redemptions = IntegerField(default=1, constraints=[Check("max_redemptions >= 1")])
+    redemption_count = IntegerField(default=0, constraints=[Check("redemption_count >= 0 AND redemption_count <= max_redemptions")])
+    max_guest_sessions = IntegerField(default=1, constraints=[Check("max_guest_sessions >= 0")])
+    guest_session_count = IntegerField(default=0, constraints=[Check("guest_session_count >= 0 AND guest_session_count <= max_guest_sessions")])
+    guest_ttl_seconds = IntegerField(default=86400, constraints=[Check("guest_ttl_seconds >= 1 AND guest_ttl_seconds <= 604800")])
+    grant_expires_at = DateTimeField(null=True)
+    access_request = ForeignKeyField(RepositoryAccessRequest, null=True, backref="issued_invites", on_delete="SET NULL")
+
+    class Meta:
+        table_name = "repository_invite"
+
+
+class RepositoryInviteRedemption(BaseModel):
+    """One account exchanges a code at most once, regardless of later grant changes."""
+
+    invite = ForeignKeyField(RepositoryInvite, backref="redemptions", on_delete="CASCADE")
+    user = ForeignKeyField(User, backref="repository_invite_redemptions", on_delete="CASCADE")
+    grant = ForeignKeyField(RepositoryAccessGrant, null=True, backref="redemptions", on_delete="SET NULL")
+    created_at = DateTimeField(default=utcnow)
+
+    class Meta:
+        table_name = "repository_invite_redemption"
+        indexes = ((("invite", "user"), True),)
+
+
+class RepositoryGuestSession(BaseModel):
+    """An independent browser-only identity; never an account or an HF token."""
+
+    repository = ForeignKeyField(Repository, backref="guest_sessions", on_delete="CASCADE")
+    invite = ForeignKeyField(RepositoryInvite, backref="guest_sessions", on_delete="CASCADE")
+    token_hash = CharField(max_length=64, unique=True)
+    created_at = DateTimeField(default=utcnow)
+    expires_at = DateTimeField()
+    revoked_at = DateTimeField(null=True)
+
+    class Meta:
+        table_name = "repository_guest_session"
+
+
+class RepositoryAccessEvent(BaseModel):
+    """Access audit without invitation/session secrets or applicant messages."""
+
+    repository = ForeignKeyField(Repository, backref="access_events", on_delete="CASCADE")
+    actor = ForeignKeyField(User, null=True, backref="repository_access_events", on_delete="SET NULL")
+    subject_user = ForeignKeyField(User, null=True, backref="repository_access_subject_events", on_delete="SET NULL")
+    invite = ForeignKeyField(RepositoryInvite, null=True, backref="access_events", on_delete="SET NULL")
+    access_request = ForeignKeyField(RepositoryAccessRequest, null=True, backref="access_events", on_delete="SET NULL")
+    action = CharField(max_length=32)
+    created_at = DateTimeField(default=utcnow)
+    detail = TextField(default="{}")
+
+    class Meta:
+        table_name = "repository_access_event"
+
+
 class BackgroundTask(BaseModel):
     """Durable background task row; see ``kohakuhub.tasks`` for semantics."""
 
@@ -1135,6 +1219,11 @@ def init_db():
             UserExternalToken,
             Repository,
             RepositoryAccessGrant,
+            RepositoryAccessRequest,
+            RepositoryInvite,
+            RepositoryInviteRedemption,
+            RepositoryGuestSession,
+            RepositoryAccessEvent,
             RepositoryMetadata,
             RepositoryFacet,
             RepositoryCard,

@@ -7,9 +7,11 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Response
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, EmailStr
+from peewee import Case, IntegrityError, SqliteDatabase, fn
 
+from kohakuhub import repository_invites
 from kohakuhub.config import cfg
-from kohakuhub.db import Session, Token, User, db
+from kohakuhub.db import Invitation, Session, Token, User, db, utcnow
 from kohakuhub.db_operations import (
     check_invitation_available,
     create_email_verification,
@@ -55,6 +57,7 @@ class RegisterRequest(BaseModel):
     username: str
     email: EmailStr
     password: Password
+    repo_invitation_token: str | None = None
 
 
 class LoginRequest(BaseModel):
@@ -85,6 +88,38 @@ class PasswordResetRequest(BaseModel):
 INVALID_RESET_LINK = "This reset link is invalid, expired or already used."
 
 
+def _consume_site_invitation(invitation_token, user):
+    """For a combined site/repository registration, consume both in the account transaction."""
+    invitation = get_invitation(invitation_token)
+    if invitation is None or invitation.action != "register_account":
+        raise HTTPException(400, detail="Invalid registration invitation")
+    try:
+        parameters = json.loads(invitation.parameters)
+        if not isinstance(parameters, dict):
+            raise ValueError()
+    except (ValueError, TypeError):
+        raise HTTPException(400, detail="Invalid registration invitation") from None
+    available = (
+        (Invitation.max_usage == -1)
+        | (Invitation.max_usage.is_null() & Invitation.used_at.is_null())
+        | (Invitation.usage_count < Invitation.max_usage)
+    )
+    now = utcnow()
+    consumed = Invitation.update(
+        usage_count=Invitation.usage_count + 1,
+        used_at=fn.COALESCE(Invitation.used_at, now),
+        used_by=Case(None, [(Invitation.used_at.is_null(), user.id)], Invitation.used_by),
+    ).where(
+        (Invitation.id == invitation.id) & (Invitation.expires_at > now) & available
+    ).execute()
+    if consumed != 1:
+        raise HTTPException(400, detail="Registration invitation is no longer available")
+    if org_id := parameters.get("org_id"):
+        org = get_user_by_id(org_id)
+        if org:
+            create_user_organization(user, org, parameters.get("role", "member"))
+
+
 @router.post("/register")
 async def register(req: RegisterRequest, invitation_token: str | None = None):
     """Register new user.
@@ -96,6 +131,16 @@ async def register(req: RegisterRequest, invitation_token: str | None = None):
     Returns:
         Success response
     """
+    repo_token = req.repo_invitation_token
+    # Older links use the invitation query parameter. A repository code is never
+    # a site-registration invitation, even when both are needed by site policy.
+    if invitation_token and invitation_token.startswith("repo_"):
+        if repo_token and repo_token != invitation_token:
+            raise HTTPException(400, detail="Conflicting repository invitation codes")
+        repo_token, invitation_token = invitation_token, None
+    if repo_token is not None and (not repo_token or len(repo_token) > 256):
+        raise HTTPException(400, detail="Invalid or unavailable repository invitation")
+
     # Check if registration requires invitation
     if cfg.auth.invitation_only:
         if not invitation_token:
@@ -131,7 +176,8 @@ async def register(req: RegisterRequest, invitation_token: str | None = None):
         )
 
     # Check if username or email already exists and create user atomically
-    with db.atomic():
+    transaction_args = ("IMMEDIATE",) if repo_token and isinstance(db, SqliteDatabase) and db.transaction_depth() == 0 else ()
+    with db.atomic(*transaction_args):
         if get_user_by_username(req.username):
             logger.warning(
                 f"Registration failed: username '{req.username}' already exists"
@@ -156,17 +202,31 @@ async def register(req: RegisterRequest, invitation_token: str | None = None):
             )
 
         # Create user
-        user = create_user(
-            username=req.username,
-            email=req.email,
-            password_hash=hash_password(req.password),
-            email_verified=not cfg.auth.require_email_verification,
-        )
+        try:
+            with db.atomic():
+                user = create_user(
+                    username=req.username,
+                    email=req.email,
+                    password_hash=hash_password(req.password),
+                    email_verified=not cfg.auth.require_email_verification,
+                )
+        except IntegrityError:
+            raise HTTPException(400, detail="Username or email already exists") from None
+        if repo_token:
+            if cfg.auth.invitation_only:
+                _consume_site_invitation(invitation_token, user)
+            row = repository_invites.find_invite(repo_token)
+            if row is None:
+                raise HTTPException(400, detail="Invalid or unavailable repository invitation")
+            try:
+                repository_invites.redeem_account(row.repository, repo_token, user)
+            except repository_invites.RepositoryInviteError as error:
+                raise HTTPException(400, detail={"error": str(error), "code": error.code}) from None
 
     logger.success(f"User registered: {user.username} (id={user.id})")
 
     # If registration used an invitation, mark it and add to org if specified
-    if cfg.auth.invitation_only and invitation_token:
+    if cfg.auth.invitation_only and invitation_token and not repo_token:
         invitation = get_invitation(invitation_token)
         if invitation:
             try:
