@@ -675,6 +675,7 @@ def serialize_items(rows: list) -> list[dict]:
                 "id": row.full_id,
                 "author": row.namespace,
                 "private": row.private,
+                "invite_mode": row.invite_mode,
                 "sha": hub_oid(record.main_sha) if record else None,
                 "createdAt": row.created_at.isoformat(),
                 "lastModified": (

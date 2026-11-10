@@ -559,6 +559,7 @@ async def list_user_repos(
                     "id": r.full_id,
                     "author": r.namespace,
                     "private": r.private,
+                    "invite_mode": r.invite_mode,
                     "sha": hub_oid(sha),
                     "lastModified": last_modified,
                     "createdAt": safe_strftime(r.created_at, DATETIME_FORMAT_ISO),

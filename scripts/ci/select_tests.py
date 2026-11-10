@@ -88,6 +88,7 @@ def pytest_collection_modifyitems(config, items):
             keep = (
                 path.name.startswith("test_huggingface_hub_")
                 or path.name == "test_real_hf_hub_end_to_end.py"
+                or path.name == "test_invite_hf_client_matrix.py"
             )
         (selected if keep else deselected).append(item)
     if not selected:

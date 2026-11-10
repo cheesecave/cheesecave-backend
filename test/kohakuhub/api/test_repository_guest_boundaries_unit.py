@@ -173,7 +173,14 @@ def test_repository_exchange_secrets_are_not_bearer_access_tokens(guest_boundary
 def test_renaming_a_guest_cookie_does_not_grant_a_different_repo_or_block_public_reads(guest_boundary):
     state = guest_boundary
     state.client.cookies.set(repository_access.guest_cookie_name(state.sibling), state.secret)
-    _assert_hf_denial(state.client.get("/api/models/owner/sibling/access"))
+    sibling = state.client.get("/api/models/owner/sibling/access")
+    missing = state.client.get("/api/models/owner/missing/access")
+    assert sibling.status_code == missing.status_code == 200
+    assert sibling.json() == missing.json() == {
+        "access": "standard", "visibility": None, "can_manage": False, "invite_markdown": None,
+    }
+    _assert_hf_denial(state.client.get("/api/models/owner/sibling/auth-check"))
+    _assert_hf_denial(state.client.get("/owner/sibling/resolve/main/file.bin", follow_redirects=False))
     public = make_repo(state.owner, "public")
     assert state.client.get(f"/api/models/{public.full_id}/auth-check").status_code == 200
     assert state.client.get(f"/api/models/{public.full_id}/access").json()["access"] == "full"

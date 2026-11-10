@@ -431,3 +431,18 @@ Rollback facts and the command are in
 - **Tables of their own on purpose**, as for 035, 037 to 041: an older release does not know them and ignores them, so rolling back is
   leaving them. Nothing is backfilled. `CREATE TABLE IF NOT EXISTS`; two containers starting together take turns on an advisory lock.
   A migration test of an earlier number drops 041's table with its own, which also makes this one count as not applied.
+
+## Invitation repositories: 043–044
+
+- **043** (`043_invite_repository.py`) adds `repository.invite_mode`, default false, with a database CHECK requiring
+  private visibility, plus `repository_access_grant` with one independently expiring/revocable read grant per account
+  and repository. Existing public/private rows retain their behavior; no grants are inferred.
+- **044** (`044_repository_invites.py`) adds `repository_access_request`, `repository_invite`,
+  `repository_invite_redemption`, `repository_guest_session` and `repository_access_event`. Codes, anonymous receipts
+  and guest secrets are represented by hashes. Unique exchange keys and SQL quota constraints protect concurrent
+  writes. Account grants, code exchange deadlines and guest lifetimes are independent.
+- Both migrations pin their SQL schema, check their predecessor before claiming completion, serialize PostgreSQL DDL
+  using advisory locks and can be rerun. Fresh `init_db()` creates equivalent models. No token or access backfill runs.
+  Apply both before starting the coordinated backend/Web release. An older release can ignore the new tables, but its
+  attempt to make an Invite repository public without clearing invitation mode is intentionally refused by the CHECK.
+  See [Invitation repositories](../../docs/features/invitation-repositories.md) for product and protocol boundaries.

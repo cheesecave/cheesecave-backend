@@ -8,6 +8,11 @@ icon: settings
 
 Manage settings for users, organizations, and repositories including profiles, avatars, and LFS configuration.
 
+Repository settings additionally accept `invite_mode`. Invitation mode requires `private=true`; ordinary HF
+`private=true` updates preserve it, explicit public updates clear it, and conflicting public/invite inputs
+are rejected without writes. This is separate from HF gated access. See
+[Invitation repositories](../features/invitation-repositories.md) for the complete conversion and management API.
+
 ## User Settings
 
 ### Get Current User Info
