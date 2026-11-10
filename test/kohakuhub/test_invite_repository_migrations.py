@@ -8,11 +8,15 @@ from types import SimpleNamespace
 import pytest
 from peewee import IntegrityError, SqliteDatabase
 
-from kohakuhub.db import Repository, RepositoryAccessGrant, User
+from kohakuhub.db import (
+    Repository, RepositoryAccessEvent, RepositoryAccessGrant, RepositoryAccessRequest,
+    RepositoryGuestSession, RepositoryInvite, RepositoryInviteRedemption, User,
+)
 from test.kohakuhub.support.factories import make_repo, make_user
 
 MIGRATION = Path(__file__).resolve().parents[2] / "scripts/db_migrations/043_invite_repository.py"
 TABLE = "repository_access_grant"
+FUTURE_MODELS = [RepositoryAccessEvent, RepositoryGuestSession, RepositoryInviteRedemption, RepositoryInvite, RepositoryAccessRequest]
 
 
 @pytest.fixture
@@ -27,7 +31,7 @@ def migration(db_dual, monkeypatch):
     owner = make_user("old-owner")
     make_repo(owner, "public", private=False)
     make_repo(owner, "private", private=True)
-    db_dual.drop_tables([RepositoryAccessGrant], safe=True)
+    db_dual.drop_tables([*FUTURE_MODELS, RepositoryAccessGrant], safe=True)
     db_dual.execute_sql('ALTER TABLE "repository" DROP COLUMN "invite_mode"')
     return module
 
@@ -121,7 +125,7 @@ def test_a_second_run_preserves_rows_and_grants(migration):
 
 def test_partial_application_is_repaired(migration, db_dual):
     migration.run()
-    db_dual.drop_tables([RepositoryAccessGrant])
+    db_dual.drop_tables([*FUTURE_MODELS, RepositoryAccessGrant], safe=True)
     assert not migration.is_applied(db_dual, migration.cfg)
     assert migration.run() is True and migration.is_applied(db_dual, migration.cfg)
 
@@ -135,7 +139,7 @@ def test_the_schema_is_not_applied_while_a_predecessor_is_missing(migration, db_
 def test_init_db_includes_the_grant_table(db_dual, monkeypatch):
     import kohakuhub.db as models
 
-    db_dual.drop_tables([RepositoryAccessGrant])
+    db_dual.drop_tables([*FUTURE_MODELS, RepositoryAccessGrant], safe=True)
     monkeypatch.setattr(models, "db", db_dual)
     models.init_db()
     assert db_dual.table_exists(TABLE)
