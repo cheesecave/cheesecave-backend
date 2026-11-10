@@ -106,3 +106,11 @@ def test_concurrent_registration_consumes_one_code_and_leaves_no_orphan_account(
     assert RepositoryInvite.get_by_id(row.id).redemption_count == 1
     assert RepositoryInviteRedemption.select().count() == 1
     assert RepositoryAccessGrant.select().count() == 1
+
+
+@pytest.mark.asyncio
+async def test_repository_binding_route_name_cannot_be_registered(registration):
+    with pytest.raises(HTTPException) as denied:
+        await routes.register(request(username="repo-access"))
+    assert denied.value.status_code == 400
+    assert "reserved" in denied.value.detail

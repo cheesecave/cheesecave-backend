@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi import HTTPException
-from peewee import OperationalError
+from peewee import OperationalError, ProgrammingError, SqliteDatabase
 
 from kohakuhub import repository_invites as service
 from kohakuhub.auth.permissions import RepoReadDeniedError, check_repo_read_permission
@@ -408,7 +408,9 @@ def test_audit_write_failure_rolls_back_grants_sessions_and_consumed_counts(cont
     _, reader, _, repo, _ = context
     row, secret = issue(context)
     # A real database failure, rather than a fake ORM, proves all writes share the transaction.
-    with table_missing(db_dual, RepositoryAccessEvent), pytest.raises(OperationalError):
+    # A missing table is OperationalError on SQLite and ProgrammingError on PostgreSQL.
+    expected_error = OperationalError if isinstance(db_dual, SqliteDatabase) else ProgrammingError
+    with table_missing(db_dual, RepositoryAccessEvent), pytest.raises(expected_error, match="repository_access_event"):
         if guest:
             service.redeem_guest(repo, secret)
         else:

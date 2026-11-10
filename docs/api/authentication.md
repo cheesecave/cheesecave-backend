@@ -21,6 +21,11 @@ User authentication, registration, API token management, and email verification.
 **Query Parameters:**
 - `invitation_token` (optional): Required if server is in invitation-only mode
 
+Registration also accepts optional JSON body field `repo_invitation_token`. It is processed in open
+registration mode and atomically grants the new account read/download access to the code's one repository.
+It does not satisfy invitation-only site registration: that mode still requires a separate site
+`register_account` invitation. See [Invitation repositories](../features/invitation-repositories.md).
+
 **Request Body:**
 ```json
 {

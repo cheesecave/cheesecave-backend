@@ -429,6 +429,7 @@ def _feed(user, scope, repo_type, limit, cursor, organization=None, event_type="
                 Repository.full_id,
                 Repository.repo_type,
                 Repository.private,
+                Repository.invite_mode,
                 Repository.owner,
                 Repository.created_at,
                 Repository.downloads,
@@ -460,6 +461,7 @@ def _feed(user, scope, repo_type, limit, cursor, organization=None, event_type="
                         "id": repo.full_id,
                         "type": repo.repo_type,
                         "private": repo.private,
+                        "invite_mode": repo.invite_mode,
                         "lastModified": _utc(
                             heads[repo.id][1] if repo.id in heads else repo.created_at
                         ),
