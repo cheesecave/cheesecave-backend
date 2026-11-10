@@ -104,19 +104,53 @@ Xet/CAS, dataset raw data, fallback downloads, writes, account management or tok
 creation. Revocation and scope are checked on each preview request. No original or
 presigned address is sent to the guest.
 
-First-release preview boundaries:
+The Web reuses the ordinary repository blob workbench, file tree, commit header,
+Markdown parser/themes, PDF reader and native media player. A controlled data
+source changes the permitted requests and actions; there is no separate guest
+file-preview page or Markdown renderer. Raw, original URL, download, edit and delete
+controls are absent for guests, and backend authorization independently refuses
+original-file and bulk-download routes.
 
-- Regular UTF-8 text/code/Markdown/JSON: plain text, at most 8 KiB and 64 lines.
-- Regular CSV/TSV/JSONL: first 20 data rows, 20 columns and 256 characters per cell,
-  from a bounded 64 KiB prefix.
-- Regular PNG/JPEG/WebP/GIF: a reencoded thumbnail of at most 512 pixels per side,
-  using only the first frame and removing source metadata. Source limit: 2 MiB and
-  16 million pixels. SVG is unsupported.
-- LFS-backed files, PDF, audio, video, Parquet, TAR/ZIP and other archives, model
-  weights and browser model inference: metadata only; no original file preview.
-- The tree shows at most 100 entries per folder and reports truncation. Previews
-  use the current default branch only. Arbitrary refs, byte ranges, offsets and
-  preview pagination are not available.
+Controlled preview boundaries:
+
+- Canonical root README Card: at most64KiB/1000lines. Other regular UTF-8
+  text/code/Markdown/JSON: at most8KiB/64lines, presented by the normal components.
+- CSV/TSV/JSONL: first20data rows,20columns and256characters per cell, from a64KiB
+  prefix. PNG/JPEG/WebP/GIF: reencoded metadata-free, first-frame thumbnails up to
+  512pixels per side; source limit2MiB/16million pixels. SVG remains unsupported.
+- PDF: the same page/zoom/canvas reader used by ordinary repositories; guests
+  receive only rendered PNG pages, never source PDF bytes. Source limit64MiB,
+  1000pages, page rasters up to1600pixels on the long edge. PDFium native parsing
+  runs in a separate20-second child process; PDF scripts/forms are not executed.
+- Video/audio: the same player used by ordinary repositories, with playback and
+  seeking. Guest sources are re-encoded H264/AAC HLS fragments, not copied original
+  streams or byte-range proxies. Source limits256MiB video/128MiB audio, duration
+  up to10minutes, video up to1280x720. Files beyond a processing limit return an
+  explicit preview error; supported media no longer falls back to metadata-only.
+- PDF/audio/video stored via LFS can be previewed only with a matching nondeleted,
+  repository-scoped File record and verified physical-object SHA256. Other LFS
+  content, Parquet, TAR/ZIP and other archives, weights and browser inference
+  remain metadata-only. No global object lookup grants guest access.
+- All previews use the current main snapshot. Tree100-entry pages and20-commit
+  history pages use signed, scope-bound cursors; complete listing is available by
+  pagination. Filename prefix filtering is local to the selected directory.
+  Callers cannot choose arbitrary file revisions, source ranges or offsets.
+- Media descriptors bind an immutable repository/head/path snapshot. Every page,
+  playlist and segment rechecks guest authorization and the current head, including
+  cache hits and completed processing. Revocation denies new fragments; a changed
+  head returns409 and requires reopening. No raw or presigned address is returned.
+- A private disposable cache holds at most4documents/media entries with15-minute
+  idle lifetime, at most2native jobs, and256MiB generated output per job. Video
+  processing has a90-second deadline; source reads60seconds. Network and playlist/
+  concat input demuxers are disallowed. Original media sources are removed after
+  transcoding; PDF sources remain private only for on-demand page rendering.
+
+PDF rendering uses the installed pypdfium2 package; imageio-ffmpeg supplies its
+platform FFmpeg binary, so the backend does not depend on a desktop application's
+PATH. Deploy with the declared Python dependencies and retain dependency licenses,
+including the actual bundled FFmpeg build's license. The Web declares PDF.js and
+HLS.js dependencies. Native-decoder crashes/timeouts are reported as preview errors,
+not permission misses and not triggers for upstream fallback.
 
 The product promise is **no original-file or bulk download for guests**. Material
 already displayed can still be copied or saved; this is not absolute copy protection.
@@ -140,7 +174,12 @@ is `model`, `dataset` or `space`. These are CheeseCave browser APIs, not HF gate
 | POST `/bind` | Authenticated account exchange |
 | POST, DELETE `/guest` | Establish/end the caller's guest session |
 | POST `/guests/{id}/revoke` | Manager revoke one guest session |
-| GET `/guest/tree`, `/guest/preview` | Dedicated bounded previews |
+| GET `/guest/overview`, `/guest/file-info` | Scoped repository/card and file metadata |
+| GET `/guest/tree`, `/guest/commits` | Scoped complete paginated listing/history |
+| GET `/guest/preview` | Controlled text/thumbnail/rows or PDF/media descriptor |
+| GET `/guest/media/pdf/page?path=...&page=1&snapshot=...` | Authorized rendered PNG page |
+| GET `/guest/media/hls/playlist?path=...&snapshot=...` | Authorized derivative HLS manifest |
+| GET `/guest/media/hls/segment?path=...&snapshot=...&segment=0` | Authorized re-encoded fragment |
 
 For nonlocal repositories and unauthorized ordinary-private repositories, preflight
 returns the same opaque `standard` response. The normal repository APIs then enforce
