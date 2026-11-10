@@ -72,6 +72,8 @@ async def list_repositories_admin(
                 "name": repo.name,
                 "full_id": repo.full_id,
                 "private": repo.private,
+                "invite_mode": repo.invite_mode,
+                "visibility": repo.visibility,
                 "owner_id": repo.owner.id if repo.owner else None,
                 "owner_username": owner_username,
                 "created_at": repo.created_at.isoformat(),
@@ -160,6 +162,8 @@ async def get_repository_admin(
         # keeps its original one, whose readable prefix shows the old name.
         "lakefs_repo": resolve_lakefs_repo(repo),
         "private": repo.private,
+        "invite_mode": repo.invite_mode,
+        "visibility": repo.visibility,
         "owner_id": owner.id if owner else None,
         "owner_username": owner.username if owner else "unknown",
         "created_at": repo.created_at.isoformat(),
