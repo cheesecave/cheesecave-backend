@@ -31,7 +31,7 @@ from kohakuhub.api.fallback.config import get_enabled_sources
 from kohakuhub.api.fallback.operations import ExternalListError
 from kohakuhub.api.repo.utils import listing
 from kohakuhub.api.utils.paging import next_link
-from kohakuhub.utils.datetime_utils import safe_strftime
+from kohakuhub.utils.datetime_utils import epoch_to_iso_z, safe_strftime
 from kohakuhub.utils.commit_id import hub_oid
 from kohakuhub.api.utils.trending import calculate_trending_scores
 from kohakuhub.api.repo.utils.hf import (
@@ -132,9 +132,7 @@ async def _resolve_main_head_via_lakefs(
 
     last_modified: str | None = None
     if commit_info and commit_info.get("creation_date"):
-        last_modified = datetime.fromtimestamp(
-            commit_info["creation_date"]
-        ).strftime(DATETIME_FORMAT_ISO)
+        last_modified = epoch_to_iso_z(commit_info["creation_date"])
     return sha, last_modified
 
 
@@ -266,9 +264,7 @@ async def get_repo_info(
                     repository=lakefs_repo, commit_id=commit_id
                 )
                 if commit_info and commit_info.get("creation_date"):
-                    last_modified = datetime.fromtimestamp(
-                        commit_info["creation_date"]
-                    ).strftime(DATETIME_FORMAT_ISO)
+                    last_modified = epoch_to_iso_z(commit_info["creation_date"])
             except Exception as ex:
                 logger.debug(f"Could not get commit info: {str(ex)}")
     except Exception as e:

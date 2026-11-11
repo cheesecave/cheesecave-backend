@@ -14,6 +14,7 @@ import kohakuhub.api.files as files_api
 from kohakuhub.db import File
 from test.kohakuhub.support.factories import make_file, make_repo, make_user
 from test.kohakuhub.support.fakes import lakefs_error
+from test.kohakuhub.support.zones import in_zone
 
 
 class _FakeClient:
@@ -391,21 +392,20 @@ async def test_preupload_and_revision_cover_validation_quota_and_resolution_erro
     monkeypatch.setattr(files_api, "resolve_lakefs_repo", lambda repo_row: "lake")
     monkeypatch.setattr(files_api, "hf_siblings_json", _siblings)
     monkeypatch.setattr(files_api, "resolve_revision", _async_return(value=("commit-1", {"creation_date": 1})))
-    success = await files_api.get_revision.__wrapped__(
-        files_api.RepoType.model,
-        "alice",
-        "demo",
-        "main",
-        request=None,
-        user=None,
-        expand=None,
-        blobs=False,
-    )
+    with in_zone("Asia/Shanghai"):  # the server process is not in UTC: the time on the wire still is
+        success = await files_api.get_revision.__wrapped__(
+            files_api.RepoType.model,
+            "alice",
+            "demo",
+            "main",
+            request=None,
+            user=None,
+            expand=None,
+            blobs=False,
+        )
     body = json.loads(success.body)
     assert body["sha"] == "commit-1" and body["revision"] == "main"
-    assert body["lastModified"] == files_api.datetime.fromtimestamp(1).strftime(
-        "%Y-%m-%dT%H:%M:%S.%fZ"
-    )
+    assert body["lastModified"] == "1970-01-01T00:00:01.000000Z"
     assert body["siblings"] == [{"rfilename": "a.txt"}] and "storage" not in body
 
     expanded = await files_api.get_revision.__wrapped__(
@@ -598,14 +598,16 @@ async def test_metadata_and_resolve_routes_cover_storage_backend_fallback_and_xe
         "content_type": "text/plain",
         "mtime": 1,
     }
-    presigned_url, headers = await files_api._get_file_metadata(
-        "model",
-        "alice",
-        "demo",
-        "main",
-        "folder/weights.bin",
-        None,
-    )
+    with in_zone("America/Los_Angeles"):  # the server process is not in UTC: the header still says GMT
+        presigned_url, headers = await files_api._get_file_metadata(
+            "model",
+            "alice",
+            "demo",
+            "main",
+            "folder/weights.bin",
+            None,
+        )
+    assert headers["Last-Modified"] == "Thu, 01 Jan 1970 00:00:01 GMT"
     assert presigned_url == "https://download.example.com/file"
     assert headers["X-Repo-Commit"] == "commit-sha"
     assert headers["X-Xet-hash"] == "sha256-value"

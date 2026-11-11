@@ -1,7 +1,10 @@
 """Datetime utility functions for safe handling of database datetime fields."""
 
-from datetime import datetime
+from datetime import datetime, timezone
+from email.utils import formatdate
 from typing import Optional
+
+from kohakuhub.constants import DATETIME_FORMAT_ISO
 
 
 def safe_isoformat(dt) -> str | None:
@@ -80,3 +83,17 @@ def safe_strftime(dt, fmt: str) -> Optional[str]:
     # Convert to datetime object first
     dt_obj = ensure_datetime(dt)
     return dt_obj.strftime(fmt)
+
+
+def epoch_to_iso_z(epoch: float) -> str:
+    """Epoch seconds (what LakeFS reports) as the UTC wire format ``2023-11-14T22:13:20.000000Z``.
+
+    Always UTC: ``datetime.fromtimestamp(epoch)`` without a zone uses the zone of the server process and
+    would put that zone's local time in front of a literal ``Z``.
+    """
+    return datetime.fromtimestamp(epoch, tz=timezone.utc).strftime(DATETIME_FORMAT_ISO)
+
+
+def epoch_to_http_date(epoch: float) -> str:
+    """Epoch seconds as an HTTP date (``Tue, 14 Nov 2023 22:13:20 GMT``), in English whatever the locale."""
+    return formatdate(epoch, usegmt=True)
