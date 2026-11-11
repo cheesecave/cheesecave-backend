@@ -18,6 +18,7 @@ import kohakuhub.api.repo.routers.info as repo_info
 from kohakuhub.auth.permissions import RepoReadDeniedError
 from test.kohakuhub.support.factories import make_daily_stats, make_repo, make_user
 from test.kohakuhub.support.list_local import list_local
+from test.kohakuhub.support.zones import ZONES, in_zone
 
 pytestmark = pytest.mark.usefixtures("db_scope")
 
@@ -389,3 +390,22 @@ def test_the_trending_scores_can_be_asked_for_some_repositories_only():
     assert set(calculate_trending_scores("model")) == {a.id, b.id}
     assert set(calculate_trending_scores("model", ids=[a.id])) == {a.id}
     assert calculate_trending_scores("model", ids=[]) == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("zone", ZONES)
+async def test_the_time_of_the_head_commit_is_utc_in_any_server_zone(lakefs, zone):
+    """``lastModified`` comes from LakeFS epoch seconds: the zone of the server process must not leak into it."""
+    lakefs.commit_result = {"creation_date": 1700000000}  # 2023-11-14T22:13:20Z
+    owner = make_user("alice")
+    make_repo(owner, "demo")
+
+    with in_zone(zone):
+        sha, last_modified = await repo_info._resolve_main_head_via_lakefs(lakefs, "model:owner/repo")
+        response = await repo_info.get_repo_info.__wrapped__(
+            "alice", "demo", request=_request("/api/models/alice/demo"), user=None, expand=None, blobs=False
+        )
+
+    assert sha == "commit-1234567890abcdef"
+    assert last_modified == "2023-11-14T22:13:20.000000Z"
+    assert json.loads(response.body)["lastModified"] == "2023-11-14T22:13:20.000000Z"
