@@ -1,0 +1,22 @@
+id: organizations-and-members
+title: Organizations and members
+category: Accounts
+description: Organizations by number of members.
+heavy: false
+dialects:
+- postgresql
+- sqlite
+params:
+- name: limit
+  type: int
+  default: 50
+  description: How many rows
+  min: 1
+  max: 500
+sql: |
+  SELECT o.username AS organization, COUNT(m.id) AS members
+  FROM "user" o LEFT JOIN userorganization m ON m.organization_id = o.id
+  WHERE o.is_org
+  GROUP BY o.username
+  ORDER BY members DESC
+  LIMIT :limit

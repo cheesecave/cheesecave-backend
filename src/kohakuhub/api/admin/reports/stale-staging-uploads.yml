@@ -1,0 +1,20 @@
+id: stale-staging-uploads
+title: Stale staging uploads
+category: Storage and LFS
+description: Uploads started more than N hours ago and never finished.
+heavy: false
+dialects:
+- postgresql
+params:
+- name: hours
+  type: int
+  default: 24
+  description: Older than (hours)
+  min: 1
+  max: 720
+sql: |
+  SELECT id, repo_type, path_in_repo, size, uploader_id, created_at
+  FROM stagingupload
+  WHERE created_at < now() - make_interval(hours => :hours)
+  ORDER BY created_at
+  LIMIT 100

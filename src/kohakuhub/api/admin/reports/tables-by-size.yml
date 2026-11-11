@@ -1,0 +1,13 @@
+id: tables-by-size
+title: Tables by size
+category: Health and capacity
+description: 'Every table with its estimated rows and total size (estimates: PostgreSQL''s own statistics).'
+heavy: false
+dialects:
+- postgresql
+params: []
+sql: |
+  SELECT c.relname AS table_name, c.reltuples::bigint AS estimated_rows, pg_total_relation_size(c.oid) AS total_bytes
+  FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+  WHERE n.nspname = 'public' AND c.relkind = 'r'
+  ORDER BY total_bytes DESC

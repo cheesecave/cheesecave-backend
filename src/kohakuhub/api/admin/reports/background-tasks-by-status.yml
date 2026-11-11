@@ -1,0 +1,14 @@
+id: background-tasks-by-status
+title: Background tasks by status
+category: Health and capacity
+description: How many tasks of each kind are in each state, the oldest and the newest.
+heavy: false
+dialects:
+- postgresql
+- sqlite
+params: []
+sql: |
+  SELECT kind, status, COUNT(*) AS tasks, MIN(created_at) AS oldest, MAX(created_at) AS newest
+  FROM background_task
+  GROUP BY kind, status
+  ORDER BY kind, status

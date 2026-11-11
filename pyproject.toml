@@ -36,6 +36,7 @@ dependencies = [
     "redis[hiredis]>=5.0",
     "requests",
     "rich",
+    "sqlglot>=25",
     "tinycss2>=1.2",
     "toml",
     "tomli; python_version < '3.11'",

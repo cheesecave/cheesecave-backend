@@ -1,0 +1,14 @@
+id: repository-statistics
+title: Repository statistics
+category: Repositories
+description: How many repositories of each type, public and private.
+heavy: false
+dialects:
+- postgresql
+- sqlite
+params: []
+sql: |
+  SELECT repo_type, private AS is_private, COUNT(*) AS repositories
+  FROM repository
+  GROUP BY repo_type, private
+  ORDER BY repo_type, private

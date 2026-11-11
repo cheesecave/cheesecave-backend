@@ -1,0 +1,13 @@
+id: lfs-garbage-collection
+title: LFS garbage collection
+category: Storage and LFS
+description: The state of the collector, its candidates and the tombstones.
+heavy: false
+dialects:
+- postgresql
+params: []
+sql: |
+  SELECT 'state: ' || key AS what, left(value, 200) AS detail, updated_at AS at FROM lfs_gc_state
+  UNION ALL SELECT 'candidates', COUNT(*)::text, MIN(created_at) FROM lfs_gc_candidate
+  UNION ALL SELECT 'tombstones: ' || state, COUNT(*)::text, MIN(created_at) FROM lfs_object_tombstone GROUP BY state
+  ORDER BY 1

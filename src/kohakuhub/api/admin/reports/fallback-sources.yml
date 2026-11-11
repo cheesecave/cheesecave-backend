@@ -1,0 +1,13 @@
+id: fallback-sources
+title: Fallback sources
+category: Security and site
+description: The upstream sources, in the order they are asked (the tokens are not shown).
+heavy: false
+dialects:
+- postgresql
+- sqlite
+params: []
+sql: |
+  SELECT id, namespace, name, source_type, url, priority, enabled, updated_at
+  FROM fallbacksource
+  ORDER BY priority, id

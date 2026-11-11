@@ -1,0 +1,15 @@
+id: users-over-quota
+title: Users over quota
+category: Accounts
+description: Users and organizations that use more than their quota.
+heavy: false
+dialects:
+- postgresql
+- sqlite
+params: []
+sql: |
+  SELECT username, is_org, private_used_bytes, private_quota_bytes, public_used_bytes, public_quota_bytes
+  FROM "user"
+  WHERE (private_quota_bytes IS NOT NULL AND private_used_bytes > private_quota_bytes)
+     OR (public_quota_bytes IS NOT NULL AND public_used_bytes > public_quota_bytes)
+  LIMIT 50

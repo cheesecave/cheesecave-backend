@@ -1,0 +1,20 @@
+id: recent-users
+title: Recent users
+category: Accounts
+description: Users who signed up in the last N days.
+heavy: false
+dialects:
+- postgresql
+params:
+- name: days
+  type: int
+  default: 7
+  description: How many days back
+  min: 1
+  max: 365
+sql: |
+  SELECT id, username, email, email_verified, created_at
+  FROM "user"
+  WHERE NOT is_org AND created_at >= now() - make_interval(days => :days)
+  ORDER BY created_at DESC
+  LIMIT 100

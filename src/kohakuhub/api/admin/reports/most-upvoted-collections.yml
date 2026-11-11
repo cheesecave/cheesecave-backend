@@ -1,0 +1,21 @@
+id: most-upvoted-collections
+title: Most upvoted collections
+category: Product
+description: Collections by upvotes, with their owners and item counts.
+heavy: false
+dialects:
+- postgresql
+- sqlite
+params:
+- name: limit
+  type: int
+  default: 20
+  description: How many rows
+  min: 1
+  max: 500
+sql: |
+  SELECT u.username AS owner, c.slug, c.title, c.private, c.upvotes_count,
+    (SELECT COUNT(*) FROM collectionitem i WHERE i.collection_id = c.id) AS items
+  FROM collection c JOIN "user" u ON u.id = c.owner_id
+  ORDER BY c.upvotes_count DESC, c.updated_at DESC
+  LIMIT :limit

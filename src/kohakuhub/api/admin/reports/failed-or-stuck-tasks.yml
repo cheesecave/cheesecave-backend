@@ -1,0 +1,20 @@
+id: failed-or-stuck-tasks
+title: Failed or stuck tasks
+category: Health and capacity
+description: Tasks that failed, and running tasks whose lease has expired.
+heavy: false
+dialects:
+- postgresql
+params:
+- name: limit
+  type: int
+  default: 50
+  description: How many rows
+  min: 1
+  max: 500
+sql: |
+  SELECT id, kind, status, attempts, max_attempts, left(last_error, 160) AS last_error, created_at, started_at, locked_until
+  FROM background_task
+  WHERE status = 'failed' OR (status = 'running' AND locked_until < now())
+  ORDER BY created_at DESC
+  LIMIT :limit

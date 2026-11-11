@@ -1,0 +1,28 @@
+id: downloads-last-days
+title: Downloads, last N days
+category: Product
+description: Repositories by download sessions in the last N days.
+heavy: false
+dialects:
+- postgresql
+params:
+- name: days
+  type: int
+  default: 7
+  description: How many days back
+  min: 1
+  max: 90
+- name: limit
+  type: int
+  default: 20
+  description: How many rows
+  min: 1
+  max: 500
+sql: |
+  SELECT r.full_id, SUM(d.download_sessions) AS sessions, SUM(d.authenticated_downloads) AS authenticated,
+    SUM(d.anonymous_downloads) AS anonymous
+  FROM dailyrepostats d JOIN repository r ON r.id = d.repository_id
+  WHERE d.date >= current_date - :days
+  GROUP BY r.full_id
+  ORDER BY sessions DESC
+  LIMIT :limit

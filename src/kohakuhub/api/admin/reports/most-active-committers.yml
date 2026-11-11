@@ -1,0 +1,27 @@
+id: most-active-committers
+title: Most active committers
+category: Repositories
+description: Users with the most commits in the last N days.
+heavy: true
+dialects:
+- postgresql
+params:
+- name: days
+  type: int
+  default: 30
+  description: How many days back
+  min: 1
+  max: 365
+- name: limit
+  type: int
+  default: 20
+  description: How many rows
+  min: 1
+  max: 500
+sql: |
+  SELECT username, COUNT(*) AS commits
+  FROM "commit"
+  WHERE created_at >= now() - make_interval(days => :days)
+  GROUP BY username
+  ORDER BY commits DESC
+  LIMIT :limit

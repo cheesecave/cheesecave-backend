@@ -1,0 +1,14 @@
+id: background-workers
+title: Background workers
+category: Health and capacity
+description: The workers and how long ago each was heard from.
+heavy: false
+dialects:
+- postgresql
+params: []
+sql: |
+  SELECT name, hostname, state, queues, concurrency, succeeded, failed, started_at, last_heartbeat_at,
+    now() - last_heartbeat_at AS silent_for
+  FROM background_worker
+  ORDER BY last_heartbeat_at DESC
+  LIMIT 50

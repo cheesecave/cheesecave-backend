@@ -1,0 +1,17 @@
+id: files-by-type
+title: Files by type
+category: Repositories
+description: Count and size of files by extension. Scans the whole file table (about a million rows in production).
+heavy: true
+dialects:
+- postgresql
+params: []
+sql: |
+  SELECT lower(substring(path_in_repo from '\.([^./]+)$')) AS extension,
+    COUNT(*) AS files, SUM(size) AS total_bytes,
+    SUM(CASE WHEN lfs THEN 1 ELSE 0 END) AS lfs_files
+  FROM "file"
+  WHERE NOT is_deleted AND position('.' in path_in_repo) > 0
+  GROUP BY 1
+  ORDER BY total_bytes DESC NULLS LAST
+  LIMIT 30

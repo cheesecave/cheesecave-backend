@@ -1,0 +1,20 @@
+id: unverified-users
+title: Unverified users
+category: Accounts
+description: Accounts whose e-mail is still not verified after N days.
+heavy: false
+dialects:
+- postgresql
+params:
+- name: days
+  type: int
+  default: 3
+  description: Older than (days)
+  min: 0
+  max: 365
+sql: |
+  SELECT id, username, email, created_at
+  FROM "user"
+  WHERE NOT is_org AND NOT email_verified AND created_at < now() - make_interval(days => :days)
+  ORDER BY created_at
+  LIMIT 100

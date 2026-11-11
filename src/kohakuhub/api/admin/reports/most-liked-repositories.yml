@@ -1,0 +1,20 @@
+id: most-liked-repositories
+title: Most liked repositories
+category: Repositories
+description: Repositories by likes.
+heavy: false
+dialects:
+- postgresql
+- sqlite
+params:
+- name: limit
+  type: int
+  default: 20
+  description: How many rows
+  min: 1
+  max: 500
+sql: |
+  SELECT full_id, likes_count, downloads
+  FROM repository
+  ORDER BY likes_count DESC
+  LIMIT :limit

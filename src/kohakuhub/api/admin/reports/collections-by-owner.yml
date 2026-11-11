@@ -1,0 +1,21 @@
+id: collections-by-owner
+title: Collections by owner
+category: Product
+description: Who has the most collections.
+heavy: false
+dialects:
+- postgresql
+- sqlite
+params:
+- name: limit
+  type: int
+  default: 20
+  description: How many rows
+  min: 1
+  max: 500
+sql: |
+  SELECT u.username AS owner, COUNT(*) AS collections, SUM(CASE WHEN c.private THEN 1 ELSE 0 END) AS private_ones
+  FROM collection c JOIN "user" u ON u.id = c.owner_id
+  GROUP BY u.username
+  ORDER BY collections DESC
+  LIMIT :limit
