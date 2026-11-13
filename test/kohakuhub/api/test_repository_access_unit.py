@@ -1,5 +1,6 @@
 """Browser access preflight exposes only invitation instructions before approval."""
 
+from datetime import timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -12,7 +13,7 @@ from kohakuhub.api import repository_access as access
 from kohakuhub.auth.dependencies import get_current_user, get_current_user_or_admin, get_optional_user
 from kohakuhub.auth.permissions import RepoReadDeniedError
 from kohakuhub.api.repo.utils.hf import hf_repo_not_found
-from kohakuhub.db import RepositoryAccessGrant, RepositoryAccessRequest, RepositoryGuestSession, RepositoryInvite, RepositoryInviteRedemption
+from kohakuhub.db import RepositoryAccessEvent, RepositoryAccessGrant, RepositoryAccessRequest, RepositoryGuestSession, RepositoryInvite, RepositoryInviteRedemption, utcnow
 from test.kohakuhub.support.factories import make_repo, make_user
 
 
@@ -178,6 +179,81 @@ def test_management_pagination_keeps_older_applications_reachable(browser):
     second = browser.client.get(browser.base + "/access/manage", params={"offset": 100}).json()
     assert [row["message"] for row in second["requests"]] == ["0"]
     assert second["has_more"]["requests"] is False
+
+
+@pytest.mark.parametrize("section", ["requests", "invitations", "grants", "events"])
+def test_management_sections_page_every_record_with_exact_repository_totals(browser, section):
+    browser.state["user"] = browser.owner
+    other_repo = make_repo(browser.owner, "other", private=True, invite_mode=True)
+    def create_row(repo, index):
+        match section:
+            case "requests":
+                return RepositoryAccessRequest.create(repository=repo, email=f"page-{index}@example.com")
+            case "invitations":
+                return RepositoryInvite.create(repository=repo, token_hash=f"{repo.id:032x}{index:032x}", expires_at=utcnow() + timedelta(days=1))
+            case "grants":
+                user = make_user(f"page-{repo.id}-{index}")
+                return RepositoryAccessGrant.create(repository=repo, user=user)
+            case "events":
+                return RepositoryAccessEvent.create(repository=repo, action="access_requested")
+    expected = [create_row(browser.repo, index).id for index in range(107)][::-1]
+    create_row(other_repo, 0)
+    seen = []
+    for offset in range(0, 120, 20):
+        result = browser.client.get(browser.base + "/access/manage", params={"section": section, "limit": 20, "offset": offset})
+        assert result.status_code == 200
+        assert result.headers["cache-control"] == "no-store"
+        page = result.json()
+        assert page["totals"] == {section: 107}
+        assert page["limit"] == 20 and page["offset"] == offset
+        assert page["has_more"] == {section: offset + 20 < 107}
+        assert [row["id"] for row in page[section]] == expected[offset:offset + 20]
+        assert not ({"requests", "invitations", "grants", "events", "guests"} - {section}) & page.keys()
+        seen.extend(row["id"] for row in page[section])
+    assert seen == expected
+    empty = browser.client.get(browser.base + "/access/manage", params={"section": section, "limit": 20, "offset": 200}).json()
+    assert empty[section] == [] and empty["totals"] == {section: 107}
+    assert empty["has_more"] == {section: False}
+    legacy = browser.client.get(browser.base + "/access/manage", params={"limit": 10, "offset": 100}).json()
+    assert legacy["totals"][section] == 107
+    assert [row["id"] for row in legacy[section]] == expected[100:]
+    assert {"requests", "invitations", "grants", "events", "guests"} <= legacy.keys()
+
+
+@pytest.mark.parametrize("params", [
+    {"section": "unknown"}, {"section": "requests", "limit": 0},
+    {"section": "requests", "limit": 101}, {"section": "requests", "offset": -1},
+])
+def test_management_section_pagination_rejects_invalid_parameters(browser, params):
+    browser.state["user"] = browser.owner
+    assert browser.client.get(browser.base + "/access/manage", params=params).status_code == 422
+
+
+def test_management_section_totals_and_rows_require_repository_management(browser):
+    params = {"section": "requests", "limit": 20, "offset": 0}
+    assert browser.client.get(browser.base + "/access/manage", params=params).status_code == 401
+    browser.state["user"] = browser.reader
+    assert browser.client.get(browser.base + "/access/manage", params=params).status_code == 403
+    make_repo(browser.owner, "hidden-paged", private=True)
+    denied = browser.client.get("/api/models/owner/hidden-paged/access/manage", params=params)
+    missing = browser.client.get("/api/models/owner/missing-paged/access/manage", params=params)
+    assert denied.status_code == missing.status_code == 404
+    assert denied.content == missing.content
+    browser.state["user"] = browser.owner
+    empty = browser.client.get(browser.base + "/access/manage", params=params).json()
+    assert empty["requests"] == [] and empty["totals"] == {"requests": 0}
+    assert empty["has_more"] == {"requests": False}
+
+
+def test_management_guest_section_remains_available_to_managers(browser):
+    browser.state["user"] = browser.owner
+    token = browser.client.post(browser.base + "/access/invites", json={}).json()["token"]
+    browser.state["user"] = None
+    assert browser.client.post(browser.base + "/access/guest", json={"token": token}).status_code == 200
+    browser.state["user"] = browser.owner
+    page = browser.client.get(browser.base + "/access/manage", params={"section": "guests", "limit": 20}).json()
+    assert len(page["guests"]) == 1 and page["totals"] == {"guests": 1}
+    assert page["has_more"] == {"guests": False}
 
 
 def test_new_unauthorized_routes_do_not_reveal_ordinary_private_existence(browser):
