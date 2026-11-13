@@ -184,27 +184,39 @@ def my_request(repo_type: RepoType, namespace: str, name: str, response: Respons
 
 @router.get(BASE + "/manage")
 def manage(repo_type: RepoType, namespace: str, name: str, response: Response,
-           limit: int = 100, offset: int = 0, identity=Depends(get_current_user_or_admin)):
+           limit: int = 100, offset: int = 0, identity=Depends(get_current_user_or_admin),
+           section: Literal["requests", "invitations", "grants", "guests", "events"] | None = None):
     repo = _repo(repo_type, namespace, name)
     _manager(repo, identity)
     response.headers["Cache-Control"] = "no-store"
+    if section is not None and (not 1 <= limit <= 100 or offset < 0):
+        raise HTTPException(422, detail={"error": "Page size must be between 1 and 100 and offset cannot be negative"})
     limit = max(1, min(limit, 100))
     offset = max(0, offset)
-    def rows(model):
-        return model.select().where(model.repository == repo.id).order_by(model.id.desc()).offset(offset).limit(limit)
-    return {
-        "requests": [_request_data(row) for row in rows(RepositoryAccessRequest)],
-        "invitations": [_invite_data(row) for row in rows(RepositoryInvite)],
-        "grants": [_grant_data(row) for row in rows(RepositoryAccessGrant)],
-        "guests": [{"id": row.id, "invite_id": row.invite_id, "created_at": _iso(row.created_at),
-                    "expires_at": _iso(row.expires_at), "revoked_at": _iso(row.revoked_at)} for row in rows(RepositoryGuestSession)],
-        "events": [{"id": row.id, "action": row.action, "actor_id": row.actor_id,
-                    "subject_user_id": row.subject_user_id, "created_at": _iso(row.created_at),
-                    "detail": json.loads(row.detail)} for row in rows(RepositoryAccessEvent)],
+    tables = {
+        "requests": (RepositoryAccessRequest, _request_data),
+        "invitations": (RepositoryInvite, _invite_data),
+        "grants": (RepositoryAccessGrant, _grant_data),
+        "guests": (RepositoryGuestSession, lambda row: {
+            "id": row.id, "invite_id": row.invite_id, "created_at": _iso(row.created_at),
+            "expires_at": _iso(row.expires_at), "revoked_at": _iso(row.revoked_at),
+        }),
+        "events": (RepositoryAccessEvent, lambda row: {
+            "id": row.id, "action": row.action, "actor_id": row.actor_id,
+            "subject_user_id": row.subject_user_id, "created_at": _iso(row.created_at),
+            "detail": json.loads(row.detail),
+        }),
+    }
+    result, totals = {}, {}
+    for key in ([section] if section is not None else tables):
+        model, serialize = tables[key]
+        query = model.select().where(model.repository == repo.id)
+        totals[key] = query.count()
+        result[key] = [serialize(row) for row in query.order_by(model.id.desc()).offset(offset).limit(limit)]
+    return result | {
+        "totals": totals,
         "limit": limit, "offset": offset,
-        "has_more": {key: model.select().where(model.repository == repo.id).count() > offset + limit
-                     for key, model in (("requests", RepositoryAccessRequest), ("invitations", RepositoryInvite),
-                                        ("grants", RepositoryAccessGrant), ("guests", RepositoryGuestSession), ("events", RepositoryAccessEvent))},
+        "has_more": {key: total > offset + limit for key, total in totals.items()},
     }
 
 
