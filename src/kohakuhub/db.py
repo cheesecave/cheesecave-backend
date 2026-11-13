@@ -888,7 +888,11 @@ class RepositoryAccessRequest(BaseModel):
 
 
 class RepositoryInvite(BaseModel):
-    """One repository's exchange secret; secrets are never stored in plaintext."""
+    """Hashed repository code claimable by one account after optional guest visits.
+
+    Historical counters/columns remain for audit and schema compatibility.
+    Guest storage capacity grows on visits; only account binding consumes a code.
+    """
 
     repository = ForeignKeyField(Repository, backref="repository_invites", on_delete="CASCADE")
     token_hash = CharField(max_length=64, unique=True)

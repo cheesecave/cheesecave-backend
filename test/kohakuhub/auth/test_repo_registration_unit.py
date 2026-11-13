@@ -114,3 +114,77 @@ async def test_repository_binding_route_name_cannot_be_registered(registration):
         await routes.register(request(username="repo-access"))
     assert denied.value.status_code == 400
     assert "reserved" in denied.value.detail
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("invitation_only", [False, True])
+async def test_guest_code_registers_one_account_and_then_rejects_another(registration, monkeypatch, invitation_only):
+    repo, row, token = registration
+    prior_sessions = [invites.redeem_guest(repo, token) for _ in range(2)]
+    monkeypatch.setattr(routes.cfg.auth, "invitation_only", invitation_only)
+    site_invite = make_invitation("first-site-registration-code") if invitation_only else None
+    result = await routes.register(request(token), invitation_token=site_invite.token if site_invite else None)
+    assert result["success"]
+    user = User.get(username="new-reader")
+    assert check_repo_read_permission(repo, user)
+    assert RepositoryAccessGrant.select().count() == RepositoryInviteRedemption.select().count() == 1
+    persisted = RepositoryInvite.get_by_id(row.id)
+    assert (persisted.redemption_count, persisted.guest_session_count) == (1, 2)
+    for session, guest_secret in prior_sessions:
+        assert invites.get_guest_session(repo, guest_secret).id == session.id
+    with pytest.raises(invites.RepositoryInviteError):
+        invites.redeem_guest(repo, token)
+    if site_invite:
+        assert Invitation.get_by_id(site_invite.id).usage_count == 1
+    another_site_invite = make_invitation("second-site-registration-code") if invitation_only else None
+    with pytest.raises(HTTPException) as denied:
+        await routes.register(request(token, "another-reader"), invitation_token=another_site_invite.token if another_site_invite else None)
+    assert denied.value.status_code == 400
+    assert User.get_or_none(username="another-reader") is None
+    assert RepositoryAccessGrant.select().count() == RepositoryInviteRedemption.select().count() == 1
+    assert RepositoryInvite.get_by_id(row.id).redemption_count == 1
+    if another_site_invite:
+        assert Invitation.get_by_id(another_site_invite.id).usage_count == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("invitation_only", [False, True])
+async def test_failed_registration_rolls_back_binding_but_preserves_prior_guest_sessions(registration, monkeypatch, invitation_only):
+    repo, row, token = registration
+    prior_sessions = [invites.redeem_guest(repo, token) for _ in range(2)]
+    monkeypatch.setattr(routes.cfg.auth, "invitation_only", invitation_only)
+    site_invite = make_invitation("rollback-site-registration-code") if invitation_only else None
+    redeem = invites.redeem_account
+    def fail_after_binding(*args, **kwargs):
+        # Real SQL has already consumed the code and created its grant; the injected
+        # later failure proves registration rolls all of those writes back together.
+        redeem(*args, **kwargs)
+        raise RuntimeError("registration failed after repository binding")
+    monkeypatch.setattr(invites, "redeem_account", fail_after_binding)
+    with pytest.raises(RuntimeError, match="failed after repository binding"):
+        await routes.register(request(token), invitation_token=site_invite.token if site_invite else None)
+    assert User.get_or_none(username="new-reader") is None
+    assert RepositoryAccessGrant.select().count() == RepositoryInviteRedemption.select().count() == 0
+    persisted = RepositoryInvite.get_by_id(row.id)
+    assert (persisted.redemption_count, persisted.guest_session_count) == (0, 2)
+    for session, guest_secret in prior_sessions:
+        assert invites.get_guest_session(repo, guest_secret).id == session.id
+    if site_invite:
+        assert Invitation.get_by_id(site_invite.id).usage_count == 0
+    monkeypatch.setattr(invites, "redeem_account", redeem)
+    assert (await routes.register(request(token), invitation_token=site_invite.token if site_invite else None))["success"]
+
+
+@pytest.mark.asyncio
+async def test_prior_guest_sessions_do_not_bypass_invitation_only_registration_policy(registration, monkeypatch):
+    repo, row, token = registration
+    session, guest_secret = invites.redeem_guest(repo, token)
+    monkeypatch.setattr(routes.cfg.auth, "invitation_only", True)
+    with pytest.raises(HTTPException) as denied:
+        await routes.register(request(token))
+    assert denied.value.status_code in (400, 403)
+    assert User.get_or_none(username="new-reader") is None
+    assert RepositoryAccessGrant.select().count() == RepositoryInviteRedemption.select().count() == 0
+    persisted = RepositoryInvite.get_by_id(row.id)
+    assert (persisted.redemption_count, persisted.guest_session_count) == (0, 1)
+    assert invites.get_guest_session(repo, guest_secret).id == session.id

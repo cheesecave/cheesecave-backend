@@ -38,7 +38,7 @@ def issue(context, **kwargs):
     return service.issue_invite(repo, owner, expires_at=utcnow() + timedelta(days=7), **kwargs)
 
 
-def test_issue_stores_only_a_hash_and_bounded_independent_limits(context):
+def test_issue_stores_only_a_hash_and_single_use_limits(context):
     row, secret = issue(context)
     assert secret.startswith("repo_") and len(secret) > 40
     assert row.token_hash != secret and len(row.token_hash) == 64
@@ -112,7 +112,7 @@ def test_revoked_grants_are_never_reactivated_by_repeated_exchange(context):
 
 def test_expiration_stops_new_exchange_but_does_not_revoke_existing_account_grant(context, monkeypatch):
     _, reader, outsider, repo, _ = context
-    row, secret = issue(context, max_redemptions=2)
+    row, secret = issue(context)
     grant = service.redeem_account(repo, secret, reader)
     monkeypatch.setattr(service, "utcnow", lambda: row.expires_at + timedelta(seconds=1))
     assert service.redeem_account(repo, secret, reader).id == grant.id
@@ -234,16 +234,19 @@ def test_rejection_and_review_cross_repo_protection(context):
 def test_guests_are_separate_bounded_sessions_and_invite_revocation_preserves_account_grants(context, monkeypatch):
     owner, reader, _, repo, sibling = context
     row, secret = issue(context)
-    grant = service.redeem_account(repo, secret, reader)
     session, session_secret = service.redeem_guest(repo, secret)
+    repeated_session, repeated_secret = service.redeem_guest(repo, secret)
+    grant = service.redeem_account(repo, secret, reader)
     assert session.token_hash != session_secret and session.invite_id == row.id
     assert service.get_guest_session(repo, session_secret).id == session.id
     assert service.get_guest_session(sibling, session_secret) is None
     assert service.get_guest_session(repo, "bad") is None
     with pytest.raises(service.RepositoryInviteError):
         service.redeem_guest(repo, secret)
-    assert RepositoryInvite.get_by_id(row.id).guest_session_count == 1
+    assert RepositoryInvite.get_by_id(row.id).guest_session_count == 2
     service.revoke_invite(repo, row.id, owner)
+    assert service.get_guest_session(repo, repeated_secret) is None
+    assert RepositoryGuestSession.get_by_id(repeated_session.id).revoked_at is not None
     assert service.get_guest_session(repo, session_secret) is None
     assert RepositoryGuestSession.get_by_id(session.id).revoked_at is not None
     assert RepositoryAccessGrant.get_by_id(grant.id).revoked_at is None
@@ -329,7 +332,7 @@ def test_dates_are_normalized_and_malformed_expirations_rejected(context):
 def test_account_expiry_is_independent_of_code_and_new_codes_do_not_restore_revoked_grants(context, monkeypatch):
     owner, reader, outsider, repo, _ = context
     end = utcnow() + timedelta(hours=1)
-    row, secret = issue(context, max_redemptions=2, grant_expires_at=end)
+    row, secret = issue(context, grant_expires_at=end)
     grant = service.redeem_account(repo, secret, reader)
     assert grant.expires_at == end
     monkeypatch.setattr(service, "utcnow", lambda: end + timedelta(seconds=1))
@@ -421,7 +424,7 @@ def test_audit_write_failure_rolls_back_grants_sessions_and_consumed_counts(cont
     assert row.redemption_count == row.guest_session_count == 0
 
 
-def test_concurrent_guest_sessions_obey_a_separate_total_issue_limit(context, db_dual):
+def test_concurrent_guest_sessions_do_not_consume_account_binding(context, db_dual):
     _, _, _, repo, _ = context
     row, secret = issue(context)
 
@@ -435,10 +438,10 @@ def test_concurrent_guest_sessions_obey_a_separate_total_issue_limit(context, db
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         results = list(pool.map(exchange, [0, 1]))
-    assert sum(result is not None for result in results) == 1
+    assert len(set(results)) == 2 and None not in results
     row = RepositoryInvite.get_by_id(row.id)
-    assert row.redemption_count == 0 and row.guest_session_count == 1
-    assert RepositoryGuestSession.select().count() == 1
+    assert row.redemption_count == 0 and row.guest_session_count == 2
+    assert RepositoryGuestSession.select().count() == 2
 
 
 def test_concurrent_guest_issue_and_invitation_revocation_leave_no_active_guest(context, db_dual):
@@ -462,3 +465,67 @@ def test_concurrent_guest_issue_and_invitation_revocation_leave_no_active_guest(
         assert service.get_guest_session(repo, session_secret) is None
     assert RepositoryInvite.get_by_id(row.id).revoked_at is not None
     assert not RepositoryGuestSession.select().where(RepositoryGuestSession.revoked_at.is_null()).exists()
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+def test_reusable_guest_code_can_later_bind_exactly_one_account(context, legacy):
+    _, reader, outsider, repo, _ = context
+    row, secret = issue(context)
+    if legacy:
+        RepositoryInvite.update(max_redemptions=5, max_guest_sessions=1).where(RepositoryInvite.id == row.id).execute()
+    guests = [service.redeem_guest(repo, secret) for _ in range(3)]
+    actual = RepositoryInvite.get_by_id(row.id)
+    assert actual.redemption_count == 0 and actual.guest_session_count == 3
+    grant = service.redeem_account(repo, secret, reader)
+    assert check_repo_read_permission(repo, reader)
+    assert service.redeem_account(repo, secret, reader).id == grant.id
+    assert all(service.get_guest_session(repo, guest_secret).id == session.id for session, guest_secret in guests)
+    with pytest.raises(service.RepositoryInviteError):
+        service.redeem_account(repo, secret, outsider)
+    with pytest.raises(service.RepositoryInviteError):
+        service.redeem_guest(repo, secret)
+    actual = RepositoryInvite.get_by_id(row.id)
+    assert (actual.redemption_count, actual.guest_session_count) == (1, 3)
+    assert RepositoryAccessGrant.select().count() == RepositoryInviteRedemption.select().count() == 1
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+def test_account_binding_serializes_with_guest_opening_and_blocks_later_openings(context, db_dual, legacy):
+    from threading import Barrier
+    _, reader, _, repo, _ = context
+    row, secret = issue(context)
+    if legacy:
+        RepositoryInvite.update(max_redemptions=5, max_guest_sessions=1).where(RepositoryInvite.id == row.id).execute()
+    ready = Barrier(2)
+    def exchange(kind):
+        try:
+            ready.wait(timeout=10)
+            if kind == "account":
+                service.redeem_account(repo, secret, reader)
+            else:
+                service.redeem_guest(repo, secret)
+            return kind
+        except service.RepositoryInviteError:
+            return None
+        finally:
+            db_dual.close()
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(exchange, ["account", "guest"]))
+    assert results[0] == "account"
+    actual = RepositoryInvite.get_by_id(row.id)
+    assert actual.redemption_count == 1
+    assert actual.guest_session_count == int(results[1] == "guest")
+    actions = list(RepositoryAccessEvent.select(RepositoryAccessEvent.action).where(RepositoryAccessEvent.action.in_(["invite_redeemed", "guest_session_issued"])).order_by(RepositoryAccessEvent.id).scalars())
+    assert len(actions) == 1 + actual.guest_session_count
+    assert actions[-1] == "invite_redeemed"
+    with pytest.raises(service.RepositoryInviteError):
+        service.redeem_guest(repo, secret)
+
+
+@pytest.mark.parametrize("limits", [
+    {"max_redemptions": 2}, {"max_guest_sessions": 2}, {"max_guest_sessions": 0},
+])
+def test_issue_rejects_obsolete_quota_configuration(context, limits):
+    with pytest.raises(service.RepositoryInviteError):
+        issue(context, **limits)
+    assert RepositoryInvite.select().count() == 0

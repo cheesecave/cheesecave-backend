@@ -97,7 +97,8 @@ def issue_invite(
         raise RepositoryInviteError("Exchange expiration must be in the next 366 days.", "invalid_expiration")
     if grant_expires_at is not None and grant_expires_at <= now:
         raise RepositoryInviteError("Account grant expiration must be in the future.", "invalid_expiration")
-    limits = ((max_redemptions, 1, 10000), (max_guest_sessions, 0, 10000), (guest_ttl_seconds, 1, 604800))
+    # Account binding consumes the code; guest visits are audited but do not consume it.
+    limits = ((max_redemptions, 1, 1), (max_guest_sessions, 1, 1), (guest_ttl_seconds, 1, 604800))
     if any(type(value) is not int or not low <= value <= high for value, low, high in limits):
         raise RepositoryInviteError("Invitation limits are out of range.", "invalid_limits")
     if not isinstance(label, str) or len(label) > 100:
@@ -211,7 +212,7 @@ def redeem_account(repo, token, user):
         consumed = RepositoryInvite.update(redemption_count=RepositoryInvite.redemption_count + 1).where(
             (RepositoryInvite.id == row.id) & RepositoryInvite.revoked_at.is_null()
             & (RepositoryInvite.expires_at > utcnow())
-            & (RepositoryInvite.redemption_count < RepositoryInvite.max_redemptions)
+            & (RepositoryInvite.redemption_count == 0)
         ).execute()
         if consumed != 1:
             raise RepositoryInviteError("Invalid or unavailable repository invitation.")
@@ -312,10 +313,15 @@ def redeem_guest(repo, token):
         _private_repo(repo)
         row = _invite(repo, token)
         _available(row)
-        consumed = RepositoryInvite.update(guest_session_count=RepositoryInvite.guest_session_count + 1).where(
+        # Legacy schemas constrain the audit count to their old capacity column.
+        # Grow that storage capacity under the same row lock; it is no guest quota.
+        consumed = RepositoryInvite.update(
+            guest_session_count=RepositoryInvite.guest_session_count + 1,
+            max_guest_sessions=max(row.max_guest_sessions, row.guest_session_count + 1),
+        ).where(
             (RepositoryInvite.id == row.id) & RepositoryInvite.revoked_at.is_null()
             & (RepositoryInvite.expires_at > utcnow())
-            & (RepositoryInvite.guest_session_count < RepositoryInvite.max_guest_sessions)
+            & (RepositoryInvite.redemption_count == 0)
         ).execute()
         if consumed != 1:
             raise RepositoryInviteError("Invalid or unavailable repository invitation.")

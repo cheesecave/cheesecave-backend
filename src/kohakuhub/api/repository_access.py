@@ -225,8 +225,8 @@ def review(repo_type: RepoType, namespace: str, name: str, request_id: int, body
 
 class InviteBody(BaseModel):
     expires_days: int = Field(default=7, ge=1, le=90)
-    max_redemptions: int = Field(default=1, ge=1, le=10000)
-    max_guest_sessions: int = Field(default=1, ge=0, le=10000)
+    max_redemptions: int = Field(default=1, ge=1, le=1, strict=True, deprecated=True)
+    max_guest_sessions: int = Field(default=1, ge=1, le=1, strict=True, deprecated=True)
     guest_ttl_seconds: int = Field(default=86400, ge=60, le=604800)
     grant_expires_at: datetime | None = None
     label: str = Field(default="", max_length=100)
