@@ -30,7 +30,7 @@ def guest_boundary(db_fresh, monkeypatch):
     make_file(target, "file.bin", "a" * 64, size=32, lfs=True)
     make_file(sibling, "file.bin", "b" * 64, size=32, lfs=True)
     row, code = invites.issue_invite(
-        target, owner, expires_at=utcnow() + timedelta(days=1), max_guest_sessions=2,
+        target, owner, expires_at=utcnow() + timedelta(days=1),
     )
     upstream = {}
     monkeypatch.setattr(cfg.fallback, "enabled", True)

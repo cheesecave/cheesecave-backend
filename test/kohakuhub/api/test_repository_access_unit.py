@@ -12,7 +12,7 @@ from kohakuhub.api import repository_access as access
 from kohakuhub.auth.dependencies import get_current_user, get_current_user_or_admin, get_optional_user
 from kohakuhub.auth.permissions import RepoReadDeniedError
 from kohakuhub.api.repo.utils.hf import hf_repo_not_found
-from kohakuhub.db import RepositoryAccessGrant, RepositoryAccessRequest, RepositoryInvite, RepositoryInviteRedemption
+from kohakuhub.db import RepositoryAccessGrant, RepositoryAccessRequest, RepositoryGuestSession, RepositoryInvite, RepositoryInviteRedemption
 from test.kohakuhub.support.factories import make_repo, make_user
 
 
@@ -138,6 +138,7 @@ def test_binding_guest_and_revocation_have_independent_lifetimes(browser):
     browser.state["user"] = browser.owner
     issued = browser.client.post(browser.base + "/access/invites", json={}).json()
     token, invitation_id = issued["token"], issued["invitation"]["id"]
+    account_code = browser.client.post(browser.base + "/access/invites", json={}).json()["token"]
     browser.state["user"] = None
     browser.client.cookies.set("session_id", "existing-normal-login-cookie")
     guest = browser.client.post(browser.base + "/access/guest", json={"token": token})
@@ -148,8 +149,9 @@ def test_binding_guest_and_revocation_have_independent_lifetimes(browser):
     assert browser.client.post(browser.base + "/access/bind", json={"token": token}).status_code == 401
     browser.state["user"] = browser.reader
     for _ in range(2):
-        assert browser.client.post(browser.base + "/access/bind", json={"token": token}).status_code == 200
-    assert RepositoryInvite.get_by_id(invitation_id).redemption_count == 1
+        assert browser.client.post(browser.base + "/access/bind", json={"token": account_code}).status_code == 200
+    assert RepositoryInvite.get_by_id(invitation_id).redemption_count == 0
+    assert RepositoryInvite.get_by_id(invitation_id).guest_session_count == 1
     assert RepositoryInviteRedemption.select().count() == 1
     assert browser.client.get(browser.base + "/access").json()["access"] == "full"
     browser.state["user"] = browser.owner
@@ -163,7 +165,7 @@ def test_binding_guest_and_revocation_have_independent_lifetimes(browser):
     assert browser.client.post(browser.base + f"/access/grants/{grant_id}/revoke").status_code == 200
     browser.state["user"] = browser.reader
     assert browser.client.get(browser.base + "/access").json()["access"] == "invite"
-    assert browser.client.post(browser.base + "/access/bind", json={"token": token}).status_code == 200
+    assert browser.client.post(browser.base + "/access/bind", json={"token": account_code}).status_code == 200
     assert browser.client.get(browser.base + "/access").json()["access"] == "invite"  # Repeat does not restore a revoked grant.
 
 
@@ -193,7 +195,7 @@ def test_managers_can_grant_accounts_and_revoke_guests_independently(browser):
     assert browser.client.post(browser.base + "/access/grants", json={"username": "unknown"}).status_code == 404
     granted = browser.client.post(browser.base + "/access/grants", json={"username": "reader"})
     assert granted.status_code == 200 and granted.json()["grant"]["username"] == "reader"
-    issued = browser.client.post(browser.base + "/access/invites", json={"max_guest_sessions": 2}).json()
+    issued = browser.client.post(browser.base + "/access/invites", json={}).json()
     browser.state["user"] = None
     assert browser.client.post(browser.base + "/access/guest", json={"token": issued["token"]}).status_code == 200
     browser.state["user"] = browser.owner
@@ -232,3 +234,56 @@ def test_guest_logout_without_guest_preserves_normal_cookie_and_masks_existence(
     assert all(response.status_code == 200 and response.json() == {"success": True} for response in results)
     assert all("set-cookie" not in response.headers for response in results)
     assert browser.client.cookies.get("session_id") == "unchanged-normal-cookie"
+
+
+@pytest.mark.parametrize("first_exchange", ["account", "guest"])
+def test_one_account_binding_retires_code_without_revoking_existing_guest_sessions(browser, first_exchange):
+    browser.state["user"] = browser.owner
+    issued = browser.client.post(browser.base + "/access/invites", json={}).json()
+    token, invite_id = issued["token"], issued["invitation"]["id"]
+    guest_count = 0
+    if first_exchange == "guest":
+        browser.state["user"] = None
+        for _ in range(2):
+            assert browser.client.post(browser.base + "/access/guest", json={"token": token}).status_code == 200
+        guest_count = 2
+        assert browser.client.get(browser.base + "/access").json()["access"] == "guest"
+    browser.state["user"] = browser.reader
+    first = browser.client.post(browser.base + "/access/bind", json={"token": token})
+    assert first.status_code == 200
+    repeated = browser.client.post(browser.base + "/access/bind", json={"token": token})
+    assert repeated.status_code == 200
+    assert repeated.json()["grant"]["id"] == first.json()["grant"]["id"]
+    assert RepositoryAccessGrant.select().count() == RepositoryInviteRedemption.select().count() == 1
+    assert RepositoryGuestSession.select().count() == guest_count
+    assert browser.client.get(browser.base + "/access").json()["access"] == "full"
+    browser.state["user"] = None
+    denied_guest = browser.client.post(browser.base + "/access/guest", json={"token": token})
+    assert denied_guest.status_code == 400
+    assert denied_guest.json()["detail"]["code"] == "invalid_invitation"
+    assert token not in denied_guest.text
+    assert browser.client.get(browser.base + "/access").json()["access"] == ("guest" if guest_count else "invite")
+    browser.state["user"] = make_user("other-reader")
+    denied_account = browser.client.post(browser.base + "/access/bind", json={"token": token})
+    assert denied_account.status_code == 400
+    assert denied_account.json()["detail"]["code"] == "invalid_invitation"
+    row = RepositoryInvite.get_by_id(invite_id)
+    assert (row.redemption_count, row.guest_session_count) == (1, guest_count)
+    assert RepositoryGuestSession.select().where(RepositoryGuestSession.revoked_at.is_null(False)).count() == 0
+
+
+@pytest.mark.parametrize("field", ["max_redemptions", "max_guest_sessions"])
+@pytest.mark.parametrize("value", [0, 2, True, "1", 1.0])
+def test_issuance_api_rejects_non_unit_or_non_integer_limits(browser, field, value):
+    browser.state["user"] = browser.owner
+    response = browser.client.post(browser.base + "/access/invites", json={field: value})
+    assert response.status_code == 422
+    assert RepositoryInvite.select().count() == 0
+
+
+def test_issuance_api_accepts_legacy_explicit_single_use_limits(browser):
+    browser.state["user"] = browser.owner
+    response = browser.client.post(browser.base + "/access/invites", json={"max_redemptions": 1, "max_guest_sessions": 1})
+    assert response.status_code == 200
+    row = RepositoryInvite.get_by_id(response.json()["invitation"]["id"])
+    assert (row.max_redemptions, row.max_guest_sessions) == (1, 1)
