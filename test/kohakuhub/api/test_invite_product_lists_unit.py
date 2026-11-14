@@ -1,6 +1,6 @@
 """Product cards distinguish invite/private/public after the shared SQL read filter.
 
-HF info/list fields remain ordinary HF booleans and retain their expand vocabulary.
+HF private fields remain booleans; the additive list badge does not expand info vocabulary.
 """
 
 from types import SimpleNamespace
@@ -90,13 +90,22 @@ def test_workspace_feed_hydrates_invite_mode_without_bypassing_read_filter(cards
 
 
 @pytest.mark.parametrize("kind", ["model", "dataset", "space"])
-def test_hf_info_and_list_do_not_gain_product_only_fields_or_expand_vocabulary(cards, kind):
+@pytest.mark.parametrize("viewer", ["owner", "reader", "anonymous"])
+def test_hf_list_adds_boolean_invite_badge_without_expanding_info_vocabulary(cards, kind, viewer):
+    cards.auth["user"] = None if viewer == "anonymous" else getattr(cards, viewer)
+    visible = {"public", "private", "invite"} if viewer == "owner" else {"public", "invite"} if viewer == "reader" else {"public"}
     listed = cards.client.get(f"/api/{kind}s", params={"fallback": "false"})
     assert listed.status_code == 200
-    assert len(listed.json()) == 3
+    assert {row["id"] for row in listed.json()} == {"owner/" + state for state in visible}
     for row in listed.json():
         assert type(row["private"]) is bool
-        assert "invite_mode" not in row and "visibility" not in row
+        assert row["private"] is (row["id"] != "owner/public")
+        assert type(row["invite_mode"]) is bool
+        assert row["invite_mode"] is (row["id"] == "owner/invite")
+        assert row["gated"] is False
+        assert "visibility" not in row
+    # Detail/expand remains the ordinary HF contract; the badge is list metadata.
+    cards.auth["user"] = cards.owner
     info_response = cards.client.get(f"/api/{kind}s/owner/invite", params={"expand": "private", "fallback": "false"})
     assert info_response.status_code == 200 and info_response.json() == {
         "_id": str(cards.repositories[kind, "invite"].id), "id": "owner/invite", "private": True,
