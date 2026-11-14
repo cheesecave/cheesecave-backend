@@ -102,7 +102,7 @@ async def test_register_covers_invitation_reserved_and_conflict_paths(monkeypatc
     make_invitation("expired", expires_at=datetime.now(timezone.utc) - timedelta(hours=1))
     with pytest.raises(HTTPException) as unavailable:
         await auth_routes.register(request(), invitation_token="expired")
-    assert unavailable.value.detail == "Invitation has expired"
+    assert unavailable.value.detail == "Invalid or unavailable invitation code"
 
     monkeypatch.setattr(auth_routes.cfg.auth, "invitation_only", False)
     with pytest.raises(HTTPException) as reserved:
@@ -136,6 +136,7 @@ async def test_register_covers_invitation_processing_and_email_verification(monk
         parameters=json.dumps({"org_id": org.id, "org_name": "org-team", "role": "admin"}),
     )
     make_invitation("invite-2", parameters="{not-json")
+    make_invitation("invite-3")
 
     async def _fake_to_thread(func, *args):
         return func(*args)
@@ -172,13 +173,23 @@ async def test_register_covers_invitation_processing_and_email_verification(monk
     assert EmailVerification.get(EmailVerification.user == fresh).token == "verify-token"
 
     monkeypatch.setattr(auth_routes, "send_verification_email", lambda email, username, token: True)
+    # Malformed invitation parameters now fail atomically instead of silently
+    # creating an account without consuming the supplied invitation.
+    with pytest.raises(HTTPException) as invalid_invitation:
+        await auth_routes.register(
+            auth_routes.RegisterRequest(username="second-user", email="second@example.com", password="secret-pass-1"),
+            invitation_token="invite-2",
+        )
+    assert invalid_invitation.value.detail == "Invalid or unavailable invitation code"
+    assert auth_routes.get_user_by_username("second-user") is None
+    assert auth_routes.get_invitation("invite-2").usage_count == 0
     second = await auth_routes.register(
         auth_routes.RegisterRequest(
             username="second-user",
             email="second@example.com",
             password="secret-pass-1",
         ),
-        invitation_token="invite-2",
+        invitation_token="invite-3",
     )
     assert second == {
         "success": True,
@@ -187,8 +198,7 @@ async def test_register_covers_invitation_processing_and_email_verification(monk
     }
     second_user = auth_routes.get_user_by_username("second-user")
     assert EmailVerification.get(EmailVerification.user == second_user).token == "verify-token-2"
-    # The invalid invitation JSON is logged and skipped, so it is not marked used.
-    assert auth_routes.get_invitation("invite-2").usage_count == 0
+    assert auth_routes.get_invitation("invite-3").usage_count == 1
 
 
 @pytest.mark.asyncio
