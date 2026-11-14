@@ -47,8 +47,10 @@ receipt, stored only as a hash on the server. Anonymous approval changes the req
 status; a manager may then explicitly issue an associated code and share it with the
 applicant. There is no automatic email delivery or automatic approval.
 
-Repository Settings contains request review, code issuance/revocation, account grant
-management, guest-session revocation and an audit log. Management lists are paginated.
+Repository Settings has four independently paginated tables for applications, repository
+codes, account grants and the audit log. Managers can review applications, issue and
+revoke codes, and revoke account grants. Individual guest-session revocation remains
+available through the management API.
 Read-only grantees do not acquire write or management privileges.
 
 ## Repository codes and registration
@@ -57,31 +59,29 @@ Both Private and Invite repositories support repository invitation codes. New co
 have 256 bits of random material and are stored as SHA256 hashes. A secret is shown
 once when issued and is absent from subsequent list and audit responses.
 
-A code can be bound to an existing account, supplied during registration, or exchanged
-for a temporary browser session. The `/repo-access` page provides explicit account
-binding and guest exchange, including for a Private repository whose ordinary URL
-does not expose an application page.
+At `/repo-access`, sign in, enter a repository code and select **Open repository**.
+The server resolves the code to its repository, grants the current account read
+access and returns the repository URL. This works with codes for Private and Invite
+repositories. The invitation page of an Invite repository offers temporary preview.
 
-Registration accepts `repo_invitation_token` in the JSON body. Older links may pass a
-`repo_` code through the `invitation_token` query parameter in open registration mode.
-A code is processed even when the site does not require an invitation. User creation,
-account redemption count, redemption history and repository grant commit together;
-an invalid, exhausted, revoked or expired code does not leave a new account behind.
+The registration form accepts a site or repository code in one **Invitation code**
+field. The server classifies the code. **Sign Up** in the invitation dialog or an
+eligible visitor preview carries the repository invitation into registration. After
+registration and any required email verification, sign-in returns to the repository.
+Invitation-only sites also require a site `register_account` invitation.
 
-Repository codes do **not** satisfy the site's `invitation_only` policy. On such a site,
-registration also requires a valid site `register_account` invitation through the
-existing `invitation_token` parameter. The site invitation and repository code are
-consumed in the same transaction. Organization membership, if explicitly configured
-by that separate site invitation, retains its existing site-invitation meaning; the
-repository code itself never creates membership.
+User creation, site invitation consumption, repository code consumption and the
+repository grant commit together. Organization membership can come from a site
+invitation that explicitly grants it. For request fields and compatibility, see
+[Authentication API](../api/authentication.md).
 
 ## Independent lifecycles
 
 | Item | Default / limit | What expiry or revocation changes |
 | --- | --- | --- |
 | Code exchange deadline | 7 days; HTTP maximum 90 days | Expiry stops new exchanges |
-| Account exchanges per code | 1; configurable up to 10,000 | One consumption per distinct account |
-| Guest sessions issued per code | 1; configurable 0–10,000 | Separate total-issuance quota, not the account quota |
+| Account exchanges per code | 1 | Binding or registration closes the code to further new exchanges |
+| Guest sessions issued per code | Repeatable while the code is valid and unbound | Guest access does not consume the account exchange |
 | Guest session lifetime | 24 hours; configurable 60 seconds–7 days | Stops that session's previews |
 | Account grant lifetime | No expiry unless configured | Independent from code/session deadlines |
 
@@ -89,7 +89,9 @@ Revoking a code stops new exchanges and revokes its derived guest sessions. Alre
 bound account grants remain until a manager separately revokes or changes them.
 Re-exchanging the same code/account pair is idempotent and never restores a revoked
 or expired grant. A manager can explicitly renew the account grant. Code exchange
-expiry does not shorten an already issued guest session.
+expiry or account binding does not shorten an already issued guest session.
+Revoking an account grant blocks subsequent authorized requests. Download and Xet
+URLs that were already signed retain their own expiration.
 
 ## Temporary browser previews
 
@@ -113,35 +115,35 @@ original-file and bulk-download routes.
 
 Controlled preview boundaries:
 
-- Canonical root README Card: at most64KiB/1000lines. Other regular UTF-8
-  text/code/Markdown/JSON: at most8KiB/64lines, presented by the normal components.
-- CSV/TSV/JSONL: first20data rows,20columns and256characters per cell, from a64KiB
+- Canonical root README Card: at most 64 KiB / 1000 lines. Other regular UTF-8
+  text/code/Markdown/JSON: at most 8 KiB / 64 lines, presented by the normal components.
+- CSV/TSV/JSONL: first 20 data rows, 20 columns and 256 characters per cell, from a 64 KiB
   prefix. PNG/JPEG/WebP/GIF: reencoded metadata-free, first-frame thumbnails up to
-  512pixels per side; source limit2MiB/16million pixels. SVG remains unsupported.
+  512 pixels per side; source limit 2 MiB / 16 million pixels. SVG remains unsupported.
 - PDF: the same page/zoom/canvas reader used by ordinary repositories; guests
-  receive only rendered PNG pages, never source PDF bytes. Source limit64MiB,
-  1000pages, page rasters up to1600pixels on the long edge. PDFium native parsing
-  runs in a separate20-second child process; PDF scripts/forms are not executed.
+  receive only rendered PNG pages, never source PDF bytes. Source limit 64 MiB,
+  1000 pages, page rasters up to 1600 pixels on the long edge. PDFium native parsing
+  runs in a separate 20-second child process; PDF scripts/forms are not executed.
 - Video/audio: the same player used by ordinary repositories, with playback and
   seeking. Guest sources are re-encoded H264/AAC HLS fragments, not copied original
-  streams or byte-range proxies. Source limits256MiB video/128MiB audio, duration
-  up to10minutes, video up to1280x720. Files beyond a processing limit return an
+  streams or byte-range proxies. Source limits 256 MiB video / 128 MiB audio, duration
+  up to 10 minutes, video up to 1280x720. Files beyond a processing limit return an
   explicit preview error; supported media no longer falls back to metadata-only.
 - PDF/audio/video stored via LFS can be previewed only with a matching nondeleted,
   repository-scoped File record and verified physical-object SHA256. Other LFS
   content, Parquet, TAR/ZIP and other archives, weights and browser inference
   remain metadata-only. No global object lookup grants guest access.
-- All previews use the current main snapshot. Tree100-entry pages and20-commit
+- All previews use the current main snapshot. Tree 100-entry pages and 20-commit
   history pages use signed, scope-bound cursors; complete listing is available by
   pagination. Filename prefix filtering is local to the selected directory.
   Callers cannot choose arbitrary file revisions, source ranges or offsets.
 - Media descriptors bind an immutable repository/head/path snapshot. Every page,
   playlist and segment rechecks guest authorization and the current head, including
   cache hits and completed processing. Revocation denies new fragments; a changed
-  head returns409 and requires reopening. No raw or presigned address is returned.
-- A private disposable cache holds at most4documents/media entries with15-minute
-  idle lifetime, at most2native jobs, and256MiB generated output per job. Video
-  processing has a90-second deadline; source reads60seconds. Network and playlist/
+  head returns 409 and requires reopening. No raw or presigned address is returned.
+- A private disposable cache holds at most 4 documents/media entries with 15-minute
+  idle lifetime, at most 2 native jobs, and 256 MiB generated output per job. Video
+  processing has a 90-second deadline; source reads 60 seconds. Network and playlist/
   concat input demuxers are disallowed. Original media sources are removed after
   transcoding; PDF sources remain private only for on-demand page rendering.
 
@@ -165,7 +167,7 @@ is `model`, `dataset` or `space`. These are CheeseCave browser APIs, not HF gate
 | GET (root) | Preflight: `full`, opaque `standard`, `invite` or `guest` |
 | POST `/requests` | Submit an account or email application |
 | GET `/request` | Current account's status, or anonymous status authenticated by `X-Repository-Request-Receipt` |
-| GET `/manage?limit=100&offset=0` | Manager lists and per-section `has_more` flags |
+| GET `/manage?section=requests&limit=20&offset=0` | One paginated manager section with counts and `has_more` |
 | POST `/requests/{id}/review` | Manager approve/reject |
 | POST `/invites` | Manager issue; one-time `token` response |
 | POST `/invites/{id}/revoke` | Revoke code and derived guest sessions |
@@ -181,12 +183,20 @@ is `model`, `dataset` or `space`. These are CheeseCave browser APIs, not HF gate
 | GET `/guest/media/hls/playlist?path=...&snapshot=...` | Authorized derivative HLS manifest |
 | GET `/guest/media/hls/segment?path=...&snapshot=...&segment=0` | Authorized re-encoded fragment |
 
+The account-only `POST /api/repo-access/redeem` takes `{"token":"<repository-code>"}`
+without a repository identifier. It requires normal authentication and returns
+`success`, `grant` and `repository_url`. A repeated redemption can return an inactive
+grant, so clients should check the grant before opening the repository.
+
 For nonlocal repositories and unauthorized ordinary-private repositories, preflight
 returns the same opaque `standard` response. The normal repository APIs then enforce
 their existing masked denial or external fallback policy. Invitation repositories
 are intentionally discoverable by link, but remain absent from anonymous discovery.
 
 ## Upgrade and validation
+
+The [release guide](../deployment/invitation-repositories.md) records review findings,
+validation evidence, migration checks, Backend/Web/Admin cutover order and rollback.
 
 Apply migrations 043 and 044 with the normal migration runner before starting this
 release against an existing database. Fresh databases use `init_db`. Coordinate the
