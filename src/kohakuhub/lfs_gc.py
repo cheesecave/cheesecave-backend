@@ -54,9 +54,8 @@ DELETED = "deleted"
 # upload-then-commit round trip, short enough to collect abandoned uploads.
 RECENT_GRACE = timedelta(hours=24)
 CANDIDATE_BATCH = 500
-# A path's history is read newest first, a page at a time, and the walk stops as soon as the keep window is known.
-# Past HISTORY_WALK_ROWS rows the newest rows mostly repeat a few contents; one aggregate query decides instead.
-HISTORY_PAGE = 64
+# A path's history is read newest first, at most HISTORY_WALK_ROWS rows in one statement, and the walk stops as soon as
+# the keep window is known. If those rows do not decide (they mostly repeat a few contents), one aggregate query does.
 HISTORY_WALK_ROWS = 256
 RECONCILED_KEY = "references_reconciled_at"
 _LFS_ADDRESS = re.compile(r"^s3://[^/]+/lfs/[0-9a-f]{2}/[0-9a-f]{2}/([0-9a-f]{64})$")
@@ -162,30 +161,28 @@ def _kept_by_history(
 
     The same answer as ``sha256 in _unique_versions(...)[:keep]``, from the newest rows only: the walk stops at the
     content itself (kept) or once ``keep`` other contents were seen (not kept). With the index on
-    ``(repository_id, path_in_repo, created_at, id)`` that costs a page, however long the history is.
+    ``(repository_id, path_in_repo, created_at, id)`` that costs at most ``HISTORY_WALK_ROWS`` rows, however long the
+    history is. One statement, so one snapshot: rows changing meanwhile cannot shift what the walk sees.
     """
     stats = stats if stats is not None else HistoryStats()
     stats.paths += 1
     if keep <= 0:
         return False
     others: set[str] = set()
-    for offset in range(0, HISTORY_WALK_ROWS, HISTORY_PAGE):
-        page = [
-            sha
-            for (sha,) in _newest_first(repository_id, path)
-            .limit(HISTORY_PAGE)
-            .offset(offset)
-            .tuples()
-        ]
-        stats.rows += len(page)
-        for sha in page:
-            if sha == sha256:
-                return True
-            others.add(sha)
-            if len(others) >= keep:
-                return False
-        if len(page) < HISTORY_PAGE:
-            return False  # the whole history was read
+    read = 0
+    newest = _newest_first(repository_id, path).limit(HISTORY_WALK_ROWS).tuples()
+    for (sha,) in newest:
+        read += 1
+        if sha == sha256:
+            stats.rows += read
+            return True
+        others.add(sha)
+        if len(others) >= keep:
+            stats.rows += read
+            return False
+    stats.rows += read
+    if read < HISTORY_WALK_ROWS:
+        return False  # the whole history was read
     stats.fallbacks += 1
     return sha256 in _newest_unique(repository_id, path, keep)
 

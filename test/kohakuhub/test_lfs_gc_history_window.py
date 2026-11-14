@@ -3,8 +3,8 @@
 The rule is unchanged: a path keeps its newest ``keep`` unique contents, newest by ``(created_at, id)``. It used to be
 decided by reading the whole history of the path and de-duplicating it in a list, quadratic in the number of versions,
 for every candidate; a path with about 4,000 versions made each decision cost 60 ms and blocked the worker. Now the
-newest rows are read page by page and the walk stops as soon as the answer is known; a path whose newest rows repeat a
-few contents falls back to one aggregate query. Real SQL on both engines.
+newest rows are read by one statement (one snapshot) and the walk stops as soon as the answer is known; a path whose newest
+rows repeat a few contents falls back to one aggregate query. Real SQL on both engines.
 """
 
 import random
@@ -65,10 +65,9 @@ def _random_history(rnd: random.Random, size: int) -> list[tuple[str, int]]:
     return [(rnd.choice(contents), rnd.randrange(max(1, size // 4))) for _ in range(size)]
 
 
-@pytest.mark.parametrize("small_pages", [False, True], ids=["default pages", "small pages"])
-def test_the_window_decides_what_the_whole_history_decided(repo, monkeypatch, small_pages):
-    if small_pages:  # small enough that the random histories cross pages and reach the fallback
-        monkeypatch.setattr(lfs_gc, "HISTORY_PAGE", 4)
+@pytest.mark.parametrize("short_walk", [False, True], ids=["default walk", "short walk"])
+def test_the_window_decides_what_the_whole_history_decided(repo, monkeypatch, short_walk):
+    if short_walk:  # short enough that the random histories reach the fallback
         monkeypatch.setattr(lfs_gc, "HISTORY_WALK_ROWS", 12)
     rnd = random.Random(153)
     for case in range(40):
@@ -91,11 +90,11 @@ def test_a_history_of_distinct_versions_is_decided_from_its_newest_rows(repo):
 
         stats = lfs_gc.HistoryStats()
         assert lfs_gc._kept_by_history(repo.id, path, oldest, 10, stats) is False
-        assert (stats.paths, stats.rows, stats.fallbacks) == (1, lfs_gc.HISTORY_PAGE, 0)
+        assert (stats.paths, stats.rows, stats.fallbacks) == (1, 10, 0)  # ten newer contents, whatever the size
 
         stats = lfs_gc.HistoryStats()
         assert lfs_gc._kept_by_history(repo.id, path, newest, 10, stats) is True
-        assert stats.rows == lfs_gc.HISTORY_PAGE
+        assert stats.rows == 1
 
 
 def test_a_history_that_repeats_a_few_contents_falls_back_to_one_query(repo):
@@ -149,8 +148,24 @@ def test_the_retention_decision_reports_what_it_read(repo, monkeypatch):
     assert lfs_gc.begin_delete(_sha("one-2")) is False
 
 
+def test_the_walk_reads_one_snapshot(repo, monkeypatch):
+    """One statement for the newest rows: a row deleted meanwhile cannot shift what the walk sees (no OFFSET paging)."""
+    statements = []
+    real = lfs_gc._newest_first
+
+    def counted(repository_id, path):
+        statements.append(path)
+        return real(repository_id, path)
+
+    monkeypatch.setattr(lfs_gc, "_newest_first", counted)
+    path = "snapshot.bin"
+    _write(repo, path, [(_sha(f"s{n}"), n) for n in range(200)])
+    assert lfs_gc._kept_by_history(repo.id, path, _sha("s0"), 150) is False
+    assert statements == [path]
+
+
 def test_a_fallback_is_named_in_the_report(repo, monkeypatch):
-    monkeypatch.setattr(lfs_gc, "HISTORY_WALK_ROWS", lfs_gc.HISTORY_PAGE)
+    monkeypatch.setattr(lfs_gc, "HISTORY_WALK_ROWS", 64)
     path = "loop.bin"
     _write(repo, path, [(_sha("old"), 0)] + [(_sha("a"), n + 1) for n in range(100)])
     stats = lfs_gc.HistoryStats()
