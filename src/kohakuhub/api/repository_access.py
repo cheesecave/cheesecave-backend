@@ -136,8 +136,10 @@ async def access_state(repo_type: RepoType, namespace: str, name: str, request: 
     try:
         check_repo_read_permission(repo, user)
     except RepoReadDeniedError:
-        if guest_for_request(repo, request):
-            return {"access": "guest", "visibility": repo.visibility, "can_manage": False, "invite_markdown": None}
+        session = guest_for_request(repo, request)
+        if session:
+            registration = {"registration_repository_id": repo.id} if invites.guest_registration_available(session) else {}
+            return {"access": "guest", "visibility": repo.visibility, "can_manage": False, "invite_markdown": None} | registration
         if not repo.invite_mode:
             # Match the nonexistent-local result. Ordinary loaders still apply
             # the masked HF denial and never fall through to an upstream source.
