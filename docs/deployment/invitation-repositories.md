@@ -19,16 +19,20 @@ Review PRs: [Backend #152](https://github.com/cheesecave/cheesecave-backend/pull
 
 ## Current review status (2026-11-14)
 
-The inspected runtime revisions are Backend `46ae96b` (documentation HEAD
-`4b918ef`), Web `54a1017`, and Admin `a0ffbe3`. Documentation-only follow-ups do
-not change those runtime revisions. The following work remains before release:
+The initial review inspected Backend `46ae96b`, Web `54a1017`, and Admin
+`a0ffbe3`. The conflict-resolution follow-up integrates Backend main `e01e330`
+and Web main `24871bd` on the existing feature branches:
 
-- Integrate Backend main `e01e330` and Web main `24871bd`. The current conflicts
-  are Backend `test_info_unit.py` / `test_files_unit.py` and Web `RepoViewer.vue`
-  / the repository blob page. Preserve main's UTC, large-directory and TAR fixes.
-- Adapt the four feature-introduced date reads reported by main's Web UTC guard:
-  three in `RepositoryAccessManager.vue` and one in `utils/repository-access.js`.
-  Keep server timestamps separate from local date-input conversion.
+- Backend retains both the invitation visibility/real-SQL assertions and main's
+  cross-timezone UTC tests.
+- Web retains the shared file-list component and moves main's time-format cache
+  into it. The Set-based lookups, bounded probes, TAR prefetch/retry behavior and
+  restricted visitor preview paths are preserved together.
+- Feature expiry checks now use the shared UTC parser. A separate datetime helper
+  preserves local form-input semantics; the UTC guard needs no exemption.
+
+The implementation record below records the resulting commits and related tests.
+The following work remains before release:
 - Publish rendered PDF page files atomically. `media_worker.py` currently writes
   the final PNG while `repository_media.py` can read it as soon as it exists.
   Add a concurrent-reader regression.
@@ -39,7 +43,7 @@ not change those runtime revisions. The following work remains before release:
   final integrated candidate. The reviewed 47 Backend, 32 Web and 1 Admin commits
   lack `Signed-off-by` trailers.
 
-These are review findings, not completed fixes. The API and user guides now
+These remaining findings are not completed fixes. The API and user guides now
 describe the final code field, redemption page, invitation lifecycle and previews.
 
 ## Validation evidence
@@ -49,6 +53,8 @@ Exact commands and results are in the [implementation record](../plans/invite-re
 
 | Check | Recorded result |
 | --- | --- |
+| Main integration: Backend | 74 passed / 1 German-locale skip on Linux; original locale assertion passed separately after installing the locale; 12/12 changed executable lines covered |
+| Main integration: Web `856e1ce` | 30 related files / 552 passed, zero skips; datetime helper 100% line and branch coverage |
 | Latest Backend redemption change | 189 related cases; 29 endpoint cases on each of SQLite and PostgreSQL |
 | Latest Web redemption change | 110 focused cases and 61 title cases; real browser login-return, redemption and repository navigation |
 | Web production build at `54a1017` | Frozen-lockfile install and `pnpm build` passed; entry chunk about 1.31 MB / 409 KB gzip |

@@ -5,7 +5,6 @@ import base64
 import hashlib
 import json
 import re
-from datetime import datetime
 from enum import Enum
 from typing import Optional
 from urllib.parse import quote
@@ -39,6 +38,7 @@ from kohakuhub.utils.lakefs import (
 )
 from kohakuhub.utils.s3 import generate_download_presigned_url, parse_s3_uri
 from kohakuhub.utils.commit_id import hub_oid
+from kohakuhub.utils.datetime_utils import epoch_to_http_date, epoch_to_iso_z
 from kohakuhub.utils.repo_paths import path_problem
 from kohakuhub.api.fallback import with_repo_fallback
 from kohakuhub.api.xet import XET_ENABLE
@@ -391,9 +391,7 @@ async def get_revision(
 
     last_modified = None
     if commit_info and commit_info.get("creation_date"):
-        last_modified = datetime.fromtimestamp(commit_info["creation_date"]).strftime(
-            "%Y-%m-%dT%H:%M:%S.%fZ"
-        )
+        last_modified = epoch_to_iso_z(commit_info["creation_date"])
 
     # The same contract as the repository info route (see there)
     siblings = None
@@ -600,11 +598,7 @@ async def _get_file_metadata(
         # Additional useful headers
         "Content-Type": obj_stat.get("content_type") or "application/octet-stream",
         "Last-Modified": (
-            datetime.fromtimestamp(obj_stat["mtime"]).strftime(
-                "%a, %d %b %Y %H:%M:%S GMT"
-            )
-            if obj_stat.get("mtime")
-            else ""
+            epoch_to_http_date(obj_stat["mtime"]) if obj_stat.get("mtime") else ""
         ),
         "Content-Disposition": f"attachment; filename=\"{encoded_filename_ascii}\"; filename*=UTF-8''{encoded_filename_utf8}",
     }
