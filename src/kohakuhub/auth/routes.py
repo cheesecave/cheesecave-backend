@@ -3,6 +3,7 @@
 import asyncio
 import json
 from datetime import datetime, timezone
+from urllib.parse import quote
 
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Response
 from fastapi.responses import RedirectResponse
@@ -34,7 +35,7 @@ from kohakuhub.logger import get_logger
 from kohakuhub.api.validation import RESERVED_NAMES
 from kohakuhub.auth.dependencies import get_current_user
 from kohakuhub.auth.session import next_expiry, set_session_cookie
-from kohakuhub.auth.email import send_verification_email
+from kohakuhub.auth.email import safe_repository_return_path, send_verification_email
 from kohakuhub.auth.utils import (
     generate_session_secret,
     generate_token,
@@ -132,6 +133,7 @@ async def register(req: RegisterRequest, invitation_token: str | None = None):
         Success response
     """
     repo_token = req.repo_invitation_token
+    repository_url = None
     # Older links use the invitation query parameter. A repository code is never
     # a site-registration invitation, even when both are needed by site policy.
     if invitation_token and invitation_token.startswith("repo_"):
@@ -218,10 +220,17 @@ async def register(req: RegisterRequest, invitation_token: str | None = None):
             row = repository_invites.find_invite(repo_token)
             if row is None:
                 raise HTTPException(400, detail="Invalid or unavailable repository invitation")
+            repository = row.repository
             try:
-                repository_invites.redeem_account(row.repository, repo_token, user)
+                repository_invites.redeem_account(repository, repo_token, user)
             except repository_invites.RepositoryInviteError as error:
                 raise HTTPException(400, detail={"error": str(error), "code": error.code}) from None
+            if repository.repo_type in ("model", "dataset", "space"):
+                repository_url = safe_repository_return_path(
+                    f"/{repository.repo_type}s/{quote(repository.namespace, safe='')}/{quote(repository.name, safe='')}"
+                )
+            if repository_url is None:
+                raise HTTPException(400, detail="Invalid repository invitation target")
 
     logger.success(f"User registered: {user.username} (id={user.id})")
 
@@ -249,37 +258,42 @@ async def register(req: RegisterRequest, invitation_token: str | None = None):
                 logger.warning(f"Failed to process invitation on registration: {e}")
 
     # Send verification email if required
+    repository_result = {"repository_url": repository_url} if repository_url else {}
     if cfg.auth.require_email_verification:
         token = generate_token()
         create_email_verification(
             user=user, token=token, expires_at=get_expiry_time(24)
         )
 
-        verification_email = await asyncio.to_thread(
-            send_verification_email, req.email, req.username, token
-        )
+        email_args = (req.email, req.username, token)
+        if repository_url:
+            email_args += (repository_url,)
+        verification_email = await asyncio.to_thread(send_verification_email, *email_args)
         if not verification_email:
             return {
                 "success": True,
                 "message": "User created but failed to send verification email",
                 "email_verified": False,
+                **repository_result,
             }
 
         return {
             "success": True,
             "message": "User created. Please check your email to verify your account.",
             "email_verified": False,
+            **repository_result,
         }
 
     return {
         "success": True,
         "message": "User created successfully",
         "email_verified": True,
+        **repository_result,
     }
 
 
 @router.get("/verify-email")
-async def verify_email(token: str, response: Response):
+async def verify_email(token: str, response: Response, return_to: str | None = None):
     """Verify email with token and automatically log in user."""
     logger.info(f"Email verification attempt with token: {token[:8]}...")
 
@@ -332,7 +346,8 @@ async def verify_email(token: str, response: Response):
         )
 
     # Set session cookie
-    redirect_response = RedirectResponse(url=f"/{user.username}", status_code=302)
+    target = safe_repository_return_path(return_to) or f"/{user.username}"
+    redirect_response = RedirectResponse(url=target, status_code=302)
     set_session_cookie(redirect_response, session_id, expires_at, now)
 
     logger.success(
