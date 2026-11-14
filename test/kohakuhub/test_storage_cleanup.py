@@ -296,6 +296,142 @@ async def test_collect_deletes_only_lfs_objects_nothing_references(storage, monk
     assert points == 2 + 2 * 2  # a stage and two batch reports
 
 
+def _candidates(repo):
+    """Four candidates: content the branch head links, content a history row keeps, two orphans."""
+    (live,) = _lfs_shas(repo)
+    historic = "b" * 64
+    orphans = ["c" * 64, "d" * 64]
+    _history(repo, historic)
+    lfs_gc.record_candidates([live, historic, *orphans])
+    lfs_gc.mark_references_reconciled()
+    return live, historic, orphans
+
+
+async def _collect_logged(ctx):
+    """Run the collection the way the worker does: its log records go to the task's own log."""
+    tasks.install_log_capture()
+    token = tasks.current_context.set(ctx)
+    try:
+        await storage_cleanup.collect_lfs({}, ctx)
+    finally:
+        tasks.current_context.reset(token)
+        logs = [(entry["level"], entry["message"]) for entry in ctx.take_logs()]
+    return logs
+
+
+@pytest.fixture
+def history_cleanup():
+    yield
+    LFSObjectHistory.delete().where(LFSObjectHistory.sha256 == "b" * 64).execute()
+
+
+async def test_collect_logs_where_it_starts_how_it_goes_and_how_it_ended(
+    storage, monkeypatch, history_cleanup
+):
+    monkeypatch.setattr(storage_cleanup, "LFS_BATCH", 2)
+    monkeypatch.setattr(storage_cleanup, "PROGRESS_LOG_SECONDS", 0)  # a progress line per batch
+    _candidates(_repo())
+    ctx = RecordingContext()
+
+    logs = await _collect_logged(ctx)
+
+    messages = [message for _, message in logs]
+    assert messages[0].startswith("Collecting LFS objects: 4 candidate(s) waiting")
+    progress = [m for m in messages if m.startswith("Collecting LFS objects: checked")]
+    assert len(progress) == 2 and "2 waiting" in progress[0] and "0 waiting" in progress[1]
+    assert "slowest" in progress[0]
+    (summary,) = [m for m in messages if m.startswith("Collected LFS objects")]
+    assert "checked 4, deleted 2 nothing relies on" in summary
+    assert "kept 2 (head 1, history 1)" in summary  # the baseline file is on the branch head
+    assert summary.endswith("finished")
+    assert summary == messages[-1]
+    assert {level for level, _ in logs} == {"INFO"}
+    assert ctx.reports == [(2, 4), (4, 4)]  # done, done + still waiting
+
+
+async def test_collect_warns_about_slow_decisions_a_few_times(
+    storage, monkeypatch, history_cleanup
+):
+    monkeypatch.setattr(storage_cleanup, "SLOW_DECISION_SECONDS", 0)
+    monkeypatch.setattr(storage_cleanup, "SLOW_DECISION_WARNINGS", 2)
+    _candidates(_repo())
+
+    logs = await _collect_logged(RecordingContext())
+
+    warnings = [message for level, message in logs if level == "WARNING"]
+    assert len(warnings) == 2
+    assert all(m.startswith("Slow LFS decision: ") and "path(s)" in m for m in warnings)
+    assert "4 slow decision(s)" in logs[-1][1]
+
+
+async def test_collect_lets_the_event_loop_run_between_decisions(
+    storage, monkeypatch, history_cleanup
+):
+    """The lease renewal, the heartbeat and the logs share the loop with the collection (#153):
+    another coroutine must get a turn between any two decisions, not only between batches."""
+    _candidates(_repo())
+    turns = 0
+    seen_at_decision = []
+    real_decide = lfs_gc.decide_delete
+
+    def decide(sha, stats=None):  # the real decision, noting how often the other coroutine ran so far
+        seen_at_decision.append(turns)
+        return real_decide(sha, stats)
+
+    monkeypatch.setattr(lfs_gc, "decide_delete", decide)
+    done = asyncio.Event()
+
+    async def other_coroutine():
+        nonlocal turns
+        while not done.is_set():
+            turns += 1
+            await asyncio.sleep(0)
+
+    other = asyncio.create_task(other_coroutine())
+    await storage_cleanup.collect_lfs({}, RecordingContext())
+    done.set()
+    await other
+    assert len(seen_at_decision) == 4
+    assert all(later > earlier for earlier, later in zip(seen_at_decision, seen_at_decision[1:]))
+
+
+async def test_a_stopped_collection_still_writes_its_summary(storage, monkeypatch, history_cleanup):
+    _candidates(_repo())
+
+    def refuse(bucket, keys):
+        raise RuntimeError("storage refused")
+
+    monkeypatch.setattr(storage_cleanup, "_delete_keys", refuse)
+    ctx = RecordingContext()
+    tasks.install_log_capture()
+    token = tasks.current_context.set(ctx)
+    try:
+        with pytest.raises(RuntimeError, match="storage refused"):
+            await storage_cleanup.collect_lfs({}, ctx)
+    finally:
+        tasks.current_context.reset(token)
+    assert ctx.take_logs()[-1]["message"].endswith("stopped: RuntimeError")
+
+    monkeypatch.setattr(storage_cleanup, "_delete_keys", storage.delete_keys)
+    LfsGcCandidate.delete().execute()
+    _candidates(_repo())
+    ctx = RecordingContext()
+    token = tasks.current_context.set(ctx)
+    try:
+        run = asyncio.create_task(storage_cleanup.collect_lfs({}, ctx))
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        run.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await run
+    finally:
+        tasks.current_context.reset(token)
+    summary = ctx.take_logs()[-1]["message"]
+    assert summary.startswith("Collected LFS objects") and summary.endswith(
+        "stopped: cancelled (lease lost, cancellation or shutdown)"
+    )
+
+
 async def test_collect_with_nothing_recorded_is_a_no_op(storage):
     ctx = RecordingContext()
     await storage_cleanup.collect_lfs({}, ctx)

@@ -28,6 +28,10 @@ logger = get_logger("WORKER")
 
 # Re-create missing periodic occurrences (e.g. one an admin cancelled).
 PERIODIC_RESYNC_SECONDS = 60.0
+# A lease renewal this much later than its tick means the event loop was blocked, by a handler running synchronous
+# code (#153): every running task's renewal waits behind it. Warn in the task's log, at most once per interval.
+LATE_RENEWAL_SECONDS = 5.0
+LATE_WARNING_INTERVAL = 60.0
 
 
 def _reset_connection() -> None:
@@ -198,7 +202,8 @@ class Worker:
         loop = asyncio.get_running_loop()
         started = loop.time()
         run = asyncio.create_task(self._invoke(spec, row, ctx))
-        heartbeat = asyncio.create_task(self._heartbeat(row, run, ctx))
+        renewal = {"at": started}  # when the lease was last renewed (claimed: just now)
+        heartbeat = asyncio.create_task(self._heartbeat(row, run, ctx, renewal))
         try:
             await run
         except asyncio.CancelledError:
@@ -208,7 +213,12 @@ class Worker:
                 self._flush(row, ctx)
                 self._record(lambda: tasks.cancel_running_task(row))
             elif stopped_by == tasks.LEASE_LOST:
-                logger.warning(f"Lost the lease on task {row.id} ({row.kind}); abandoned it")
+                detail = (
+                    f"Lost the lease on attempt {row.attempts}, {loop.time() - renewal['at']:.0f}s "
+                    f"after its last renewal (lease {self.lease_seconds:g}s); abandoned it"
+                )
+                logger.warning(f"Task {row.id} ({row.kind}): {detail}")
+                ctx.log("WARNING", detail)
                 self._flush(row, ctx)
             else:
                 # Worker shutdown: hand the task back instead of waiting out the lease.
@@ -277,16 +287,34 @@ class Worker:
         return state
 
     async def _heartbeat(
-        self, row: BackgroundTask, run: asyncio.Task, ctx: tasks.TaskContext
+        self, row: BackgroundTask, run: asyncio.Task, ctx: tasks.TaskContext, renewal: dict
     ) -> str:
         """Flush and renew every tick; stop the handler if the lease is lost,
         or if cancellation was requested and it did not stop on its own
-        within ``shutdown_grace``. Returns why it stopped the handler."""
+        within ``shutdown_grace``. Returns why it stopped the handler.
+
+        Records when the lease was last renewed in ``renewal["at"]``, and warns
+        when a tick comes late: the event loop was blocked meanwhile."""
         loop = asyncio.get_running_loop()
         cancel_deadline = None
+        warned_at = None
         while True:
+            slept_at = loop.time()
             await asyncio.sleep(self.tick)
+            late = loop.time() - slept_at - self.tick
+            if late > LATE_RENEWAL_SECONDS and (
+                warned_at is None or loop.time() - warned_at >= LATE_WARNING_INTERVAL
+            ):
+                warned_at = loop.time()
+                message = (
+                    f"The lease renewal ran {late:.1f}s late: the event loop was blocked "
+                    f"(lease {self.lease_seconds:g}s, renewed every {self.tick:g}s)"
+                )
+                logger.warning(f"Task {row.id} ({row.kind}): {message}")
+                ctx.log("WARNING", message)
             state = self._flush(row, ctx)
+            if state in (tasks.LEASE_OWNED, tasks.LEASE_CANCEL):
+                renewal["at"] = loop.time()
             if state == tasks.LEASE_LOST:
                 run.cancel()
                 return state
