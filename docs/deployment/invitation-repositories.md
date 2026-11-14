@@ -5,6 +5,10 @@ each on `feat/invite-repo`. The Backend provides the access APIs and migrations;
 Web depends on them even when opening an ordinary repository. Admin adds the
 three-state visibility display.
 
+Review PRs: [Backend #152](https://github.com/cheesecave/cheesecave-backend/pull/152),
+[Web #88](https://github.com/cheesecave/cheesecave-web/pull/88),
+[Admin #34](https://github.com/cheesecave/cheesecave-admin/pull/34).
+
 ## Review map
 
 | Repository | Main changes | Review entry points |
