@@ -4,12 +4,14 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 import json
 from typing import Literal
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 from pydantic import BaseModel, EmailStr, Field
 
 from kohakuhub import repository_invites as invites
 from kohakuhub.auth.dependencies import get_current_user, get_current_user_or_admin, get_optional_user
+from kohakuhub.auth.email import safe_repository_return_path
 from kohakuhub.auth.permissions import RepoReadDeniedError, check_repo_manage_permission, check_repo_read_permission
 from kohakuhub.db import (
     Repository, RepositoryAccessEvent, RepositoryAccessGrant, RepositoryAccessRequest,
@@ -302,6 +304,30 @@ def revoke_grant(repo_type: RepoType, namespace: str, name: str, grant_id: int,
 
 class CodeBody(BaseModel):
     token: str = Field(min_length=1, max_length=256)
+
+
+@router.post("/repo-access/redeem")
+def redeem_code(body: CodeBody, response: Response, user: User = Depends(get_current_user)):
+    """Exchange a code only after normal login, then return its repository destination."""
+    response.headers["Cache-Control"] = "no-store"
+    token = body.token.strip()
+    row = invites.find_invite(token)
+    target = None
+    if row is not None:
+        repo = row.repository
+        if repo.repo_type in ("model", "dataset", "space"):
+            target = safe_repository_return_path(
+                f"/{repo.repo_type}s/{quote(repo.namespace, safe='')}/{quote(repo.name, safe='')}"
+            )
+    if target is None:
+        raise HTTPException(400, detail={"error": "Invalid or unavailable invitation code", "code": "invalid_invitation"},
+                            headers={"Cache-Control": "no-store"})
+    try:
+        grant = invites.redeem_account(repo, token, user)
+    except invites.RepositoryInviteError as error:
+        raise HTTPException(400, detail={"error": "Invalid or unavailable invitation code", "code": error.code},
+                            headers={"Cache-Control": "no-store"}) from None
+    return {"success": True, "grant": _grant_data(grant), "repository_url": target}
 
 
 @router.post(BASE + "/bind")
