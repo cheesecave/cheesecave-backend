@@ -4,6 +4,8 @@ import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from html import escape
+import re
+from urllib.parse import quote, unquote, urlencode
 
 from kohakuhub.config import cfg
 from kohakuhub.identity import site_name
@@ -12,7 +14,32 @@ from kohakuhub.logger import get_logger
 logger = get_logger("EMAIL")
 
 
-def send_verification_email(to_email: str, username: str, token: str) -> bool:
+def safe_repository_return_path(value: str | None) -> str | None:
+    """Normalize only repository roots, never an external URL or another app route."""
+    if not isinstance(value, str) or len(value) > 8192:
+        return None
+    if any(char in value for char in "\\?#") or any(ord(char) < 32 or 127 <= ord(char) <= 159 for char in value):
+        return None
+    match = re.fullmatch(r"/(models|datasets|spaces)/([^/]+)/([^/]+)", value)
+    if match is None:
+        return None
+    parts = []
+    for encoded in match.groups()[1:]:
+        if re.search(r"%(?![0-9a-fA-F]{2})", encoded):
+            return None
+        try:
+            part = unquote(encoded, errors="strict")
+            if (part in (".", "..") or "/" in part or "\\" in part
+                    or any(ord(char) < 32 or 127 <= ord(char) <= 159 for char in part)
+                    or re.search(r"%[0-9a-fA-F]{2}", part)):
+                return None
+            parts.append(quote(part, safe=""))
+        except UnicodeError:
+            return None
+    return f"/{match.group(1)}/{parts[0]}/{parts[1]}"
+
+
+def send_verification_email(to_email: str, username: str, token: str, return_to: str | None = None) -> bool:
     """Send email verification email.
 
     Note: HTML emails have limitations:
@@ -23,16 +50,20 @@ def send_verification_email(to_email: str, username: str, token: str) -> bool:
     - Must use absolute URLs for images
     - Background images often blocked
     """
+    parameters = {"token": token}
+    if target := safe_repository_return_path(return_to):
+        parameters["return_to"] = target
+    verify_link = f"{cfg.app.base_url}/api/auth/verify-email?{urlencode(parameters)}"
     if not cfg.smtp.enabled:
         logger.info(
-            f"SMTP disabled. Verification link: {cfg.app.base_url}/api/auth/verify-email?token={token}"
+            f"SMTP disabled. Verification link: {verify_link}"
         )
         return True
 
     name = site_name()
     html_name = escape(name)
     subject = f"Verify your {name} account"
-    verify_link = f"{cfg.app.base_url}/api/auth/verify-email?token={token}"
+    html_verify_link = escape(verify_link, quote=True)
 
     # Plain text version (fallback)
     text_body = f"""
@@ -89,7 +120,7 @@ Best regards,
                             <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
                                 <tr>
                                     <td style="text-align: center; padding: 20px 0;">
-                                        <a href="{verify_link}" style="display: inline-block; padding: 16px 40px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: #ffffff; text-decoration: none; border-radius: 6px; font-size: 16px; font-weight: 600; box-shadow: 0 4px 6px rgba(102, 126, 234, 0.4);">
+                                        <a href="{html_verify_link}" style="display: inline-block; padding: 16px 40px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: #ffffff; text-decoration: none; border-radius: 6px; font-size: 16px; font-weight: 600; box-shadow: 0 4px 6px rgba(102, 126, 234, 0.4);">
                                             ✉️ Verify Email Address
                                         </a>
                                     </td>
@@ -101,7 +132,7 @@ Best regards,
                             </p>
 
                             <p style="margin: 0 0 30px 0; padding: 12px; background-color: #f8f9fa; border-left: 4px solid #667eea; border-radius: 4px; font-size: 13px; word-break: break-all; color: #555555;">
-                                {verify_link}
+                                {html_verify_link}
                             </p>
 
                             <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="border-top: 1px solid #e5e7eb; margin-top: 30px; padding-top: 20px;">

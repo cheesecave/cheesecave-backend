@@ -26,6 +26,41 @@ from test.kohakuhub.support.factories import (
 pytestmark = pytest.mark.usefixtures("db_scope")
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("target", [
+    "/models/owner/model", "/datasets/group/data", "/spaces/team/demo",
+    "/models/group%20team/%E6%A8%A1%E5%9E%8B%20%231",
+])
+async def test_verified_email_returns_to_a_safe_repository_and_creates_the_normal_session(target):
+    user = make_user("return-reader", email_verified=False)
+    verification = make_email_verification(user, "safe-return-verification")
+    response = await auth_routes.verify_email(verification.token, Response(), return_to=target)
+    assert response.status_code == 302 and response.headers["location"] == target
+    assert auth_routes.get_user_by_id(user.id).email_verified is True
+    assert EmailVerification.get_or_none(id=verification.id) is None
+    assert Session.get(user=user).user_id == user.id
+    assert any(key == b"set-cookie" for key, _value in response.raw_headers)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("target", [
+    "https://evil.test/models/a/b", "//evil.test/models/a/b", "/\\evil.test/models/a/b",
+    "/models/owner/../login", "/models/../login", "/models/owner/%2e%2e",
+    "/models/owner/%2F%2Fevil.test", "/models/owner/%5Cevil", "/models/owner/%255Cevil",
+    "/models/owner/%0d%0aLocation%3Aevil", "/models/owner/\x00file", "/models/owner/%7f",
+    "/models/owner/file?next=//evil.test", "/models/owner/file#fragment", "/login",
+    "/models/owner/%", "/models/owner/%zz", "/models/owner/%ff", "javascript:alert(1)",
+    "/models//file", "/models/owner/", "/unknown/owner/repo",
+])
+async def test_verification_rejects_unsafe_or_malformed_return_targets_without_breaking_verification(target):
+    user = make_user("safe-reader", email_verified=False)
+    verification = make_email_verification(user, "unsafe-return-verification")
+    response = await auth_routes.verify_email(verification.token, Response(), return_to=target)
+    assert response.headers["location"] == "/safe-reader"
+    assert auth_routes.get_user_by_id(user.id).email_verified is True
+    assert Session.get(user=user).user_id == user.id
+
+
 def _count_transactions(monkeypatch, db_scope, seen):
     """Count the transactions the routes open; the writes inside stay real on ``db_scope``."""
 
