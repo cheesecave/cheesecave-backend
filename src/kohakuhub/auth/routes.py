@@ -5,14 +5,14 @@ import json
 from datetime import datetime, timezone
 from urllib.parse import quote
 
-from fastapi import APIRouter, Cookie, Depends, HTTPException, Response
+from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response
 from fastapi.responses import RedirectResponse
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 from peewee import Case, IntegrityError, SqliteDatabase, fn
 
 from kohakuhub import repository_invites
 from kohakuhub.config import cfg
-from kohakuhub.db import Invitation, Session, Token, User, db, utcnow
+from kohakuhub.db import Invitation, Repository, Session, Token, User, db, utcnow
 from kohakuhub.db_operations import (
     check_invitation_available,
     create_email_verification,
@@ -59,6 +59,7 @@ class RegisterRequest(BaseModel):
     email: EmailStr
     password: Password
     repo_invitation_token: str | None = None
+    repo_guest_repository_id: int | None = Field(default=None, gt=0, le=2**63 - 1, strict=True)
 
 
 class LoginRequest(BaseModel):
@@ -122,7 +123,7 @@ def _consume_site_invitation(invitation_token, user):
 
 
 @router.post("/register")
-async def register(req: RegisterRequest, invitation_token: str | None = None):
+async def register(req: RegisterRequest, invitation_token: str | None = None, request: Request = None):
     """Register new user.
 
     Args:
@@ -142,6 +143,10 @@ async def register(req: RegisterRequest, invitation_token: str | None = None):
         repo_token, invitation_token = invitation_token, None
     if repo_token is not None and (not repo_token or len(repo_token) > 256):
         raise HTTPException(400, detail="Invalid or unavailable repository invitation")
+    guest_repo_id = req.repo_guest_repository_id
+    if repo_token and guest_repo_id is not None:
+        raise HTTPException(400, detail="Conflicting repository invitation credentials")
+    has_repository_invitation = bool(repo_token) or guest_repo_id is not None
 
     # Check if registration requires invitation
     if cfg.auth.invitation_only:
@@ -178,7 +183,7 @@ async def register(req: RegisterRequest, invitation_token: str | None = None):
         )
 
     # Check if username or email already exists and create user atomically
-    transaction_args = ("IMMEDIATE",) if repo_token and isinstance(db, SqliteDatabase) and db.transaction_depth() == 0 else ()
+    transaction_args = ("IMMEDIATE",) if has_repository_invitation and isinstance(db, SqliteDatabase) and db.transaction_depth() == 0 else ()
     with db.atomic(*transaction_args):
         if get_user_by_username(req.username):
             logger.warning(
@@ -214,15 +219,24 @@ async def register(req: RegisterRequest, invitation_token: str | None = None):
                 )
         except IntegrityError:
             raise HTTPException(400, detail="Username or email already exists") from None
-        if repo_token:
+        if has_repository_invitation:
             if cfg.auth.invitation_only:
                 _consume_site_invitation(invitation_token, user)
-            row = repository_invites.find_invite(repo_token)
-            if row is None:
-                raise HTTPException(400, detail="Invalid or unavailable repository invitation")
-            repository = row.repository
+            if guest_repo_id is not None:
+                repository = Repository.get_or_none(Repository.id == guest_repo_id)
+                guest_secret = request.cookies.get(f"repo_guest_{guest_repo_id}", "") if request else ""
+                if repository is None:
+                    raise HTTPException(400, detail="Invalid or unavailable repository invitation")
+            else:
+                row = repository_invites.find_invite(repo_token)
+                if row is None:
+                    raise HTTPException(400, detail="Invalid or unavailable repository invitation")
+                repository = row.repository
             try:
-                repository_invites.redeem_account(repository, repo_token, user)
+                if guest_repo_id is not None:
+                    repository_invites.redeem_guest_account(repository, guest_secret, user)
+                else:
+                    repository_invites.redeem_account(repository, repo_token, user)
             except repository_invites.RepositoryInviteError as error:
                 raise HTTPException(400, detail={"error": str(error), "code": error.code}) from None
             if repository.repo_type in ("model", "dataset", "space"):
@@ -235,7 +249,7 @@ async def register(req: RegisterRequest, invitation_token: str | None = None):
     logger.success(f"User registered: {user.username} (id={user.id})")
 
     # If registration used an invitation, mark it and add to org if specified
-    if cfg.auth.invitation_only and invitation_token and not repo_token:
+    if cfg.auth.invitation_only and invitation_token and not has_repository_invitation:
         invitation = get_invitation(invitation_token)
         if invitation:
             try:

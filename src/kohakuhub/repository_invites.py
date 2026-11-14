@@ -2,7 +2,7 @@
 
 Repository codes never satisfy site registration policy and are never authentication tokens.
 The registration route may call ``redeem_account`` inside its own account-creation transaction.
-Only dedicated controlled-preview endpoints may consume ``get_guest_session``.
+Only explicit browser-preview and registration flows consume ``get_guest_session``.
 """
 
 import hashlib
@@ -197,31 +197,61 @@ def redeem_account(repo, token, user):
     _account(user)
     with _atomic():
         row = _invite(repo, token)
-        prior = RepositoryInviteRedemption.get_or_none(
-            (RepositoryInviteRedemption.invite == row.id) & (RepositoryInviteRedemption.user == user.id)
-        )
-        # A repeat acknowledges the original exchange; it never renews or recreates a grant.
-        if prior is not None:
-            if prior.grant_id is None:
-                raise RepositoryInviteError("The original account grant is no longer available.", "grant_inactive")
-            return prior.grant
-        _private_repo(repo)
-        _available(row)
-        if row.grant_expires_at is not None and row.grant_expires_at <= utcnow():
-            raise RepositoryInviteError("The invitation's account grant has expired.", "grant_inactive")
-        consumed = RepositoryInvite.update(redemption_count=RepositoryInvite.redemption_count + 1).where(
-            (RepositoryInvite.id == row.id) & RepositoryInvite.revoked_at.is_null()
-            & (RepositoryInvite.expires_at > utcnow())
-            & (RepositoryInvite.redemption_count == 0)
-        ).execute()
-        if consumed != 1:
+        return _redeem_account(repo, row, user)
+
+
+def _redeem_account(repo, row, user):
+    """Exchange an already authenticated, locked invitation in the caller's transaction."""
+    prior = RepositoryInviteRedemption.get_or_none(
+        (RepositoryInviteRedemption.invite == row.id) & (RepositoryInviteRedemption.user == user.id)
+    )
+    # A repeat acknowledges the original exchange; it never renews or recreates a grant.
+    if prior is not None:
+        if prior.grant_id is None:
+            raise RepositoryInviteError("The original account grant is no longer available.", "grant_inactive")
+        return prior.grant
+    _private_repo(repo)
+    _available(row)
+    if row.grant_expires_at is not None and row.grant_expires_at <= utcnow():
+        raise RepositoryInviteError("The invitation's account grant has expired.", "grant_inactive")
+    consumed = RepositoryInvite.update(redemption_count=RepositoryInvite.redemption_count + 1).where(
+        (RepositoryInvite.id == row.id) & RepositoryInvite.revoked_at.is_null()
+        & (RepositoryInvite.expires_at > utcnow())
+        & (RepositoryInvite.redemption_count == 0)
+    ).execute()
+    if consumed != 1:
+        raise RepositoryInviteError("Invalid or unavailable repository invitation.")
+    grant = _grant(repo, user, row.created_by, expires_at=row.grant_expires_at, source="invite")
+    if grant.revoked_at is not None or (grant.expires_at is not None and grant.expires_at <= utcnow()):
+        raise RepositoryInviteError("A repository manager must renew the account grant.", "grant_inactive")
+    RepositoryInviteRedemption.create(invite=row, user=user, grant=grant)
+    _event(repo, "invite_redeemed", actor=user, user=user, invite=row, grant_id=grant.id)
+    return grant
+
+
+def guest_registration_available(session):
+    """An active preview can outlive its original code's account-exchange eligibility."""
+    row = session.invite
+    now = utcnow()
+    return (row.revoked_at is None and row.expires_at > now and row.redemption_count == 0
+            and (row.grant_expires_at is None or row.grant_expires_at > now))
+
+
+def redeem_guest_account(repo, secret, user):
+    """The original HttpOnly visitor credential proves this one repository invitation."""
+    _account(user)
+    with _atomic():
+        session = get_guest_session(repo, secret)
+        if session is None:
             raise RepositoryInviteError("Invalid or unavailable repository invitation.")
-        grant = _grant(repo, user, row.created_by, expires_at=row.grant_expires_at, source="invite")
-        if grant.revoked_at is not None or (grant.expires_at is not None and grant.expires_at <= utcnow()):
-            raise RepositoryInviteError("A repository manager must renew the account grant.", "grant_inactive")
-        RepositoryInviteRedemption.create(invite=row, user=user, grant=grant)
-        _event(repo, "invite_redeemed", actor=user, user=user, invite=row, grant_id=grant.id)
-        return grant
+        # Lock in the same invitation-then-session order as invitation revocation.
+        row = _locked(RepositoryInvite.select().where(
+            (RepositoryInvite.id == session.invite_id) & (RepositoryInvite.repository == repo.id)
+        ))
+        _locked(RepositoryGuestSession.select().where(RepositoryGuestSession.id == session.id))
+        if row is None or get_guest_session(repo, secret) is None:
+            raise RepositoryInviteError("Invalid or unavailable repository invitation.")
+        return _redeem_account(repo, row, user)
 
 
 def revoke_invite(repo, invite_id, actor, *, is_admin=False):
@@ -358,6 +388,12 @@ def get_guest_session(repo, secret):
 def revoke_guest_session(repo, session_id, actor, *, is_admin=False):
     check_repo_manage_permission(repo, actor, is_admin=is_admin)
     with _atomic():
+        session = RepositoryGuestSession.get_or_none(
+            (RepositoryGuestSession.id == session_id) & (RepositoryGuestSession.repository == repo.id)
+        )
+        if session is not None:
+            # Match guest registration and invite revocation before locking the visitor.
+            _locked(RepositoryInvite.select().where(RepositoryInvite.id == session.invite_id))
         row = _locked(RepositoryGuestSession.select().where(
             (RepositoryGuestSession.id == session_id) & (RepositoryGuestSession.repository == repo.id)
         ))
