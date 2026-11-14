@@ -471,3 +471,69 @@ Web: pass explicit paths from test/pages/test_blob*.test.js, test/components/tes
 - Continue review on feat/invite-repo in all three repositories. The next implementation step is to resolve the findings listed in the release guide, integrate current-main fixes, and validate the same final candidate before production acceptance.
 
 - Publication completed: [Backend #152](https://github.com/cheesecave/cheesecave-backend/pull/152), [Web #88](https://github.com/cheesecave/cheesecave-web/pull/88), [Admin #34](https://github.com/cheesecave/cheesecave-admin/pull/34), all targeting main from feat/invite-repo. Each PR links its companions and the repository-hosted release guide, follows existing What changed / Why / Testing / Checklist sections, and records unresolved review work. Documentation commits: Backend 9069642, Web 0867cc2; Admin a0ffbe3 unchanged. Branches are pushed and track origin/feat/invite-repo.
+
+
+## Integrate current main and resolve PR conflicts, 2026-11-14
+
+- User authorized resolving the documented conflicts, preserving both sides, testing, committing, pushing and updating all three PRs. Merged Backend main e01e330 and Web main 24871bd into the existing feat/invite-repo branches; no branch rewrite. Admin already contains its current main and needs no source change.
+- Backend test_info_unit.py retains both the invitation list/privacy assertions and main's five-zone UTC test. test_files_unit.py retains the real SQL repository/creator fixture and createdBy assertions, with main's Shanghai-zone execution and fixed UTC expected value. All nine merged src/test files match the tested snapshot. The imported runtime delta is main's UTC serialization fix.
+- Web merge commit **856e1ce** retains the shared RepositoryFiles presentation and moves the cached formatter into that actual row renderer. Main's Set lookups, key-order filtering, four concurrent sidecar probes, retry and three-state results remain. Blob keeps TAR detection/prefetched index/error+Retry and restricted guards for ordinary byte readers.
+- Four feature date reads now use the shared UTC parser/formatter; datetime-local form values use a dedicated localDateTimeToIso helper. Existing UTC guard passes without exceptions. The new timezone assertions first reproduced four failures. The shared-list regression first reproduced 200 formatter calls for 100 same-time rows; after the fix, ordinary and guest lists each format once, including a subsequent rerender. The existing controlled-source test now checks TAR/ZIP/Parquet/Safetensors without raw/API reads or an archive panel.
+- Final Web related regression: **30 files / 552 passed, zero failures/skips, 143.95s**, with coverage. datetime.js has **100% lines/statements, branches and functions**. This focused selection includes every changed test suite and additional guest/access/signup/redemption suites; its configured-project totals are not whole-suite coverage. Earlier 9-file/225-test and 6-file/70-test green runs overlap this final run. Evidence merge-web-final.txt/.xml, merge-web-final-files.txt and merge-web-final-coverage/ under temp_workspace/invite-repo-validation-20261114.
+
+Web command (from the Web worktree; report output flags may point to an external evidence directory):
+
+```sh
+pnpm exec vitest run \
+  test/components/test_file_preview_dialog.test.js \
+  test/components/test_repo_viewer_paths.test.js \
+  test/components/test_repository_access_gate.test.js \
+  test/components/test_repository_access_manager_tables.test.js \
+  test/components/test_repository_access_manager.test.js \
+  test/components/test_repository_access_pagination.test.js \
+  test/components/test_repository_files_time_cache.test.js \
+  test/components/test_repository_guest_browser.test.js \
+  test/components/test_repository_guest_rows.test.js \
+  test/components/test_tar_browser_panel.test.js \
+  test/components/test_workspace_components.test.js \
+  test/errors/test_copy.test.js \
+  test/pages/test_auth_pages.test.js \
+  test/pages/test_blob_binary_size.test.js \
+  test/pages/test_blob_edit_link.test.js \
+  test/pages/test_blob_errors.test.js \
+  test/pages/test_blob_indexed_tar.test.js \
+  test/pages/test_blob_restricted_source.test.js \
+  test/pages/test_invite_page_errors.test.js \
+  test/pages/test_org_settings_page.test.js \
+  test/pages/test_repo_access.test.js \
+  test/pages/test_repo_embedded_details.test.js \
+  test/pages/test_reset_password_page.test.js \
+  test/pages/test_user_settings_errors.test.js \
+  test/utils/test_api.test.js \
+  test/utils/test_datetime.test.js \
+  test/utils/test_indexed_tar.test.js \
+  test/utils/test_repository_access.test.js \
+  test/utils/test_retry.test.js \
+  test/utils/test_server_time_usage.test.js \
+  --maxWorkers=2 --coverage --reporter=default --reporter=junit
+```
+
+- Backend native Linux amd64 / Python 3.11.18: **74 passed / 1 skipped, 24.32s** with real SQL and cross-process-timezone checks. The slim image lacked German locale; a separate isolated container generated de_DE.UTF-8 and ran the original locale test body successfully in a fresh Python process without mocks or source edits. This supplemental result does not relabel the six-file run as 75 passed. Windows-compatible guard/helper selection also passed 17 tests (overlaps Linux). Temporary task containers are removed.
+
+Backend command (from a tested source snapshot with isolated SQLite configuration):
+
+```sh
+python -m pytest \
+  test/kohakuhub/api/repo/routers/test_info_unit.py \
+  test/kohakuhub/api/test_files_unit.py \
+  test/kohakuhub/test_datetime_storage.py \
+  test/kohakuhub/utils/test_datetime_utils.py \
+  test/kohakuhub/api/test_utc_wire_times_unit.py \
+  test/kohakuhub/test_no_naive_clock_unit.py \
+  --cov=kohakuhub.api.files --cov=kohakuhub.api.repo.routers.info \
+  --cov=kohakuhub.utils.datetime_utils --cov-branch \
+  --cov-report=json --cov-report=term -q --tb=short --no-showlocals
+```
+
+- Backend changed-line coverage: **12/12 added executable lines covered, 0 added branch arms** across the three runtime files, preserving the upstream UTC change's complete changed-line coverage; datetime_utils module 100%. Mock ratchet 43 before/after. Evidence merge-main-backend-linux-amd64.log, merge-main-backend-linux/{result.xml,coverage.json,changed-line-coverage.json}, merge-main-backend-locale-recheck.log. Snapshot/source SHA256 values are recorded in the coverage summary. Diff checks pass, no remaining unmerged entries.
+- The release guide now marks integration and feature UTC compatibility resolved. PDF atomic publication, missing/expired signup-handoff recovery, existing-history DCO and final real-storage release acceptance remain separate review work. Next session: inspect the linked PR checks and actual branch heads, then continue those review findings; do not recreate branches or repeat the resolved conflict work.

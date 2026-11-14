@@ -32,3 +32,37 @@ def test_naive_and_null_datetimes_are_unchanged(db_fresh):
 
     assert stored.created_at == naive
     assert stored.started_at is None
+
+
+# ---- epoch seconds on the wire: UTC whatever the zone of the server process -----------------------------------------
+
+import pytest
+
+from kohakuhub.utils.datetime_utils import epoch_to_http_date, epoch_to_iso_z
+from test.kohakuhub.support.zones import ZONES, in_zone
+
+EPOCH = 1700000000  # 2023-11-14T22:13:20Z
+
+
+@pytest.mark.parametrize("zone", ZONES)
+def test_epoch_seconds_are_written_as_utc_in_any_server_zone(zone):
+    with in_zone(zone):
+        assert epoch_to_iso_z(EPOCH) == "2023-11-14T22:13:20.000000Z"
+        assert epoch_to_iso_z(EPOCH + 0.25) == "2023-11-14T22:13:20.250000Z"
+        assert epoch_to_iso_z(1) == "1970-01-01T00:00:01.000000Z"
+        assert epoch_to_http_date(EPOCH) == "Tue, 14 Nov 2023 22:13:20 GMT"
+        assert epoch_to_http_date(1) == "Thu, 01 Jan 1970 00:00:01 GMT"
+
+
+def test_the_http_date_does_not_depend_on_the_locale(monkeypatch):
+    import locale
+
+    # day and month names stay English whatever LC_TIME says (a header is not translated)
+    try:
+        locale.setlocale(locale.LC_TIME, "de_DE.UTF-8")
+    except locale.Error:
+        pytest.skip("no German locale on this machine")
+    try:
+        assert epoch_to_http_date(EPOCH) == "Tue, 14 Nov 2023 22:13:20 GMT"
+    finally:
+        locale.setlocale(locale.LC_TIME, "")
