@@ -158,6 +158,23 @@ rows, so the commit history, the recoverability check and quota know it is
 gone. A commit that links collected content is refused with `409` and the
 client uploads it again.
 
+The history check reads only the newest rows of a path (index
+`(repository_id, path_in_repo, created_at, id)`, migration 043) and stops as
+soon as the keep window is known, so a decision costs about the same whether a
+path has ten versions or a hundred thousand; a path whose newest rows repeat a
+few contents is decided by one aggregate query instead. Each collection logs,
+in its task log on the admin **Tasks** page and in the worker's log:
+
+```text
+Collecting LFS objects: 5512 candidate(s) waiting, keeping 10 version(s) per path unless a repository says otherwise, auto GC on
+Collecting LFS objects: checked 3000, deleted 2810 nothing relies on, kept 190 (head 4, history 180, recent 6), in 61.2s (49.0/s), 2512 waiting, slowest 38 ms (a1b2c3d4e5f6, history)
+Collected LFS objects: checked 5512, deleted 5170 nothing relies on, kept 342 (head 9, history 320, recent 13), in 112.4s (49.0/s); finished
+```
+
+A progress line comes at most once a minute; a decision slower than a second
+is logged with what it read (the first five per run); the summary is written
+however the run ends (`finished`, `stopped: cancelled ...`, or the error).
+
 ```yaml
 CHEESE_CAVE_LFS_AUTO_GC: true  # Collect versions beyond keep_versions
 ```
