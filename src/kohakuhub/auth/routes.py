@@ -3,15 +3,17 @@
 import asyncio
 import json
 from datetime import datetime, timezone
+from urllib.parse import quote
 
-from fastapi import APIRouter, Cookie, Depends, HTTPException, Response
+from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response
 from fastapi.responses import RedirectResponse
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
+from peewee import Case, IntegrityError, SqliteDatabase, fn
 
+from kohakuhub import repository_invites
 from kohakuhub.config import cfg
-from kohakuhub.db import Session, Token, User, db
+from kohakuhub.db import Invitation, Repository, Session, Token, User, db, utcnow
 from kohakuhub.db_operations import (
-    check_invitation_available,
     create_email_verification,
     create_session,
     create_token,
@@ -25,14 +27,13 @@ from kohakuhub.db_operations import (
     get_user_by_id,
     get_user_by_username,
     list_user_tokens,
-    mark_invitation_used,
     update_user,
 )
 from kohakuhub.logger import get_logger
 from kohakuhub.api.validation import RESERVED_NAMES
 from kohakuhub.auth.dependencies import get_current_user
 from kohakuhub.auth.session import next_expiry, set_session_cookie
-from kohakuhub.auth.email import send_verification_email
+from kohakuhub.auth.email import safe_repository_return_path, send_verification_email
 from kohakuhub.auth.utils import (
     generate_session_secret,
     generate_token,
@@ -55,6 +56,9 @@ class RegisterRequest(BaseModel):
     username: str
     email: EmailStr
     password: Password
+    invitation_code: str | None = Field(default=None, max_length=256, strict=True)
+    repo_invitation_token: str | None = None
+    repo_guest_repository_id: int | None = Field(default=None, gt=0, le=2**63 - 1, strict=True)
 
 
 class LoginRequest(BaseModel):
@@ -85,8 +89,71 @@ class PasswordResetRequest(BaseModel):
 INVALID_RESET_LINK = "This reset link is invalid, expired or already used."
 
 
+def _consume_site_invitation(invitation_token, user):
+    """Consume a supplied registration invitation inside the account transaction."""
+    invitation = get_invitation(invitation_token)
+    if invitation is None or invitation.action != "register_account":
+        raise HTTPException(400, detail="Invalid or unavailable invitation code")
+    try:
+        parameters = json.loads(invitation.parameters)
+        if not isinstance(parameters, dict):
+            raise ValueError()
+    except (ValueError, TypeError):
+        raise HTTPException(400, detail="Invalid or unavailable invitation code") from None
+    available = (
+        (Invitation.max_usage == -1)
+        | (Invitation.max_usage.is_null() & Invitation.used_at.is_null())
+        | (Invitation.usage_count < Invitation.max_usage)
+    )
+    now = utcnow()
+    consumed = Invitation.update(
+        usage_count=Invitation.usage_count + 1,
+        used_at=fn.COALESCE(Invitation.used_at, now),
+        used_by=Case(None, [(Invitation.used_at.is_null(), user.id)], Invitation.used_by),
+    ).where(
+        (Invitation.id == invitation.id) & (Invitation.expires_at > now) & available
+    ).execute()
+    if consumed != 1:
+        raise HTTPException(400, detail="Invalid or unavailable invitation code")
+    if org_id := parameters.get("org_id"):
+        org = get_user_by_id(org_id)
+        if org:
+            create_user_organization(user, org, parameters.get("role", "member"))
+
+
+def _registration_invitations(req, invitation_token):
+    """Resolve generic inputs by stored identity; client labels never grant eligibility."""
+    repo_token = req.repo_invitation_token
+    if repo_token is not None:
+        repo_token = repo_token.strip()
+        if not repo_token or len(repo_token) > 256:
+            raise HTTPException(400, detail="Invalid or unavailable invitation code")
+    site_token = None
+    for supplied in (req.invitation_code, invitation_token):
+        if supplied is None or not supplied.strip():
+            continue
+        code = supplied.strip()
+        if len(code) > 256:
+            raise HTTPException(400, detail="Invalid or unavailable invitation code")
+        site = get_invitation(code)
+        repository = repository_invites.find_invite(code)
+        if site is not None and repository is not None:
+            raise HTTPException(400, detail="Invalid or unavailable invitation code")
+        if site is not None:
+            if site.action != "register_account" or (site_token and site_token != code):
+                raise HTTPException(400, detail="Invalid or unavailable invitation code")
+            site_token = code
+        elif repository is not None:
+            if repo_token and repo_token != code:
+                raise HTTPException(400, detail="Invalid or unavailable invitation code")
+            repo_token = code
+        else:
+            raise HTTPException(400, detail="Invalid or unavailable invitation code")
+    return site_token, repo_token
+
+
 @router.post("/register")
-async def register(req: RegisterRequest, invitation_token: str | None = None):
+async def register(req: RegisterRequest, invitation_token: str | None = None, request: Request = None):
     """Register new user.
 
     Args:
@@ -96,27 +163,16 @@ async def register(req: RegisterRequest, invitation_token: str | None = None):
     Returns:
         Success response
     """
-    # Check if registration requires invitation
-    if cfg.auth.invitation_only:
-        if not invitation_token:
-            raise HTTPException(
-                403,
-                detail="Registration is invitation-only. Please use an invitation link or contact the administrator.",
-            )
+    invitation_token, repo_token = _registration_invitations(req, invitation_token)
+    repository_url = None
+    guest_repo_id = req.repo_guest_repository_id
+    if repo_token and guest_repo_id is not None:
+        raise HTTPException(400, detail="Invalid or unavailable invitation code")
+    has_repository_invitation = bool(repo_token) or guest_repo_id is not None
 
-        # Validate invitation token
-        invitation = get_invitation(invitation_token)
-        if not invitation:
-            raise HTTPException(400, detail="Invalid invitation token")
-
-        # Check if invitation is for registration
-        if invitation.action != "register_account":
-            raise HTTPException(400, detail="Invalid invitation type for registration")
-
-        # Check if invitation is available
-        is_available, error_msg = check_invitation_available(invitation)
-        if not is_available:
-            raise HTTPException(400, detail=error_msg)
+    # Repository access never substitutes for the site's registration policy.
+    if cfg.auth.invitation_only and not invitation_token:
+        raise HTTPException(403, detail="Registration requires a valid invitation code")
 
     logger.info(f"Registration attempt for username: {req.username}")
 
@@ -131,7 +187,8 @@ async def register(req: RegisterRequest, invitation_token: str | None = None):
         )
 
     # Check if username or email already exists and create user atomically
-    with db.atomic():
+    transaction_args = ("IMMEDIATE",) if (has_repository_invitation or invitation_token) and isinstance(db, SqliteDatabase) and db.transaction_depth() == 0 else ()
+    with db.atomic(*transaction_args):
         if get_user_by_username(req.username):
             logger.warning(
                 f"Registration failed: username '{req.username}' already exists"
@@ -156,70 +213,82 @@ async def register(req: RegisterRequest, invitation_token: str | None = None):
             )
 
         # Create user
-        user = create_user(
-            username=req.username,
-            email=req.email,
-            password_hash=hash_password(req.password),
-            email_verified=not cfg.auth.require_email_verification,
-        )
+        try:
+            with db.atomic():
+                user = create_user(
+                    username=req.username,
+                    email=req.email,
+                    password_hash=hash_password(req.password),
+                    email_verified=not cfg.auth.require_email_verification,
+                )
+        except IntegrityError:
+            raise HTTPException(400, detail="Username or email already exists") from None
+        if invitation_token:
+            _consume_site_invitation(invitation_token, user)
+        if has_repository_invitation:
+            if guest_repo_id is not None:
+                repository = Repository.get_or_none(Repository.id == guest_repo_id)
+                guest_secret = request.cookies.get(f"repo_guest_{guest_repo_id}", "") if request else ""
+                if repository is None:
+                    raise HTTPException(400, detail="Invalid or unavailable invitation code")
+            else:
+                row = repository_invites.find_invite(repo_token)
+                if row is None:
+                    raise HTTPException(400, detail="Invalid or unavailable invitation code")
+                repository = row.repository
+            try:
+                if guest_repo_id is not None:
+                    repository_invites.redeem_guest_account(repository, guest_secret, user)
+                else:
+                    repository_invites.redeem_account(repository, repo_token, user)
+            except repository_invites.RepositoryInviteError as error:
+                raise HTTPException(400, detail={"error": "Invalid or unavailable invitation code", "code": error.code}) from None
+            if repository.repo_type in ("model", "dataset", "space"):
+                repository_url = safe_repository_return_path(
+                    f"/{repository.repo_type}s/{quote(repository.namespace, safe='')}/{quote(repository.name, safe='')}"
+                )
+            if repository_url is None:
+                raise HTTPException(400, detail="Invalid or unavailable invitation code")
 
     logger.success(f"User registered: {user.username} (id={user.id})")
 
-    # If registration used an invitation, mark it and add to org if specified
-    if cfg.auth.invitation_only and invitation_token:
-        invitation = get_invitation(invitation_token)
-        if invitation:
-            try:
-                params = json.loads(invitation.parameters)
-                org_id = params.get("org_id")
-
-                with db.atomic():
-                    mark_invitation_used(invitation, user)
-
-                    # Add user to organization if specified
-                    if org_id:
-                        org = get_user_by_id(org_id)
-                        if org:
-                            role = params.get("role", "member")
-                            create_user_organization(user, org, role)
-                            logger.success(
-                                f"User {user.username} added to org {org.username} as {role}"
-                            )
-            except (json.JSONDecodeError, Exception) as e:
-                logger.warning(f"Failed to process invitation on registration: {e}")
-
     # Send verification email if required
+    repository_result = {"repository_url": repository_url} if repository_url else {}
     if cfg.auth.require_email_verification:
         token = generate_token()
         create_email_verification(
             user=user, token=token, expires_at=get_expiry_time(24)
         )
 
-        verification_email = await asyncio.to_thread(
-            send_verification_email, req.email, req.username, token
-        )
+        email_args = (req.email, req.username, token)
+        if repository_url:
+            email_args += (repository_url,)
+        verification_email = await asyncio.to_thread(send_verification_email, *email_args)
         if not verification_email:
             return {
                 "success": True,
                 "message": "User created but failed to send verification email",
                 "email_verified": False,
+                **repository_result,
             }
 
         return {
             "success": True,
             "message": "User created. Please check your email to verify your account.",
             "email_verified": False,
+            **repository_result,
         }
 
     return {
         "success": True,
         "message": "User created successfully",
         "email_verified": True,
+        **repository_result,
     }
 
 
 @router.get("/verify-email")
-async def verify_email(token: str, response: Response):
+async def verify_email(token: str, response: Response, return_to: str | None = None):
     """Verify email with token and automatically log in user."""
     logger.info(f"Email verification attempt with token: {token[:8]}...")
 
@@ -272,7 +341,8 @@ async def verify_email(token: str, response: Response):
         )
 
     # Set session cookie
-    redirect_response = RedirectResponse(url=f"/{user.username}", status_code=302)
+    target = safe_repository_return_path(return_to) or f"/{user.username}"
+    redirect_response = RedirectResponse(url=target, status_code=302)
     set_session_cookie(redirect_response, session_id, expires_at, now)
 
     logger.success(

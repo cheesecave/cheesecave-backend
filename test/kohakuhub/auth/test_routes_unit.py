@@ -26,6 +26,41 @@ from test.kohakuhub.support.factories import (
 pytestmark = pytest.mark.usefixtures("db_scope")
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("target", [
+    "/models/owner/model", "/datasets/group/data", "/spaces/team/demo",
+    "/models/group%20team/%E6%A8%A1%E5%9E%8B%20%231",
+])
+async def test_verified_email_returns_to_a_safe_repository_and_creates_the_normal_session(target):
+    user = make_user("return-reader", email_verified=False)
+    verification = make_email_verification(user, "safe-return-verification")
+    response = await auth_routes.verify_email(verification.token, Response(), return_to=target)
+    assert response.status_code == 302 and response.headers["location"] == target
+    assert auth_routes.get_user_by_id(user.id).email_verified is True
+    assert EmailVerification.get_or_none(id=verification.id) is None
+    assert Session.get(user=user).user_id == user.id
+    assert any(key == b"set-cookie" for key, _value in response.raw_headers)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("target", [
+    "https://evil.test/models/a/b", "//evil.test/models/a/b", "/\\evil.test/models/a/b",
+    "/models/owner/../login", "/models/../login", "/models/owner/%2e%2e",
+    "/models/owner/%2F%2Fevil.test", "/models/owner/%5Cevil", "/models/owner/%255Cevil",
+    "/models/owner/%0d%0aLocation%3Aevil", "/models/owner/\x00file", "/models/owner/%7f",
+    "/models/owner/file?next=//evil.test", "/models/owner/file#fragment", "/login",
+    "/models/owner/%", "/models/owner/%zz", "/models/owner/%ff", "javascript:alert(1)",
+    "/models//file", "/models/owner/", "/unknown/owner/repo",
+])
+async def test_verification_rejects_unsafe_or_malformed_return_targets_without_breaking_verification(target):
+    user = make_user("safe-reader", email_verified=False)
+    verification = make_email_verification(user, "unsafe-return-verification")
+    response = await auth_routes.verify_email(verification.token, Response(), return_to=target)
+    assert response.headers["location"] == "/safe-reader"
+    assert auth_routes.get_user_by_id(user.id).email_verified is True
+    assert Session.get(user=user).user_id == user.id
+
+
 def _count_transactions(monkeypatch, db_scope, seen):
     """Count the transactions the routes open; the writes inside stay real on ``db_scope``."""
 
@@ -67,7 +102,7 @@ async def test_register_covers_invitation_reserved_and_conflict_paths(monkeypatc
     make_invitation("expired", expires_at=datetime.now(timezone.utc) - timedelta(hours=1))
     with pytest.raises(HTTPException) as unavailable:
         await auth_routes.register(request(), invitation_token="expired")
-    assert unavailable.value.detail == "Invitation has expired"
+    assert unavailable.value.detail == "Invalid or unavailable invitation code"
 
     monkeypatch.setattr(auth_routes.cfg.auth, "invitation_only", False)
     with pytest.raises(HTTPException) as reserved:
@@ -101,6 +136,7 @@ async def test_register_covers_invitation_processing_and_email_verification(monk
         parameters=json.dumps({"org_id": org.id, "org_name": "org-team", "role": "admin"}),
     )
     make_invitation("invite-2", parameters="{not-json")
+    make_invitation("invite-3")
 
     async def _fake_to_thread(func, *args):
         return func(*args)
@@ -137,13 +173,23 @@ async def test_register_covers_invitation_processing_and_email_verification(monk
     assert EmailVerification.get(EmailVerification.user == fresh).token == "verify-token"
 
     monkeypatch.setattr(auth_routes, "send_verification_email", lambda email, username, token: True)
+    # Malformed invitation parameters now fail atomically instead of silently
+    # creating an account without consuming the supplied invitation.
+    with pytest.raises(HTTPException) as invalid_invitation:
+        await auth_routes.register(
+            auth_routes.RegisterRequest(username="second-user", email="second@example.com", password="secret-pass-1"),
+            invitation_token="invite-2",
+        )
+    assert invalid_invitation.value.detail == "Invalid or unavailable invitation code"
+    assert auth_routes.get_user_by_username("second-user") is None
+    assert auth_routes.get_invitation("invite-2").usage_count == 0
     second = await auth_routes.register(
         auth_routes.RegisterRequest(
             username="second-user",
             email="second@example.com",
             password="secret-pass-1",
         ),
-        invitation_token="invite-2",
+        invitation_token="invite-3",
     )
     assert second == {
         "success": True,
@@ -152,8 +198,7 @@ async def test_register_covers_invitation_processing_and_email_verification(monk
     }
     second_user = auth_routes.get_user_by_username("second-user")
     assert EmailVerification.get(EmailVerification.user == second_user).token == "verify-token-2"
-    # The invalid invitation JSON is logged and skipped, so it is not marked used.
-    assert auth_routes.get_invitation("invite-2").usage_count == 0
+    assert auth_routes.get_invitation("invite-3").usage_count == 1
 
 
 @pytest.mark.asyncio

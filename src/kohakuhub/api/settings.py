@@ -20,6 +20,7 @@ from kohakuhub.db_operations import (
     update_user,
 )
 from kohakuhub.lfs_gc import keep_versions
+from kohakuhub.repository_visibility import resolve_visibility
 from kohakuhub.logger import get_logger
 from kohakuhub.storage_cleanup import enqueue_lfs_window_review
 from kohakuhub.api.fallback import with_user_fallback
@@ -27,7 +28,7 @@ from kohakuhub.api.fallback.cache import get_cache as get_fallback_cache
 from kohakuhub.api.quota.util import check_quota
 from kohakuhub.api.repo.utils.hf import hf_bad_request, hf_not_implemented, hf_repo_not_found
 from kohakuhub.auth.dependencies import get_current_user
-from kohakuhub.auth.permissions import check_repo_delete_permission
+from kohakuhub.auth.permissions import check_repo_manage_permission
 from kohakuhub.user_preferences import Preferences, get_preferences, update_preferences
 from kohakuhub.utils.datetime_utils import safe_isoformat
 
@@ -322,6 +323,7 @@ class UpdateRepoSettingsPayload(BaseModel):
 
     private: Optional[bool] = None
     visibility: Optional[str] = None
+    invite_mode: bool | None = None
     gated: bool | str | None = None  # the Hub takes False, "auto" and "manual"
     lfs_threshold_bytes: Optional[int] = None  # NULL = use server default
     lfs_keep_versions: Optional[int] = None  # NULL = use server default
@@ -359,7 +361,7 @@ async def update_repo_settings(
         return hf_repo_not_found(repo_id, repo_type)
 
     # Check if user has permission to update this repository
-    check_repo_delete_permission(repo_row, user)
+    check_repo_manage_permission(repo_row, user)
 
     # Gated repositories are not supported (#61): refuse before anything is written, so a
     # request that asks for a gate never answers 200 over a repository that stays public.
@@ -413,22 +415,17 @@ async def update_repo_settings(
         # Store as JSON string
         update_fields["lfs_suffix_rules"] = json.dumps(payload.lfs_suffix_rules)
 
-    requested_private = payload.private
-    if requested_private is None and payload.visibility is not None:
-        if payload.visibility == "private":
-            requested_private = True
-        elif payload.visibility == "public":
-            requested_private = False
-        else:
-            raise HTTPException(
-                400,
-                detail={
-                    "error": (
-                        "Unsupported repository visibility. "
-                        "Only 'public' and 'private' are supported."
-                    )
-                },
-            )
+    requested_private = None
+    if any(value is not None for value in (payload.private, payload.visibility, payload.invite_mode)):
+        requested_private, requested_mode = resolve_visibility(
+            private=payload.private,
+            visibility=payload.visibility,
+            invite_mode=payload.invite_mode,
+            current_private=repo_row.private,
+            current_invite_mode=getattr(repo_row, "invite_mode", False),
+        )
+        if requested_mode != getattr(repo_row, "invite_mode", False):
+            update_fields["invite_mode"] = requested_mode
 
     if requested_private is not None:
         # Check if visibility is actually changing
@@ -519,7 +516,7 @@ async def get_repo_lfs_settings(
         return hf_repo_not_found(repo_id, repo_type)
 
     # Check if user has permission to view settings
-    check_repo_delete_permission(repo_row, user)
+    check_repo_manage_permission(repo_row, user)
 
     # Get effective values from helper functions
     from kohakuhub.db_operations import (

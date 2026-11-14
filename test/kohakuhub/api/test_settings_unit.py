@@ -271,7 +271,7 @@ async def test_repo_settings_and_lfs_settings_cover_validation_quota_and_default
     )
     monkeypatch.setattr(
         settings_api,
-        "check_repo_delete_permission",
+        "check_repo_manage_permission",
         lambda repo, user: None,
     )
 

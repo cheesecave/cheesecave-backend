@@ -16,7 +16,7 @@ import pytest
 
 import kohakuhub.api.repo.routers.info as repo_info
 from kohakuhub.auth.permissions import RepoReadDeniedError
-from test.kohakuhub.support.factories import make_daily_stats, make_repo, make_user
+from test.kohakuhub.support.factories import make_commit, make_daily_stats, make_repo, make_user
 from test.kohakuhub.support.list_local import list_local
 from test.kohakuhub.support.zones import ZONES, in_zone
 
@@ -390,6 +390,45 @@ def test_the_trending_scores_can_be_asked_for_some_repositories_only():
     assert set(calculate_trending_scores("model")) == {a.id, b.id}
     assert set(calculate_trending_scores("model", ids=[a.id])) == {a.id}
     assert calculate_trending_scores("model", ids=[]) == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("repo_type", ["model", "dataset", "space"])
+async def test_profile_list_items_distinguish_invite_without_changing_hf_privacy(lakefs, repo_type):
+    owner = make_user("profile-owner")
+    rows = {
+        "public": make_repo(owner, "public", repo_type=repo_type),
+        "private": make_repo(owner, "private", repo_type=repo_type, private=True),
+        "invite": make_repo(owner, "invite", repo_type=repo_type, private=True, invite_mode=True),
+    }
+    for index, row in enumerate(rows.values(), start=1):
+        make_commit(row, str(index) * 40)
+
+    listed = {
+        item["id"].split("/")[-1]: item
+        for item in await list_local(repo_type, author=owner.username, user=owner)
+    }
+    assert set(listed) == set(rows)
+    for visibility, item in listed.items():
+        assert item["invite_mode"] is (visibility == "invite")
+        assert item["private"] is (visibility != "public")
+        assert item["gated"] is False
+        assert isinstance(item["id"], str) and isinstance(item["author"], str)
+        assert isinstance(item["sha"], str) and len(item["sha"]) == 40
+        assert isinstance(item["downloads"], int) and isinstance(item["likes"], int)
+        assert isinstance(item["tags"], list)
+
+    anonymous = await list_local(repo_type, author=owner.username, user=None)
+    assert [item["id"] for item in anonymous] == [rows["public"].full_id]
+    assert anonymous[0]["private"] is False and anonymous[0]["invite_mode"] is False
+
+    grouped = await repo_info.list_user_repos.__wrapped__(
+        owner.username, request=None, limit=100, sort="recent", user=owner
+    )
+    grouped_by_id = {item["id"]: item for item in grouped[repo_type + "s"]}
+    assert {key: item["invite_mode"] for key, item in grouped_by_id.items()} == {
+        item["id"]: item["invite_mode"] for item in listed.values()
+    }
 
 
 @pytest.mark.asyncio

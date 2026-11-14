@@ -4,7 +4,7 @@ from typing import Optional
 
 from fastapi import HTTPException
 
-from kohakuhub.db import Repository, User, UserOrganization
+from kohakuhub.db import Repository, RepositoryAccessGrant, User, UserOrganization, utcnow
 from kohakuhub.constants import ERROR_USER_AUTH_REQUIRED
 from kohakuhub.db_operations import get_organization, get_user_organization
 
@@ -22,7 +22,17 @@ def repository_owner_interest(user: User, repository=Repository):
 def repository_read_predicate(user: Optional[User], repository=Repository):
     """The owner FK is authoritative; namespace strings do not grant read access."""
     public = repository.private == False
-    return public if user is None else public | repository_owner_interest(user, repository)
+    if user is None:
+        return public
+    grants = RepositoryAccessGrant.select(RepositoryAccessGrant.repository).where(
+        (RepositoryAccessGrant.user == user.id)
+        & RepositoryAccessGrant.revoked_at.is_null()
+        & (
+            RepositoryAccessGrant.expires_at.is_null()
+            | (RepositoryAccessGrant.expires_at > utcnow())
+        )
+    )
+    return public | repository_owner_interest(user, repository) | repository.id.in_(grants)
 
 
 def filter_readable_repositories(query, user: Optional[User], author: Optional[str] = None):
@@ -150,7 +160,7 @@ def check_repo_read_permission(
     """Check if user can read a repository.
 
     Public repos: anyone can read
-    Private repos: only the owner or current organization members can read
+    Private repos: owners, current organization members and active repository grantees can read
 
     Args:
         repo: The repository to check
@@ -188,6 +198,37 @@ def check_repo_read_permission(
         return True
 
     raise RepoReadDeniedError(repo)
+
+
+def check_repo_manage_permission(
+    repo: Repository, user: User | None, is_admin: bool = False
+) -> bool:
+    """Manage invitations and grants as the actual owner or its organization admins.
+
+    A single-repository read grant never grants management rights. The owner FK,
+    rather than a mutable namespace string, decides which organization matters.
+    """
+    if is_admin:
+        return True
+    if user is None:
+        raise HTTPException(403, detail=ERROR_USER_AUTH_REQUIRED)
+    if repo.owner_id == user.id:
+        return True
+    if (
+        UserOrganization.select(UserOrganization.id)
+        .join(User, on=(UserOrganization.organization == User.id))
+        .where(
+            (UserOrganization.organization == repo.owner_id)
+            & (UserOrganization.user == user.id)
+            & UserOrganization.role.in_(["admin", "super-admin"])
+            & (User.is_org == True)
+        )
+        .exists()
+    ):
+        return True
+    raise HTTPException(
+        403, detail=f"You don't have permission to manage repository '{repo.full_id}'"
+    )
 
 
 def check_repo_write_permission(
