@@ -37,9 +37,10 @@ def main():
             text = text.replace("\nGID=1000\n", f"\nGID={os.getgid()}\n")
             for name in ("lakefs-data", "lakefs-cache", "valkey-data"):
                 (output.parent / "hub-meta" / name).mkdir(parents=True, exist_ok=True)
+        output.write_text(text, encoding="utf-8")
     else:
-        text = (ROOT / "compose.yml").read_text(encoding="utf-8")
-    output.write_text(text, encoding="utf-8")
+        # A template copy must retain its original bytes on every host platform.
+        output.write_bytes((ROOT / "compose.yml").read_bytes())
     if args.generate_config:
         output.chmod(0o600)
     print(f"Created {output}. See docs/deployment/docker.md before starting services.")

@@ -260,12 +260,12 @@ async def test_preupload_batch_load_is_limited_to_sha256_paths(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_preupload_and_revision_cover_validation_quota_and_resolution_errors(
-    monkeypatch,
+    db_scope, monkeypatch,
 ):
-    repo = SimpleNamespace(
-        id=1, private=True, created_at=None, namespace="alice", name="demo",
-        downloads=1, likes_count=2, used_bytes=0,
-    )
+    # Revision responses also read the creator profile: use the real owner/repo
+    # rather than a partial namespace that cannot satisfy those SQL lookups.
+    owner = make_user("alice")
+    repo = make_repo(owner, "demo", private=True, downloads=1, likes_count=2, used_bytes=0)
 
     monkeypatch.setattr(files_api, "check_repo_write_permission", lambda repo_row, user: None)
     monkeypatch.setattr(files_api, "get_organization", lambda namespace: None)
@@ -403,6 +403,8 @@ async def test_preupload_and_revision_cover_validation_quota_and_resolution_erro
     )
     body = json.loads(success.body)
     assert body["sha"] == "commit-1" and body["revision"] == "main"
+    assert body["createdBy"]["username"] == owner.username
+    assert body["createdBy"]["is_org"] is False
     assert body["lastModified"] == files_api.datetime.fromtimestamp(1).strftime(
         "%Y-%m-%dT%H:%M:%S.%fZ"
     )
