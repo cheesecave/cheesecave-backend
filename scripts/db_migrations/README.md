@@ -432,12 +432,21 @@ Rollback facts and the command are in
   leaving them. Nothing is backfilled. `CREATE TABLE IF NOT EXISTS`; two containers starting together take turns on an advisory lock.
   A migration test of an earlier number drops 041's table with its own, which also makes this one count as not applied.
 
-## Invitation repositories: 043–044
+## LFS history window index: 043
 
-- **043** (`043_invite_repository.py`) adds `repository.invite_mode`, default false, with a database CHECK requiring
+- **043** (`043_lfs_history_window_index.py`) adds the index `(repository_id, path_in_repo, created_at, id)` on
+  `lfsobjecthistory` and drops `(repository_id, path_in_repo)`, which it covers. The LFS collection decides whether a version is
+  still in a path's keep window from the newest rows of the path; without the index every decision sorted the whole history of the
+  path (#153). The rows are untouched. Building the index reads the table once (a few seconds for a million rows); deployments run
+  migrations while the api and the worker are stopped. Two containers starting together take turns on an advisory lock.
+- Rolling back is leaving the index: an older release does not depend on the dropped one by name, and the new one serves the same lookups.
+
+## Invitation repositories: 044–045
+
+- **044** (`044_invite_repository.py`) adds `repository.invite_mode`, default false, with a database CHECK requiring
   private visibility, plus `repository_access_grant` with one independently expiring/revocable read grant per account
   and repository. Existing public/private rows retain their behavior; no grants are inferred.
-- **044** (`044_repository_invites.py`) adds `repository_access_request`, `repository_invite`,
+- **045** (`045_repository_invites.py`) adds `repository_access_request`, `repository_invite`,
   `repository_invite_redemption`, `repository_guest_session` and `repository_access_event`. Codes, anonymous receipts
   and guest secrets are represented by hashes. Unique exchange keys and SQL quota constraints protect concurrent
   writes. Account grants, code exchange deadlines and guest lifetimes are independent.
@@ -446,3 +455,7 @@ Rollback facts and the command are in
   Apply both before starting the coordinated backend/Web release. An older release can ignore the new tables, but its
   attempt to make an Invite repository public without clearing invitation mode is intentionally refused by the CHECK.
   See [Invitation repositories](../../docs/features/invitation-repositories.md) for product and protocol boundaries.
+
+The invitation migrations were renumbered from 043/044 before merge to preserve main's LFS migration.
+Their completion checks require the full 042 → 043 → 044 → 045 chain. An existing development database
+with invitation tables still receives the LFS index; invitation rows and grants are retained.

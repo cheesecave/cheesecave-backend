@@ -1,4 +1,4 @@
-"""Migration 043 preserves old repositories and constrains new single-repository grants."""
+"""Migration 044 preserves old repositories and constrains new single-repository grants."""
 
 import importlib.util
 from datetime import datetime, timedelta
@@ -14,7 +14,7 @@ from kohakuhub.db import (
 )
 from test.kohakuhub.support.factories import make_repo, make_user
 
-MIGRATION = Path(__file__).resolve().parents[2] / "scripts/db_migrations/043_invite_repository.py"
+MIGRATION = Path(__file__).resolve().parents[2] / "scripts/db_migrations/044_invite_repository.py"
 TABLE = "repository_access_grant"
 FUTURE_MODELS = [RepositoryAccessEvent, RepositoryGuestSession, RepositoryInviteRedemption, RepositoryInvite, RepositoryAccessRequest]
 

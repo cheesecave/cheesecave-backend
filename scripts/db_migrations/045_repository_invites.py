@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Migration 044: applications, hashed repository invitations, exchanges, guests and audit.
+"""Migration 045: applications, hashed repository invitations, exchanges, guests and audit.
 
 Each lifecycle has its own row and expiration. No existing account authorization changes.
 Pinned SQL keeps this migration independent of future model changes.
@@ -17,17 +17,18 @@ from kohakuhub.config import cfg
 from kohakuhub.db import db
 from _migration_utils import check_table_exists, should_skip_due_to_future_migrations
 
-MIGRATION_NUMBER = 44
+MIGRATION_NUMBER = 45
 TABLES = (
     "repository_access_request", "repository_invite", "repository_invite_redemption",
     "repository_guest_session", "repository_access_event",
 )
+# Keep the original lock identity across migration renumbering.
 LOCK_KEY = 20261110044
 
 
 def _predecessor_applied(database, config) -> bool:
     spec = importlib.util.spec_from_file_location(
-        "_repository_invites_predecessor", Path(__file__).with_name("043_invite_repository.py")
+        "_repository_invites_predecessor", Path(__file__).with_name("044_invite_repository.py")
     )
     predecessor = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(predecessor)

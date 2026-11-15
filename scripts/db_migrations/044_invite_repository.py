@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Migration 043: private invitation mode and read-only account grants for one repository.
+"""Migration 044: private invitation mode and read-only account grants for one repository.
 
 The private boolean stays authoritative for HF clients. The column CHECK forbids an
 invitation repository from becoming public without also clearing invitation mode. Existing
@@ -19,14 +19,15 @@ from kohakuhub.config import cfg
 from kohakuhub.db import db
 from _migration_utils import check_column_exists, check_table_exists, should_skip_due_to_future_migrations
 
-MIGRATION_NUMBER = 43
+MIGRATION_NUMBER = 44
 TABLE = "repository_access_grant"
+# Keep the original lock identity across migration renumbering.
 LOCK_KEY = 20261110043
 
 
 def _predecessor_applied(database, config) -> bool:
     spec = importlib.util.spec_from_file_location(
-        "_invite_repository_predecessor", Path(__file__).with_name("042_collections.py")
+        "_invite_repository_predecessor", Path(__file__).with_name("043_lfs_history_window_index.py")
     )
     predecessor = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(predecessor)

@@ -1,4 +1,4 @@
-"""Migration 044 declares the invitation lifecycle without storing exchange secrets."""
+"""Migration 045 declares the invitation lifecycle without storing exchange secrets."""
 
 import importlib.util
 from datetime import timedelta
@@ -14,7 +14,7 @@ from kohakuhub.db import (
 )
 from test.kohakuhub.support.factories import make_repo, make_user
 
-MIGRATION = Path(__file__).resolve().parents[2] / "scripts/db_migrations/044_repository_invites.py"
+MIGRATION = Path(__file__).resolve().parents[2] / "scripts/db_migrations/045_repository_invites.py"
 MODELS = [RepositoryAccessEvent, RepositoryGuestSession, RepositoryInviteRedemption, RepositoryInvite, RepositoryAccessRequest]
 
 

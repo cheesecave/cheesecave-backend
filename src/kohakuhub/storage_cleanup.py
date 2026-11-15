@@ -26,7 +26,9 @@ Keep this module free of ``kohakuhub.api`` imports: the worker imports it to
 register the handlers (see docs/development/background-tasks.md).
 """
 
+import asyncio
 import json
+import time
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -68,6 +70,11 @@ SCRATCH_BRANCH_PREFIX = "kh-reset-"
 RETRY_GATE = timedelta(seconds=30)
 S3_DELETE_BATCH = 1000  # the S3 DeleteObjects maximum
 LFS_BATCH = 500
+# What the collection logs (#153): a progress line at most this often, and a warning for a decision slower than
+# SLOW_DECISION_SECONDS, the first SLOW_DECISION_WARNINGS times in a run; the summary counts the rest.
+PROGRESS_LOG_SECONDS = 60.0
+SLOW_DECISION_SECONDS = 1.0
+SLOW_DECISION_WARNINGS = 5
 LAKEFS_LIST_PAGE = 1000
 
 
@@ -262,14 +269,70 @@ async def purge_repository(payload: dict[str, Any], ctx: tasks.TaskContext) -> N
     )
 
 
+class _CollectionLog:
+    """The counts one run of ``collect_lfs`` reports: a few lines however many candidates it decides."""
+
+    def __init__(self):
+        self.started = self.last_line = time.monotonic()
+        self.checked = self.deleted = self.slow = 0
+        self.kept: Counter = Counter()
+        self.slowest: tuple[float, str, str] | None = None  # seconds, sha256, outcome, since the last line
+
+    def decided(self, sha: str, reason: str | None, seconds: float, stats: lfs_gc.HistoryStats) -> None:
+        self.checked += 1
+        if reason is None:
+            self.deleted += 1
+        else:
+            self.kept[reason] += 1
+        outcome = reason or "deleted"
+        if self.slowest is None or seconds > self.slowest[0]:
+            self.slowest = (seconds, sha, outcome)
+        if seconds >= SLOW_DECISION_SECONDS:
+            self.slow += 1
+            if self.slow <= SLOW_DECISION_WARNINGS:
+                logger.warning(
+                    f"Slow LFS decision: {sha[:12]} took {seconds:.1f}s ({outcome}; {stats})"
+                )
+
+    def _totals(self) -> str:
+        elapsed = time.monotonic() - self.started
+        kept = sum(self.kept.values())
+        reasons = ", ".join(f"{reason} {count}" for reason, count in sorted(self.kept.items()))
+        return (
+            f"checked {self.checked}, deleted {self.deleted} nothing relies on, "
+            f"kept {kept}{f' ({reasons})' if reasons else ''}, "
+            f"in {elapsed:.1f}s ({self.checked / max(elapsed, 1e-9):.1f}/s)"
+        )
+
+    def progress(self, waiting: int) -> None:
+        if time.monotonic() - self.last_line < PROGRESS_LOG_SECONDS:
+            return
+        seconds, sha, outcome = self.slowest  # a batch decides at least one candidate
+        logger.info(
+            f"Collecting LFS objects: {self._totals()}, {waiting} waiting, "
+            f"slowest {seconds * 1000:.0f} ms ({sha[:12]}, {outcome})"
+        )
+        self.last_line = time.monotonic()
+        self.slowest = None
+
+    def summary(self, outcome: str) -> None:
+        slow = f", {self.slow} slow decision(s)" if self.slow else ""
+        logger.info(f"Collected LFS objects: {self._totals()}{slow}; {outcome}")
+
+
 @tasks.task(COLLECT_LFS_KIND, timeout=6 * 3600, max_attempts=10)
 async def collect_lfs(payload: dict[str, Any], ctx: tasks.TaskContext) -> None:
     """Delete recorded LFS objects that nothing relies on any more.
 
     Each candidate is decided and tombstoned under its lock
-    (``lfs_gc.begin_delete``); the batch's objects are then deleted from
+    (``lfs_gc.decide_delete``); the batch's objects are then deleted from
     storage and their tombstones completed. Candidates are consumed only
     after that, so an interrupted run simply continues with what is left.
+
+    The loop yields after every decision, so the worker's lease renewal and
+    heartbeat keep running however long the batch is (#153), and it logs a
+    start line, a progress line at most every ``PROGRESS_LOG_SECONDS``, slow
+    decisions, and a summary however the run ends.
     """
     if cfg.app.lfs_auto_gc and not lfs_gc.references_reconciled():
         # Keep windows decide deletions only once what every branch head
@@ -286,21 +349,47 @@ async def collect_lfs(payload: dict[str, Any], ctx: tasks.TaskContext) -> None:
         logger.info("Waiting for LFS links to be recorded before collecting")
         return
     C = LfsGcCandidate
-    total = C.select().count()
-    checked = deleted = 0
+    waiting = C.select().count()
+    if not waiting:
+        return
+    logger.info(
+        f"Collecting LFS objects: {waiting} candidate(s) waiting, keeping "
+        f"{cfg.app.lfs_keep_versions} version(s) per path unless a repository says otherwise, "
+        f"auto GC {'on' if cfg.app.lfs_auto_gc else 'off'}"
+    )
+    run = _CollectionLog()
+    outcome = "finished"
     ctx.stage("collecting LFS objects")
-    while shas := [
-        sha for (sha,) in C.select(C.sha256).order_by(C.sha256).limit(LFS_BATCH).tuples()
-    ]:
-        doomed = [sha for sha in shas if lfs_gc.begin_delete(sha)]
-        if doomed:
-            await run_in_s3_executor(_delete_keys, cfg.s3.bucket, [lfs_key(sha) for sha in doomed])
-            lfs_gc.finish_delete(doomed)
-        C.delete().where(C.sha256.in_(shas)).execute()
-        checked += len(shas)
-        deleted += len(doomed)
-        ctx.progress(checked, max(total, checked))
-    logger.info(f"Checked {checked} LFS object(s); deleted {deleted} nothing relies on")
+    try:
+        while shas := [
+            sha for (sha,) in C.select(C.sha256).order_by(C.sha256).limit(LFS_BATCH).tuples()
+        ]:
+            doomed = []
+            for sha in shas:
+                stats = lfs_gc.HistoryStats()
+                started = time.monotonic()
+                reason = lfs_gc.decide_delete(sha, stats)
+                run.decided(sha, reason, time.monotonic() - started, stats)
+                if reason is None:
+                    doomed.append(sha)
+                await asyncio.sleep(0)  # let the lease renewal and the heartbeat run
+            if doomed:
+                await run_in_s3_executor(
+                    _delete_keys, cfg.s3.bucket, [lfs_key(sha) for sha in doomed]
+                )
+                lfs_gc.finish_delete(doomed)
+            C.delete().where(C.sha256.in_(shas)).execute()
+            waiting = C.select().count()
+            ctx.progress(run.checked, run.checked + waiting)
+            run.progress(waiting)
+    except asyncio.CancelledError:
+        outcome = "stopped: cancelled (lease lost, cancellation or shutdown)"
+        raise
+    except Exception as e:
+        outcome = f"stopped: {type(e).__name__}"
+        raise
+    finally:
+        run.summary(outcome)
 
 
 @tasks.task(EXPIRE_LFS_CLAIMS_KIND, every=timedelta(hours=1), max_attempts=3)

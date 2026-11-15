@@ -75,7 +75,7 @@ browser acceptance used real authentication and SQL with synthetic storage.
 2. In staging, restore a production database copy and run the normal migration
    runner, `python scripts/run_migrations.py`, with staging configuration. The
    API image's startup runs this runner before serving. Existing databases need
-   043 (invite state and account grants) and 044 (requests, codes, redemptions,
+   043 (LFS history index), 044 (invite state and account grants) and 045 (requests, codes, redemptions,
    guest sessions and audit). Fresh databases use `init_db()` through the runner.
 3. Record migration duration, old public/private access, the constraint that
    Invite remains private, and repeat-start idempotency. Rehearse restoring the
@@ -94,7 +94,7 @@ browser acceptance used real authentication and SQL with synthetic storage.
 | Step | Action | Required check before the next step |
 | --- | --- | --- |
 | 1 | Record current versions/configuration and take a restorable database backup; coordinate writes for the migration window | Backup restore rehearsal and candidate acceptance recorded |
-| 2 | Roll out Backend and compatible workers with migrations 043/044 | Health, migration completion, ordinary public/private reads and `/access` preflight pass |
+| 2 | Roll out Backend and compatible workers with migrations 043/044/045 | Health, migration completion, ordinary public/private reads and `/access` preflight pass |
 | 3 | Roll out Web from the paired candidate; invalidate cached HTML as required by the deployment | Ordinary repositories load; anonymous Invite landing and login/signup/redemption return paths pass |
 | 4 | Roll out Admin | Public/Private/Invite list and detail labels match Backend |
 | 5 | Run the acceptance matrix below and monitor errors/resources | Record image digests, outcomes and any follow-up incidents |

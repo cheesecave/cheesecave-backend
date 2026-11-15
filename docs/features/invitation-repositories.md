@@ -198,7 +198,7 @@ are intentionally discoverable by link, but remain absent from anonymous discove
 The [release guide](../deployment/invitation-repositories.md) records review findings,
 validation evidence, migration checks, Backend/Web/Admin cutover order and rollback.
 
-Apply migrations 043 and 044 with the normal migration runner before starting this
+Apply migrations 043 (LFS index), 044 and 045 (invitation repositories) with the normal migration runner before starting this
 release against an existing database. Fresh databases use `init_db`. Coordinate the
 backend and Web release: the new Web performs access preflight before repository
 loads. Admin's three-state display requires the backend's `invite_mode` field and
