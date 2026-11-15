@@ -550,7 +550,8 @@ python -m pytest \
 - The task-only PostgreSQL instance on port 35432 was shut down after validation; no listener or `postmaster.pid` remains. Existing demo services were not restarted.
 - Web dependency guide is synchronized in signed commit `6879b3e` on the same branch; Admin requires no migration-number change. PRs remain Backend #152, Web #88 and Admin #34.
 
-Reproduce the migration selection from the Backend worktree with `PYTHONPATH=src;.`, `PYTHONUTF8=1`, `PGCONNECT_TIMEOUT=3`, `KOHAKU_HUB_DB_BACKEND=postgres`, and `KOHAKU_HUB_DATABASE_URL` pointing to the isolated test database. Unset the corresponding `CHEESE_CAVE_*` variables for the existing subprocess redaction test:
+Reproduce the migration selection from the Backend worktree with `PYTHONPATH=src;.`, `PYTHONUTF8=1` and `PGCONNECT_TIMEOUT=3`.
+For this test command, use the legacy fallback variables `KOHAKU_HUB_DB_BACKEND=postgres` and `KOHAKU_HUB_DATABASE_URL` pointing to the isolated test database. The existing runner-output test overrides those legacy names in its subprocess, so unset the corresponding higher-priority `CHEESE_CAVE_*` variables for this run. Normal deployment configuration continues to use `CHEESE_CAVE_*`.
 
 ```powershell
 .venv/Scripts/python.exe -m pytest `
@@ -566,3 +567,8 @@ Reproduce the migration selection from the Backend worktree with `PYTHONPATH=src
 Next session: inspect the PR heads/checks and continue the outstanding release-review items documented in the release guide. Use 043/044/045 for deployment rehearsal; do not recreate feature branches or renumber the historical receipts.
 
 Supplemental Linux check: `test_lfs_gc_history_window.py` and `test_worker.py` passed **49 tests / 9 PostgreSQL parameter cases deselected**, zero failures/skips, in **31.99s** on native Linux amd64 / Python 3.11.18 with SQLite. Both signal-handling cases pass on Linux. The test container ran with networking disconnected; runtime/test source hashes match the worktree. Evidence: `temp_workspace/invite-repo-migration-20261115/linux/{test.txt,result.xml,verification.json,runtime.json,networks.json,source-hashes.json}`. All task containers have been removed. Command: `python -m pytest test/kohakuhub/test_lfs_gc_history_window.py test/kohakuhub/test_worker.py -q --tb=short --no-showlocals -k 'not postgres'`. This does not replace the service-backed storage acceptance noted above.
+
+## Fix the PR documentation check — 2026-11-15
+
+- Backend run `43697347949`: all six failed test cells report the same documentation-prefix assertion in this file; other test cells, Web/Admin and DCO passed. The reproduction command above now explicitly explains why this historical subprocess test needs legacy fallback variables. Runtime code and the guard are unchanged.
+- Reproduced with `python -m pytest test/kohakuhub/test_docs_env_names.py -q --tb=short --no-showlocals`: **1 failed / 75 passed** before the correction, **76 passed** afterward. `git diff --check` passes.
