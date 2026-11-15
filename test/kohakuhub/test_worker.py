@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 import signal
+import time
 from datetime import timedelta
 
 import pytest
@@ -596,6 +597,56 @@ async def test_worker_keeps_the_logs_of_an_attempt_that_lost_its_lease():
     )
     await stealer
     assert _status(task_id) == tasks.RUNNING  # the new owner's to finish
+
+
+@pytest.mark.parametrize("interval", [60.0, 0.0], ids=["once a minute", "every time"])
+async def test_worker_warns_when_a_handler_blocks_the_event_loop(monkeypatch, interval):
+    """A handler that runs synchronous code holds up every lease renewal on the loop (#153): say so in the task's log."""
+    monkeypatch.setattr(worker_module, "LATE_RENEWAL_SECONDS", 0.2)
+    monkeypatch.setattr(worker_module, "LATE_WARNING_INTERVAL", interval)
+
+    @tasks.task("test.blocking")
+    async def blocking(payload):
+        for _ in range(2):
+            await asyncio.sleep(0.15)  # the heartbeat's tick starts
+            time.sleep(0.5)  # nothing else runs on the loop meanwhile
+        await asyncio.sleep(0.15)
+
+    task_id = tasks.enqueue("test.blocking")
+    await _run_until(
+        _worker(lease_seconds=3, flush_interval=0.05),
+        lambda: _status(task_id) == tasks.SUCCEEDED,
+    )
+
+    warnings = [message for _, level, message in _logs(task_id) if level == "WARNING"]
+    assert len(warnings) == (1 if interval else 2)
+    assert all("the event loop was blocked" in w and "late" in w for w in warnings)
+
+
+async def test_worker_says_how_long_a_lost_lease_went_without_renewal():
+    started = asyncio.Event()
+
+    @tasks.task("test.stolen-detail")
+    async def stolen(payload):
+        started.set()
+        await asyncio.sleep(10)
+
+    task_id = tasks.enqueue("test.stolen-detail")
+
+    async def steal():
+        await started.wait()
+        BackgroundTask.update(locked_by="someone-else").where(
+            BackgroundTask.id == task_id
+        ).execute()
+
+    stealer = asyncio.create_task(steal())
+    await _run_until(
+        _worker(lease_seconds=3, flush_interval=0.05),
+        lambda: any(m.startswith("Lost the lease") for _, _, m in _logs(task_id)),
+    )
+    await stealer
+    (line,) = [m for _, level, m in _logs(task_id) if level == "WARNING"]
+    assert line.startswith("Lost the lease on attempt 1, ") and "after its last renewal (lease 3s)" in line
 
 
 async def test_worker_logs_why_it_handed_a_task_back_at_shutdown():

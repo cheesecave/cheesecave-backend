@@ -570,9 +570,10 @@ class LFSObjectHistory(BaseModel):
     created_at = DateTimeField(default=partial(datetime.now, tz=timezone.utc))
 
     class Meta:
-        # Index for quick lookups by repo and path
+        # A path's history newest first without sorting it: the retention decision reads only the newest rows
+        # (migration 043; it covers the former (repository, path_in_repo) index)
         indexes = (
-            (("repository", "path_in_repo"), False),
+            (("repository", "path_in_repo", "created_at", "id"), False),
             (("sha256",), False),
         )
 

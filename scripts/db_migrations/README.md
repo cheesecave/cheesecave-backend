@@ -431,3 +431,12 @@ Rollback facts and the command are in
 - **Tables of their own on purpose**, as for 035, 037 to 041: an older release does not know them and ignores them, so rolling back is
   leaving them. Nothing is backfilled. `CREATE TABLE IF NOT EXISTS`; two containers starting together take turns on an advisory lock.
   A migration test of an earlier number drops 041's table with its own, which also makes this one count as not applied.
+
+## LFS history window index: 043
+
+- **043** (`043_lfs_history_window_index.py`) adds the index `(repository_id, path_in_repo, created_at, id)` on
+  `lfsobjecthistory` and drops `(repository_id, path_in_repo)`, which it covers. The LFS collection decides whether a version is
+  still in a path's keep window from the newest rows of the path; without the index every decision sorted the whole history of the
+  path (#153). The rows are untouched. Building the index reads the table once (a few seconds for a million rows); deployments run
+  migrations while the api and the worker are stopped. Two containers starting together take turns on an advisory lock.
+- Rolling back is leaving the index: an older release does not depend on the dropped one by name, and the new one serves the same lookups.

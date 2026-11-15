@@ -99,7 +99,11 @@ Rules:
   exception is retried with exponential backoff until `max_attempts`.
 - Handlers are async functions and run on the worker's event loop. Offload
   heavy blocking work (hashing, large boto3 calls) the same way API handlers
-  do.
+  do. A loop over many synchronous database calls must `await asyncio.sleep(0)`
+  between items: the lease renewals and heartbeats of **every** running task
+  run on the same loop, and a handler that holds it for longer than the lease
+  makes the worker lose its own leases and look lost (#153). The worker logs
+  a warning in the task's log when a renewal comes late.
 - **Never `await` inside `db.atomic()`.** Handlers share the loop thread's
   database connection with the worker's own bookkeeping, just as hub-api
   request handlers share it with each other.
@@ -180,7 +184,8 @@ changes between runs from the same state.
 | Timeline | Every state change writes a `background_task_event` row in the same transaction: `created`, `claimed`, `stage`, `retry_scheduled` (with the error and next run time), `succeeded`, `failed`, `released`, `lease_expired`, `cancel_requested`, `cancelled` and `retried`. Each attempt's error is kept. |
 | Progress and ETA | Stored on the task row. The ETA is computed when read: work done this attempt divided by the time since the attempt's first report. So it grows while a task stalls, and a resumed attempt counts only its own work. |
 | Cancel | A queued task is cancelled at once, releasing its dedupe key. For a running task the admin sets `cancel_requested`. The next flush sets `ctx.cancel_requested`, and the handler can stop by raising `TaskCancelled`. If it has not stopped within `shutdown_grace_seconds`, it is interrupted. Either way the task ends `cancelled`, without a retry, and `on_failure` runs. A flagged task whose worker died is cancelled when its lease expires. |
-| Logs | Captured per attempt into `background_task_log`, up to `log_max_bytes_per_attempt` (10 MiB); past the cap, one truncation notice is kept. A failed attempt's traceback is added. A worker that lost its lease still stores its logs, under its own attempt number. |
+| Logs | Captured per attempt into `background_task_log`, up to `log_max_bytes_per_attempt` (10 MiB); past the cap, one truncation notice is kept. A failed attempt's traceback is added. A worker that lost its lease still stores its logs, under its own attempt number, with a line that says how long it went without a renewal. |
+| Blocked loop | A renewal more than 5 s late means something held the event loop: the worker writes `The lease renewal ran Ns late: the event loop was blocked` to the task's log and its own, at most once a minute per task. |
 | Retry | `run_after = now + 5s * 2^(attempt-1)` (capped at 1 h, plus up to 25% jitter). |
 | Timeout | Per-kind `timeout` seconds; a timeout counts as a retryable failure. |
 | Dedupe | `dedupe_key` is unique while the task is pending. Claiming the task releases the key, so work arriving while it runs can enqueue a fresh task. |
@@ -196,7 +201,7 @@ changes between runs from the same state.
 | --- | --- |
 | `tasks.cleanup` | Hourly: deletes finished task rows past their retention. |
 | `storage.purge_repository` | Deletes one LakeFS repository and its `s3://{bucket}/{lakefs_repo}/` prefix. Scheduled when a repository is deleted, when a user or organization is deleted with its repositories, or from the orphan audit on the admin **Storage** page (`kohakuhub/storage_cleanup.py`). Refuses a LakeFS id a repository still points at. |
-| `storage.collect_lfs` | Decides each LFS object recorded in `lfs_gc_candidate` under a per-object lock and deletes the ones nothing relies on, leaving an `lfs_object_tombstone` (`kohakuhub/lfs_gc.py`, see [LFS garbage collection](../features/core/lfs.md#garbage-collection)). |
+| `storage.collect_lfs` | Decides each LFS object recorded in `lfs_gc_candidate` under a per-object lock and deletes the ones nothing relies on, leaving an `lfs_object_tombstone` (`kohakuhub/lfs_gc.py`, see [LFS garbage collection](../features/core/lfs.md#garbage-collection)). Logs a start line, progress at most once a minute, decisions slower than 1 s (the first five) and a summary however the run ends. |
 | `storage.expire_recent_lfs` | Hourly: turns LFS objects whose 24-hour upload/commit grace period ended into candidates, so uploads that were never committed are collected. Waits (and queues a reconciliation) until `storage.reconcile_lfs_references` has completed, whatever `lfs_auto_gc` says. |
 | `storage.review_lfs_window` | Records the versions pushed out of a repository's keep windows after its `lfs_keep_versions` was lowered. |
 | `storage.record_branch_links` | Records what a new branch's head links in `lfs_head_ref`, off the branch-creation request; collection waits while one is pending. |

@@ -29,6 +29,7 @@ See issue #114.
 
 import re
 from collections.abc import Iterable
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 from peewee import PostgresqlDatabase, fn
@@ -53,6 +54,9 @@ DELETED = "deleted"
 # upload-then-commit round trip, short enough to collect abandoned uploads.
 RECENT_GRACE = timedelta(hours=24)
 CANDIDATE_BATCH = 500
+# A path's history is read newest first, at most HISTORY_WALK_ROWS rows in one statement, and the walk stops as soon as
+# the keep window is known. If those rows do not decide (they mostly repeat a few contents), one aggregate query does.
+HISTORY_WALK_ROWS = 256
 RECONCILED_KEY = "references_reconciled_at"
 _LFS_ADDRESS = re.compile(r"^s3://[^/]+/lfs/[0-9a-f]{2}/[0-9a-f]{2}/([0-9a-f]{64})$")
 
@@ -102,24 +106,90 @@ def _lock(sha256: str) -> None:
         database.execute_sql("SELECT pg_advisory_xact_lock(hashtext(%s))", (f"lfs:{sha256}",))
 
 
-def _unique_versions(repository_id: int, path: str) -> list[str]:
-    """This path's unique LFS versions, newest first."""
+@dataclass
+class HistoryStats:
+    """What deciding by history read, for the logs: paths looked at, rows read, aggregate fallbacks."""
+
+    paths: int = 0
+    rows: int = 0
+    fallbacks: int = 0
+
+    def __str__(self) -> str:
+        text = f"{self.paths} path(s), {self.rows} history row(s) read"
+        return text + (f", aggregate fallback {self.fallbacks}" if self.fallbacks else "")
+
+
+def _newest_first(repository_id: int, path: str):
     H = LFSObjectHistory
-    seen: list[str] = []
-    # ponytail: reads a path's whole history; a path with thousands of
-    # versions would want a LIMIT with a window function instead.
-    for (sha256,) in (
+    return (
         H.select(H.sha256)
         .where((H.repository == repository_id) & (H.path_in_repo == path))
         .order_by(H.created_at.desc(), H.id.desc())
-        .tuples()
-    ):
-        if sha256 not in seen:
-            seen.append(sha256)
-    return seen
+    )
 
 
-def retention_reason(sha256: str, now: datetime | None = None) -> str | None:
+def _unique_versions(repository_id: int, path: str) -> list[str]:
+    """This path's unique LFS versions, newest first (the whole history, in one pass)."""
+    return list(dict.fromkeys(sha for (sha,) in _newest_first(repository_id, path).tuples()))
+
+
+def _newest_unique(repository_id: int, path: str, limit: int) -> list[str]:
+    """The newest ``limit`` unique versions, decided in the database: each content ranked by its newest row."""
+    H = LFSObjectHistory
+    newest = fn.ROW_NUMBER().over(
+        partition_by=[H.sha256], order_by=[H.created_at.desc(), H.id.desc()]
+    )
+    ranked = (
+        H.select(H.sha256, H.created_at, H.id, newest.alias("rank"))
+        .where((H.repository == repository_id) & (H.path_in_repo == path))
+        .alias("ranked")
+    )
+    query = (
+        H.select(ranked.c.sha256)
+        .from_(ranked)
+        .where(ranked.c.rank == 1)
+        .order_by(ranked.c.created_at.desc(), ranked.c.id.desc())
+        .limit(limit)
+    )
+    return [sha for (sha,) in query.tuples()]
+
+
+def _kept_by_history(
+    repository_id: int, path: str, sha256: str, keep: int, stats: HistoryStats | None = None
+) -> bool:
+    """Whether ``sha256`` is among the newest ``keep`` unique versions of the path.
+
+    The same answer as ``sha256 in _unique_versions(...)[:keep]``, from the newest rows only: the walk stops at the
+    content itself (kept) or once ``keep`` other contents were seen (not kept). With the index on
+    ``(repository_id, path_in_repo, created_at, id)`` that costs at most ``HISTORY_WALK_ROWS`` rows, however long the
+    history is. One statement, so one snapshot: rows changing meanwhile cannot shift what the walk sees.
+    """
+    stats = stats if stats is not None else HistoryStats()
+    stats.paths += 1
+    if keep <= 0:
+        return False
+    others: set[str] = set()
+    read = 0
+    newest = _newest_first(repository_id, path).limit(HISTORY_WALK_ROWS).tuples()
+    for (sha,) in newest:
+        read += 1
+        if sha == sha256:
+            stats.rows += read
+            return True
+        others.add(sha)
+        if len(others) >= keep:
+            stats.rows += read
+            return False
+    stats.rows += read
+    if read < HISTORY_WALK_ROWS:
+        return False  # the whole history was read
+    stats.fallbacks += 1
+    return sha256 in _newest_unique(repository_id, path, keep)
+
+
+def retention_reason(
+    sha256: str, now: datetime | None = None, stats: HistoryStats | None = None
+) -> str | None:
     """Why ``sha256`` must be kept, or ``None`` when nothing relies on it.
 
     - ``recent``: uploaded or claimed by a commit within ``RECENT_GRACE``;
@@ -128,6 +198,8 @@ def retention_reason(sha256: str, now: datetime | None = None) -> str | None:
     - ``history``: a history row references it. With ``lfs_auto_gc`` on,
       only while it is among the newest ``keep_versions`` unique versions
       of that repository path; with it off every version is kept.
+
+    ``stats`` collects what the history part read (see ``HistoryStats``).
     """
     now = now or utcnow()
     if LfsRecentObject.get_or_none(
@@ -153,7 +225,7 @@ def retention_reason(sha256: str, now: datetime | None = None) -> str | None:
         for repo in Repository.select().where(Repository.id.in_({r for r, _ in references}))
     }
     for repository_id, path in references:
-        if sha256 in _unique_versions(repository_id, path)[: keep_versions(repos[repository_id])]:
+        if _kept_by_history(repository_id, path, sha256, keep_versions(repos[repository_id]), stats):
             return "history"
     return None
 
@@ -426,21 +498,23 @@ def collected_after_all(sha256: str) -> None:
             usage.object_gone(sha256)
 
 
-def begin_delete(sha256: str) -> bool:
+def decide_delete(sha256: str, stats: HistoryStats | None = None) -> str | None:
     """Decide under the object's lock and tombstone it if it may go.
 
-    Returns whether the caller should delete the object from storage. An
-    object that is relied on again loses a leftover ``deleting`` tombstone,
-    since it was not deleted yet.
+    Returns why the object is kept (see ``retention_reason``), or ``None`` when it
+    was tombstoned and the caller should delete it from storage. An object that
+    is relied on again loses a leftover ``deleting`` tombstone, since it was not
+    deleted yet.
     """
     with _database().atomic():
         _lock(sha256)
-        if retention_reason(sha256) is not None:
+        reason = retention_reason(sha256, stats=stats)
+        if reason is not None:
             if LfsObjectTombstone.delete().where(
                 (LfsObjectTombstone.sha256 == sha256) & (LfsObjectTombstone.state == DELETING)
             ).execute():
                 usage.object_back(sha256)
-            return False
+            return reason
         if tombstone_state(sha256) is None:
             usage.object_gone(sha256)
         now = utcnow()
@@ -450,7 +524,12 @@ def begin_delete(sha256: str) -> bool:
             conflict_target=[LfsObjectTombstone.sha256],
             update={LfsObjectTombstone.state: DELETING, LfsObjectTombstone.updated_at: now},
         ).execute()
-        return True
+        return None
+
+
+def begin_delete(sha256: str) -> bool:
+    """Whether the caller should delete ``sha256`` from storage (``decide_delete`` tombstoned it)."""
+    return decide_delete(sha256) is None
 
 
 def finish_delete(shas: Iterable[str]) -> None:
