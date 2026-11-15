@@ -17,6 +17,8 @@ RESERVED_NAMES = {
     "datasets",
     "spaces",
     "collections",
+    "repo-access",
+    "repoaccess",  # normalized form of the repository invitation binding route
     "admin",
     "organizations",
     "api",

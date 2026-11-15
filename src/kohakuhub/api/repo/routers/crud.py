@@ -49,6 +49,7 @@ from kohakuhub.api.repo.utils.hf import (
 from kohakuhub import usage
 from kohakuhub.api.commit.routers.operations import commit_files
 from kohakuhub.space_card import space_card
+from kohakuhub.repository_visibility import resolve_visibility
 from kohakuhub.api.commit import squash
 from kohakuhub.api.commit.records import OperationRefused
 from kohakuhub.api.repo.utils import operation_lock
@@ -119,6 +120,7 @@ class CreateRepoPayload(BaseModel):
     organization: Optional[str] = None
     private: Optional[bool] = None
     visibility: Optional[str] = None
+    invite_mode: bool | None = None
     sdk: Optional[str] = None
 
 
@@ -417,23 +419,9 @@ def _resolve_create_repo_private(payload: CreateRepoPayload) -> bool:
     Explicit ``private`` takes precedence; ``visibility`` is only consulted
     when ``private`` was not sent. Defaults to public when neither is set.
     """
-    if payload.private is not None:
-        return bool(payload.private)
-    if payload.visibility is None:
-        return False
-    if payload.visibility == "private":
-        return True
-    if payload.visibility == "public":
-        return False
-    raise HTTPException(
-        400,
-        detail={
-            "error": (
-                "Unsupported repository visibility. "
-                "Only 'public' and 'private' are supported."
-            )
-        },
-    )
+    return resolve_visibility(
+        private=payload.private, visibility=payload.visibility, invite_mode=payload.invite_mode
+    )[0]
 
 
 @router.post("/repos/create")
@@ -541,6 +529,7 @@ async def create_repo(
                 full_id=full_id,
                 defaults={
                     "private": resolved_private,
+                    "invite_mode": payload.invite_mode is True,
                     # The account or organization the namespace names, not the
                     # creator: deleting a member must not take an org's repos
                     "owner": _namespace_owner(namespace),

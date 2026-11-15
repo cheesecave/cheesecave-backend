@@ -8,6 +8,10 @@ icon: mail
 
 Create and manage invitations to join organizations. Supports both single-use and reusable invitations.
 
+Repository invitation codes use a separate, hashed repository-specific lifecycle. They do not
+join an organization or act as HF access tokens. See [Invitation repositories](../features/invitation-repositories.md)
+for application review, registration/account binding, temporary guests and the browser API paths.
+
 ## Overview
 
 KohakuHub invitation system supports:

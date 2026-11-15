@@ -440,3 +440,22 @@ Rollback facts and the command are in
   path (#153). The rows are untouched. Building the index reads the table once (a few seconds for a million rows); deployments run
   migrations while the api and the worker are stopped. Two containers starting together take turns on an advisory lock.
 - Rolling back is leaving the index: an older release does not depend on the dropped one by name, and the new one serves the same lookups.
+
+## Invitation repositories: 044–045
+
+- **044** (`044_invite_repository.py`) adds `repository.invite_mode`, default false, with a database CHECK requiring
+  private visibility, plus `repository_access_grant` with one independently expiring/revocable read grant per account
+  and repository. Existing public/private rows retain their behavior; no grants are inferred.
+- **045** (`045_repository_invites.py`) adds `repository_access_request`, `repository_invite`,
+  `repository_invite_redemption`, `repository_guest_session` and `repository_access_event`. Codes, anonymous receipts
+  and guest secrets are represented by hashes. Unique exchange keys and SQL quota constraints protect concurrent
+  writes. Account grants, code exchange deadlines and guest lifetimes are independent.
+- Both migrations pin their SQL schema, check their predecessor before claiming completion, serialize PostgreSQL DDL
+  using advisory locks and can be rerun. Fresh `init_db()` creates equivalent models. No token or access backfill runs.
+  Apply both before starting the coordinated backend/Web release. An older release can ignore the new tables, but its
+  attempt to make an Invite repository public without clearing invitation mode is intentionally refused by the CHECK.
+  See [Invitation repositories](../../docs/features/invitation-repositories.md) for product and protocol boundaries.
+
+The invitation migrations were renumbered from 043/044 before merge to preserve main's LFS migration.
+Their completion checks require the full 042 → 043 → 044 → 045 chain. An existing development database
+with invitation tables still receives the LFS index; invitation rows and grants are retained.

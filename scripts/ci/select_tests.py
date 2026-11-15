@@ -31,6 +31,8 @@ FAST_FILES = {
     "test_site_appearance.py",
     "test_repository_discovery.py",
     "test_repository_visibility.py",
+    "test_repository_grants.py",
+    "test_repository_invites.py",
     "test_social.py",
     "test_user_repo_activity.py",
     "test_trending.py",
@@ -86,6 +88,7 @@ def pytest_collection_modifyitems(config, items):
             keep = (
                 path.name.startswith("test_huggingface_hub_")
                 or path.name == "test_real_hf_hub_end_to_end.py"
+                or path.name == "test_invite_hf_client_matrix.py"
             )
         (selected if keep else deselected).append(item)
     if not selected:

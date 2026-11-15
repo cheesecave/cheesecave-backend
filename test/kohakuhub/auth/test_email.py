@@ -3,6 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from html import unescape
+import re
+from urllib.parse import parse_qs, urlsplit
+
+import pytest
 
 import kohakuhub.auth.email as email_module
 
@@ -58,6 +63,23 @@ class FakeSMTP:
         self.messages.append(message)
 
 
+@pytest.mark.parametrize("target", [
+    None, 123, "/models/owner/" + "x" * 8193,
+    "/models/owner/\ud800", "/models/owner/\x85", "/models/owner/%C2%85",
+])
+def test_repository_return_path_rejects_invalid_types_lengths_and_unicode(target):
+    assert email_module.safe_repository_return_path(target) is None
+
+
+def test_repository_return_path_accepts_encoded_names_within_database_character_limits():
+    from urllib.parse import quote
+
+    # CharField permits255Unicode characters; percent-encoding can exceed4KB.
+    component = quote("😀" * 255, safe="")
+    target = f"/models/{component}/{component}"
+    assert email_module.safe_repository_return_path(target) == target
+
+
 def _set_smtp_config(monkeypatch, *, enabled: bool, use_tls: bool = False) -> None:
     monkeypatch.setattr(email_module.cfg.app, "base_url", "https://hub.local")
     monkeypatch.setattr(email_module.cfg.smtp, "enabled", enabled)
@@ -103,6 +125,31 @@ def test_send_verification_email_builds_multipart_message(monkeypatch):
     assert "Verify your CheeseCave account" in message_text
     assert "Kohaku" not in message_text
     assert logger.exceptions == []
+
+
+def test_verification_email_encodes_only_the_nonsecret_repository_target(monkeypatch):
+    logger = DummyLogger([], [])
+    FakeSMTP.instances = []
+    _set_smtp_config(monkeypatch, enabled=True)
+    monkeypatch.setattr(email_module, "logger", logger)
+    monkeypatch.setattr(email_module.smtplib, "SMTP", FakeSMTP)
+    target = "/datasets/group%20team/data%231"
+    assert email_module.send_verification_email("user@example.com", "owner", "token+with&query", return_to=target)
+    plain, html = [part.get_payload(decode=True).decode("utf-8") for part in FakeSMTP.instances[-1].messages[0].get_payload()]
+    plain_link = next(line for line in plain.splitlines() if line.startswith("https://"))
+    html_link = unescape(re.search(r'<a href="([^"]+)"', html).group(1))
+    assert plain_link == html_link
+    assert parse_qs(urlsplit(plain_link).query) == {"token": ["token+with&query"], "return_to": [target]}
+    assert "&amp;return_to=" in html
+
+
+def test_disabled_smtp_return_link_omits_unsafe_destination(monkeypatch):
+    logger = DummyLogger([], [])
+    _set_smtp_config(monkeypatch, enabled=False)
+    monkeypatch.setattr(email_module, "logger", logger)
+    assert email_module.send_verification_email("user@example.com", "owner", "safe-token", return_to="//evil.test")
+    link = logger.infos[0].split("Verification link: ", 1)[1]
+    assert parse_qs(urlsplit(link).query) == {"token": ["safe-token"]}
 
 
 def test_send_verification_email_returns_false_on_failure(monkeypatch):

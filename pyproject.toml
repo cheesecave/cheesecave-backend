@@ -41,6 +41,8 @@ dependencies = [
     "tomli; python_version < '3.11'",
     "uvicorn",
     "pillow",
+    "pypdfium2>=4.30,<6",
+    "imageio-ffmpeg>=0.6,<1",
 ]
 urls = { "Homepage" = "https://github.com/cheesecave/cheesecave-backend", "Upstream" = "https://github.com/deepghs/KohakuHub" }
 

@@ -12,7 +12,11 @@ from types import SimpleNamespace
 import pytest
 from peewee import SqliteDatabase
 
-from kohakuhub.db import LFSObjectHistory
+from kohakuhub.db import (
+    LFSObjectHistory, RepositoryAccessEvent, RepositoryAccessGrant,
+    RepositoryAccessRequest, RepositoryGuestSession, RepositoryInvite,
+    RepositoryInviteRedemption,
+)
 from test.kohakuhub.support.factories import make_repo, make_user
 
 MIGRATION = Path(__file__).resolve().parents[2] / "scripts/db_migrations/043_lfs_history_window_index.py"
@@ -32,7 +36,11 @@ def migration(db_dual, monkeypatch):
     backend = "sqlite" if isinstance(db_dual, SqliteDatabase) else "postgres"
     monkeypatch.setattr(module, "db", db_dual)
     monkeypatch.setattr(module, "cfg", SimpleNamespace(app=SimpleNamespace(db_backend=backend)))
-    # the schema before 043
+    # Remove later feature tables so this exercises 043 rather than a future skip.
+    db_dual.drop_tables([
+        RepositoryAccessEvent, RepositoryGuestSession, RepositoryInviteRedemption,
+        RepositoryInvite, RepositoryAccessRequest, RepositoryAccessGrant,
+    ])
     db_dual.execute_sql(f'DROP INDEX IF EXISTS "{NEW}"')
     db_dual.execute_sql(f'CREATE INDEX "{OLD}" ON "lfsobjecthistory" ("repository_id", "path_in_repo")')
     return module

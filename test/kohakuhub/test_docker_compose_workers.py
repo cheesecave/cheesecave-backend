@@ -8,6 +8,8 @@ import sys
 import pytest
 import yaml
 
+from scripts import generate_docker_compose
+
 ROOT = Path(__file__).resolve().parents[2]
 # The new key first; the old one is the fallback an existing .env still uses.
 REPLICAS = "${CHEESE_CAVE_WORKER_REPLICAS:-${KOHAKU_HUB_WORKER_REPLICAS:-1}}"
@@ -50,6 +52,22 @@ def test_generator_copies_the_release_template_and_refuses_overwrite(tmp_path):
     assert original == (ROOT / "compose.yml").read_bytes()
     assert subprocess.run(command, capture_output=True).returncode != 0
     assert output.read_bytes() == original
+
+
+@pytest.mark.parametrize("newline", [b"\n", b"\r\n"])
+def test_generator_preserves_template_bytes_independent_of_platform(tmp_path, monkeypatch, newline):
+    # A standalone template is copied, not rewritten with the host's line endings.
+    template = tmp_path / "compose.yml"
+    content = newline.join(["name: café".encode("utf-8"), b"services: {}", b""])
+    template.write_bytes(content)
+    output = tmp_path / "copy.yml"
+    monkeypatch.setattr(generate_docker_compose, "ROOT", tmp_path)
+    monkeypatch.setattr(sys, "argv", ["generate_docker_compose.py", "--output", str(output)])
+
+    generate_docker_compose.main()
+
+    assert output.read_bytes() == content
+    assert template.read_bytes() == content
 
 
 def test_generator_creates_local_secrets_without_overwriting(tmp_path):
